@@ -1,5 +1,3 @@
-use rocket::http;
-use std::fmt;
 use std::collections::HashSet;
 use lazy_static;
 use serde::{Serialize, Serializer};
@@ -35,44 +33,27 @@ lazy_static! {
 	};
 }
 
-#[derive(std::fmt::Debug, Default)]
-pub struct Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Permissions Error")
-    }
-}
-
-impl std::error::Error for Error {
-}
-
-impl From<Error> for (http::Status, Error) {
-	fn from(error: Error) -> (http::Status, Error) {
-		(http::Status { code: 403 }, error)
-	}
-}
-
 // creates a named guard which succeeds if the client has all specified permissions
 macro_rules! guard {
 	( $guard_name:ident, $( $permission:ident ),* ) => {
 		pub struct $guard_name {}
 
-		#[async_trait]
-		impl<'r> rocket::request::FromRequest<'r> for $guard_name {
+		impl actix_web::FromRequest for $guard_name {
+			type Config = ();
+			type Error = actix_web::error::Error;
+			type Future = futures_util::future::Ready<Result<Self, Self::Error>>;
 
-			type Error = permissions::Error;
-
-			async fn from_request(_request: &'r rocket::request::Request<'_>) -> rocket::request::Outcome<Self, Self::Error> {
+			/// Convert request to a Self
+			fn from_request(_request: &actix_web::HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
 				let mut required_permissions = std::collections::HashSet::new();
 				$(
 					required_permissions.insert(crate::access::permissions::Permission::$permission);
 				)*
 
-				if permissions::DEFAULT_PERMISSIONS.is_superset(&required_permissions) {
-					rocket::request::Outcome::Success($guard_name {})
+				if crate::access::permissions::DEFAULT_PERMISSIONS.is_superset(&required_permissions) {
+					futures_util::future::ok($guard_name {})
 				} else {
-					rocket::request::Outcome::Failure(permissions::Error::default().into())
+					futures_util::future::err(actix_web::error::ErrorForbidden("Missing Permissions"))
 				}
 			}
 		}

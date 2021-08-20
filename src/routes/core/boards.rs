@@ -1,10 +1,8 @@
-use rocket::response::Redirect;
-use rocket::serde::json::{json, Value};
+use actix_web::{web, get, HttpResponse};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::access::permissions;
-use crate::routes::core::pagination::Page;
+use crate::routes::core::pagination::{Page, PaginationOptions};
 
 guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
@@ -36,20 +34,21 @@ lazy_static! {
 	};
 }
 
-#[get("/boards?<page>&<limit>")]
-pub fn list(page: Option<usize>, limit: Option<usize>, _access: BoardListAccess) -> Value {
-	let page = page.unwrap_or(0);
-	let limit = limit.unwrap_or(2).clamp(0, 10);
+
+#[get("/boards")]
+pub async fn list(web::Query(options): web::Query<PaginationOptions>, _access: BoardListAccess) -> HttpResponse {
+	let page = options.page.unwrap_or(0);
+	let limit = options.limit.unwrap_or(2).clamp(0, 10);
 	
-	let items = vec![&*BOARD_INFO];
+	let items = vec![&*BOARD_INFO, &*BOARD_INFO, &*BOARD_INFO, &*BOARD_INFO];
 	let mut chunks = items.chunks(limit);
 	
 	fn page_uri(page: usize, limit: usize) -> String {
 		format!("/boards?page={}&limit={}", page, limit)
 	}
 
-	json!(
-		Page {
+	HttpResponse::Ok()
+		.json(Page {
 			previous: page.checked_sub(1).and_then(
 				|page| chunks
 					.nth(page)
@@ -63,19 +62,20 @@ pub fn list(page: Option<usize>, limit: Option<usize>, _access: BoardListAccess)
 					.next()
 					.map(|_| page_uri(page, limit)),
 			),
-		}
-	)
+		})
 }
 
-#[get("/boards/default", rank = 0)]
-pub fn get_default(_access: BoardGetAccess) -> Option<Redirect>  {
-	Some(Redirect::temporary("/boards/0"))
+#[get("/boards/default")]
+pub async fn get_default(_access: BoardGetAccess) -> Option<HttpResponse>  {
+	Some(HttpResponse::TemporaryRedirect()
+		.header("Location", "/boards/0")
+		.finish())
 }
 
-#[get("/boards/<id>", rank = 1)]
-pub fn get(id: u32, _access: BoardGetAccess) -> Option<Value>  {
+#[get("/boards/{id}")]
+pub async fn get(web::Path(id): web::Path<u32>, _access: BoardGetAccess) -> Option<HttpResponse> {
 	if id == 0 {
-		Some(json!(&*BOARD_INFO))
+		Some(HttpResponse::Ok().json(&*BOARD_INFO))
 	} else {
 		None
 	}

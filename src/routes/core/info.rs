@@ -1,9 +1,5 @@
-use rocket::serde::json::{json, Value};
+use actix_web::{get, HttpResponse};
 use serde::Serialize;
-
-use crate::access::permissions;
-
-guard!(InfoAccess, Info);
 
 #[derive(Serialize)]
 pub struct ServerInfo {
@@ -20,7 +16,10 @@ const SERVER_INFO: ServerInfo = ServerInfo {
 	extensions: vec![],
 };
 
+guard!(InfoAccess, Info);
+
 #[get("/info")]
-pub fn info(_access: InfoAccess) -> Value {
-	json!(SERVER_INFO)
+pub async fn info(_access: InfoAccess) -> HttpResponse {
+	HttpResponse::Ok()
+		.json(SERVER_INFO)
 }

@@ -1,7 +1,8 @@
-use rocket::serde::json::{json, Value};
+use actix_web::{get, HttpResponse};
 use crate::access::permissions;
 
 #[get("/access")]
-pub fn access() -> Value {
-	json!(&*permissions::DEFAULT_PERMISSIONS)
+pub async fn access() -> HttpResponse {
+	HttpResponse::Ok()
+		.json(&*permissions::DEFAULT_PERMISSIONS)
 }
