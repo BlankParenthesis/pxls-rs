@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use lazy_static;
 use serde::{Serialize, Serializer};
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Permission {
 	Info,
 	BoardsList,
@@ -12,14 +12,14 @@ pub enum Permission {
 
 impl Serialize for Permission {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
-        match self {
+	where S: Serializer {
+		match self {
 			Permission::Info => serializer.serialize_str("info"),
 			Permission::BoardsList => serializer.serialize_str("boards.list"),
 			Permission::BoardsGet => serializer.serialize_str("boards.get"),
 			Permission::SocketCore => serializer.serialize_str("socket.core"),
 		}
-    }
+	}
 }
 
 lazy_static! {
@@ -43,7 +43,6 @@ macro_rules! guard {
 			type Error = actix_web::error::Error;
 			type Future = futures_util::future::Ready<Result<Self, Self::Error>>;
 
-			/// Convert request to a Self
 			fn from_request(_request: &actix_web::HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
 				let mut required_permissions = std::collections::HashSet::new();
 				$(
