@@ -18,6 +18,7 @@ async fn main() -> std::io::Result<()> {
         .service(routes::core::boards::list)
         .service(routes::core::boards::get_default)
         .service(routes::core::boards::get)
+        .service(routes::core::boards::socket)
     ).bind("127.0.0.1:8000")?
         .run()
         .await
