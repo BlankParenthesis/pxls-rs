@@ -1,4 +1,7 @@
 use serde::Serialize;
+use actix_web::web::{BytesMut, BufMut};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::objects::color::Color;
 
@@ -10,11 +13,15 @@ pub struct BoardInfo {
 	pub palette: Vec<Color>,
 }
 
+pub struct BoardData {
+	pub colors: BytesMut,
+	pub mask: BytesMut,
+	pub timestamps: BytesMut,
+}
+
 pub struct Board {
 	pub meta: BoardInfo,
-	color_data: Vec<u8>,
-	mask_data: Vec<u8>,
-	timestamp_data: Vec<u32>,
+	pub data: Mutex<BoardData>,
 }
 
 impl Board {
@@ -34,9 +41,29 @@ impl Board {
 				shape,
 				palette,
 			},
-			color_data: vec![0; size],
-			mask_data: vec![0; size],
-			timestamp_data: vec![0; size],
+			data: Mutex::new(BoardData {
+				colors: BytesMut::from(&vec![0; size][..]),
+				mask: BytesMut::from(&vec![0; size][..]),
+				timestamps: BytesMut::from(&vec![0; size * 4][..]),
+			})
 		}
+	}
+	
+	pub fn put_color(&self, index: usize, color: u8) {
+		// NOTE: this creates a timestamp for when the request was made.
+		// It could be put before the lock so that the timestamp is for when the
+		// request is actually honoured.
+		let timestamp = SystemTime::now()
+			.duration_since(UNIX_EPOCH).unwrap()
+			.as_secs();
+		let delta = timestamp.saturating_sub(self.meta.created_at);
+
+		let mut data = self.data.lock().unwrap();
+
+		let color_slice = &mut data.colors[index..index + 1];
+		color_slice.as_mut().put_u8(color);
+		
+		let timestamp_slice = &mut data.timestamps[index..index + 4];
+		timestamp_slice.as_mut().put_u32_le(delta as u32);
 	}
 }

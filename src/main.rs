@@ -19,9 +19,8 @@ async fn main() -> std::io::Result<()> {
     let board = Data::new(Board::new(
 		String::from("c0"),
 		SystemTime::now()
-			.duration_since(UNIX_EPOCH)
-			.unwrap()
-			.as_millis() as u64,
+			.duration_since(UNIX_EPOCH).unwrap()
+			.as_secs() as u64,
 		[[1000, 1000]],
 		vec![Color { name: String::from("red"), value: 0xff0000 }],
     ));
@@ -36,6 +35,9 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::get_default)
 		.service(routes::core::boards::get)
 		.service(routes::core::boards::socket)
+		.service(routes::core::boards::get_color_data)
+		.service(routes::core::boards::get_timestamp_data)
+		.service(routes::core::boards::get_mask_data)
 	).bind("127.0.0.1:8000")?
 		.run()
 		.await

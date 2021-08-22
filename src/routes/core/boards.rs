@@ -1,5 +1,5 @@
 use actix::Addr;
-use actix_web::{web, get, HttpRequest, HttpResponse, Error, error::ErrorUnprocessableEntity};
+use actix_web::{http::header, web, get, HttpRequest, HttpResponse, Error, error::ErrorUnprocessableEntity};
 use actix_web_actors::ws;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -12,6 +12,7 @@ use crate::socket::server::BoardServer;
 
 guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
+guard!(BoardDataAccess, BoardsData);
 guard!(SocketAccess, SocketCore);
 
 #[get("/boards")]
@@ -106,6 +107,67 @@ pub async fn socket(
 				"No extensions specified"
 			)))
 		}
+	} else {
+		None
+	}
+}
+
+#[get("/boards/{id}/data/colors")]
+pub async fn get_color_data(
+	web::Path(id): web::Path<u32>,
+	board: web::Data<Board>,
+	_access: BoardDataAccess,
+) -> Option<HttpResponse>  {
+	if id == 0 {
+		let disposition = header::ContentDisposition { 
+			disposition: header::DispositionType::Attachment,
+			parameters: vec![
+				// TODO: maybe use the actual board name
+				header::DispositionParam::Filename(String::from("board.dat")),
+			],
+		};
+
+		Some(
+			HttpResponse::Ok()
+				.content_type("application/octet-stream")
+				// TODO: if possible, work out how to use disposition itself for the name.
+				.header("content-disposition", disposition)
+				.body(board.data.lock().unwrap().colors.clone())
+		)
+	} else {
+		None
+	}
+}
+
+#[get("/boards/{id}/data/timestamps")]
+pub async fn get_timestamp_data(
+	web::Path(id): web::Path<u32>,
+	board: web::Data<Board>,
+	_access: BoardDataAccess,
+) -> Option<HttpResponse>  {
+	if id == 0 {
+		Some(
+			HttpResponse::Ok()
+				.content_type("application/octet-stream")
+				.body(board.data.lock().unwrap().timestamps.clone())
+		)
+	} else {
+		None
+	}
+}
+
+#[get("/boards/{id}/data/mask")]
+pub async fn get_mask_data(
+	web::Path(id): web::Path<u32>,
+	board: web::Data<Board>,
+	_access: BoardDataAccess,
+) -> Option<HttpResponse>  {
+	if id == 0 {
+		Some(
+			HttpResponse::Ok()
+				.content_type("application/octet-stream")
+				.body(board.data.lock().unwrap().mask.clone())
+		)
 	} else {
 		None
 	}
