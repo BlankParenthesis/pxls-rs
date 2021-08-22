@@ -8,11 +8,12 @@ use serde_qs::actix::QsQuery;
 use crate::objects::paginated_list::{Page, PaginationOptions};
 use crate::objects::board::Board;
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
-use crate::socket::server::BoardServer;
+use crate::socket::server::{BoardServer, RequestUserCount};
 
 guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
 guard!(BoardDataAccess, BoardsData);
+guard!(BoardUsersAccess, BoardsUsers);
 guard!(SocketAccess, SocketCore);
 
 #[get("/boards")]
@@ -168,6 +169,21 @@ pub async fn get_mask_data(
 				.content_type("application/octet-stream")
 				.body(board.data.lock().unwrap().mask.clone())
 		)
+	} else {
+		None
+	}
+}
+
+#[get("/boards/{id}/users")]
+pub async fn get_users(
+	web::Path(id): web::Path<u32>,
+	board: web::Data<Addr<BoardServer>>,
+	_access: BoardUsersAccess,
+) -> Option<HttpResponse>  {
+	if id == 0 {
+		let user_count = board.send(RequestUserCount {}).await.unwrap();
+		
+		Some(HttpResponse::Ok().json(user_count))
 	} else {
 		None
 	}

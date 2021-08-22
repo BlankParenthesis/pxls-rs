@@ -38,6 +38,7 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::get_color_data)
 		.service(routes::core::boards::get_timestamp_data)
 		.service(routes::core::boards::get_mask_data)
+		.service(routes::core::boards::get_users)
 	).bind("127.0.0.1:8000")?
 		.run()
 		.await

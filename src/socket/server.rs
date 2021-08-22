@@ -2,6 +2,7 @@ use actix::{Context, Actor, Message, Recipient, Handler};
 use std::collections::HashSet;
 
 use crate::socket::event::Event;
+use crate::objects::user_count::UserCount;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {
@@ -48,5 +49,25 @@ impl Handler<Disconnect> for BoardServer {
 		_: &mut Self::Context,
 	) -> Self::Result {
 		self.connections.remove(&msg.handler);
+	}
+}
+
+#[derive(Message)]
+#[rtype(result = "UserCount")]
+pub struct RequestUserCount;
+
+impl Handler<RequestUserCount> for BoardServer {
+	type Result = UserCount;
+
+	fn handle(
+		&mut self, 
+		_: RequestUserCount,
+		_: &mut Self::Context,
+	) -> Self::Result {
+		UserCount {
+			active: self.connections.len(),
+			idle: 0,
+			idle_timeout: 5 * 60,
+		}
 	}
 }
