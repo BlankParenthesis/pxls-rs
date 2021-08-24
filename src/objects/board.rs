@@ -1,6 +1,6 @@
 use serde::Serialize;
 use actix_web::web::{Bytes, BytesMut, BufMut};
-use std::sync::Mutex;
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::objects::color::Color;
@@ -22,8 +22,7 @@ pub struct BoardData {
 
 pub struct Board {
 	pub info: BoardInfo,
-	// TODO: use RWlock
-	pub data: Mutex<BoardData>,
+	pub data: RwLock<BoardData>,
 }
 
 impl Board {
@@ -43,7 +42,7 @@ impl Board {
 				shape,
 				palette,
 			},
-			data: Mutex::new(BoardData {
+			data: RwLock::new(BoardData {
 				colors: BytesMut::from(&vec![0; size][..]),
 				timestamps: BytesMut::from(&vec![0; size * 4][..]),
 				mask: BytesMut::from(&vec![0; size][..]).freeze(),
@@ -52,7 +51,7 @@ impl Board {
 		}
 	}
 	
-	pub fn put_color(&self, index: usize, color: u8) {
+	pub fn put_color(&mut self, index: usize, color: u8) {
 		// NOTE: this creates a timestamp for when the request was made.
 		// It could be put before the lock so that the timestamp is for when the
 		// request is actually honoured.
@@ -61,7 +60,7 @@ impl Board {
 			.as_secs();
 		let delta = timestamp.saturating_sub(self.info.created_at);
 
-		let mut data = self.data.lock().unwrap();
+		let data = self.data.get_mut().unwrap();
 
 		let color_slice = &mut data.colors[index..index + 1];
 		color_slice.as_mut().put_u8(color);

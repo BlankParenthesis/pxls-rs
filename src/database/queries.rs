@@ -1,6 +1,6 @@
 use rusqlite::Result;
 use actix_web::web::{Bytes, BytesMut, BufMut};
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 use crate::objects::board::{Board, BoardData, BoardInfo};
 use crate::objects::color::Color;
@@ -77,7 +77,7 @@ pub fn load_boards(connection: Connection) -> Result<Vec<Board>> {
 				timestamp_slice.as_mut().put_u32_le(placement.modified);
 			};
 
-			let data = Mutex::new(BoardData {
+			let data = RwLock::new(BoardData {
 				colors: color_data,
 				timestamps: timestamp_data,
 				mask: Bytes::from(board_mask),

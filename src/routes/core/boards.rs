@@ -131,7 +131,7 @@ pub async fn get_color_data(
 			.content_type("application/octet-stream")
 			// TODO: if possible, work out how to use disposition itself for the name.
 			.header("content-disposition", disposition)
-			.body(board.data.lock().unwrap().colors.clone())
+			.body(board.data.read().unwrap().colors.clone())
 	})
 }
 
@@ -144,7 +144,7 @@ pub async fn get_timestamp_data(
 	boards.get(id).map(|board| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
-			.body(board.data.lock().unwrap().timestamps.clone())
+			.body(board.data.read().unwrap().timestamps.clone())
 	})
 }
 
@@ -157,7 +157,7 @@ pub async fn get_mask_data(
 	boards.get(id).map(|board| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
-			.body(board.data.lock().unwrap().mask.clone())
+			.body(board.data.read().unwrap().mask.clone())
 	})
 }
 
@@ -170,7 +170,7 @@ pub async fn get_initial_data(
 	boards.get(id).map(|board| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
-			.body(board.data.lock().unwrap().initial.clone())
+			.body(board.data.read().unwrap().initial.clone())
 	})
 }
 
