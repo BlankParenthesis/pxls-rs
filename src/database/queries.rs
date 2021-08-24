@@ -1,5 +1,5 @@
 use rusqlite::Result;
-use actix_web::web::{BytesMut, BufMut};
+use actix_web::web::{Bytes, BytesMut, BufMut};
 use std::sync::Mutex;
 
 use crate::objects::board::{Board, BoardData, BoardInfo};
@@ -19,13 +19,15 @@ pub fn init(connection: Connection) -> Result<()> {
 }
 
 pub fn load_boards(connection: Connection) -> Result<Vec<Board>> {
-	connection.prepare("SELECT `id`, `name`, `created_at`, `shape`, `palette` FROM `board`")?
+	connection.prepare("SELECT `id`, `name`, `created_at`, `shape`, `palette`, `mask`, `initial` FROM `board`")?
 		.query_map([], |board| {
 			let board_id: usize = board.get(0)?;
 			let board_name: String = board.get(1)?;
 			let board_created_at: u64 = board.get(2)?;
 			let board_shape_json: String = board.get(3)?;
 			let board_palette_id: usize = board.get(4)?;
+			let board_mask: Vec<u8> = board.get(5)?;
+			let board_initial: Vec<u8> = board.get(6)?;
 
 			let mut colors: Vec<(usize, Color)> = connection
 				.prepare("SELECT `index`, `name`, `value` FROM `color` WHERE `palette` = ?1")?
@@ -55,9 +57,10 @@ pub fn load_boards(connection: Connection) -> Result<Vec<Board>> {
 
 			let [width, height] = info.shape[0];
 			let size = width * height;
-			let mut color_data = BytesMut::from(&vec![0; size][..]);
-			let mut timestamps = BytesMut::from(&vec![0; size * 4][..]);
-			let mask = BytesMut::from(&vec![0; size][..]);
+			assert_eq!(size, board_mask.len());
+			assert_eq!(size, board_initial.len());
+			let mut color_data = BytesMut::from(&board_initial[..]);
+			let mut timestamp_data = BytesMut::from(&vec![0; size * 4][..]);
 
 			let placements: Vec<Placement> = connection
 				.prepare(include_str!("sql/current_placements.sql"))?
@@ -68,15 +71,17 @@ pub fn load_boards(connection: Connection) -> Result<Vec<Board>> {
 				}))?
 				.collect::<Result<_>>()?;
 			for placement in placements {
-				color_data[placement.position] = placement.color;
-				let timestamp_slice = &mut timestamps[placement.position * 4..placement.position * 4 + 4];
+				let index = placement.position;
+				color_data[index] = placement.color;
+				let timestamp_slice = &mut timestamp_data[index * 4..index * 4 + 4];
 				timestamp_slice.as_mut().put_u32_le(placement.modified);
 			};
 
 			let data = Mutex::new(BoardData {
 				colors: color_data,
-				timestamps,
-				mask,
+				timestamps: timestamp_data,
+				mask: Bytes::from(board_mask),
+				initial: Bytes::from(board_initial),
 			});
 
 			Ok(Board { info, data })

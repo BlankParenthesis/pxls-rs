@@ -161,6 +161,19 @@ pub async fn get_mask_data(
 	})
 }
 
+#[get("/boards/{id}/data/initial")]
+pub async fn get_initial_data(
+	web::Path(id): web::Path<usize>,
+	boards: web::Data<Vec<Board>>,
+	_access: BoardDataAccess,
+) -> Option<HttpResponse>  {
+	boards.get(id).map(|board| {
+		HttpResponse::Ok()
+			.content_type("application/octet-stream")
+			.body(board.data.lock().unwrap().initial.clone())
+	})
+}
+
 #[get("/boards/{id}/users")]
 pub async fn get_users(
 	web::Path(id): web::Path<usize>,

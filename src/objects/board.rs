@@ -1,5 +1,5 @@
 use serde::Serialize;
-use actix_web::web::{BytesMut, BufMut};
+use actix_web::web::{Bytes, BytesMut, BufMut};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,12 +15,14 @@ pub struct BoardInfo {
 
 pub struct BoardData {
 	pub colors: BytesMut,
-	pub mask: BytesMut,
 	pub timestamps: BytesMut,
+	pub mask: Bytes,
+	pub initial: Bytes,
 }
 
 pub struct Board {
 	pub info: BoardInfo,
+	// TODO: use RWlock
 	pub data: Mutex<BoardData>,
 }
 
@@ -43,8 +45,9 @@ impl Board {
 			},
 			data: Mutex::new(BoardData {
 				colors: BytesMut::from(&vec![0; size][..]),
-				mask: BytesMut::from(&vec![0; size][..]),
 				timestamps: BytesMut::from(&vec![0; size * 4][..]),
+				mask: BytesMut::from(&vec![0; size][..]).freeze(),
+				initial: BytesMut::from(&vec![0; size][..]).freeze(),
 			})
 		}
 	}
