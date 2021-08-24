@@ -19,14 +19,16 @@ guard!(SocketAccess, SocketCore);
 #[get("/boards")]
 pub async fn list(
 	web::Query(options): web::Query<PaginationOptions>,
-	board: web::Data<Board>,
+	boards: web::Data<Vec<Board>>,
 	_access: BoardListAccess,
 ) -> HttpResponse {
 	let page = options.page.unwrap_or(0);
 	let limit = options.limit.unwrap_or(2).clamp(0, 10);
 
-	let items = vec![&board.meta];
-	let mut chunks = items.chunks(limit);
+	let board_infos = boards.iter()
+		.map(|board| &board.info)
+		.collect::<Vec<_>>();
+	let mut chunks = board_infos.chunks(limit);
 	
 	fn page_uri(page: usize, limit: usize) -> String {
 		format!("/boards?page={}&limit={}", page, limit)
@@ -63,29 +65,28 @@ pub async fn get_default(
 
 #[get("/boards/{id}")]
 pub async fn get(
-	web::Path(id): web::Path<u32>,
-	board: web::Data<Board>,
+	web::Path(id): web::Path<usize>,
+	boards: web::Data<Vec<Board>>,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse> {
-	if id == 0 {
-		Some(HttpResponse::Ok().json(&board.meta))
-	} else {
-		None
-	}
+	boards.get(id).map(|board|
+		HttpResponse::Ok().json(&board.info)
+	)
 }
 
 #[get("/boards/{id}/socket")]
 pub async fn socket(
-	web::Path(id): web::Path<u32>, 
+	web::Path(id): web::Path<usize>, 
 	// FIXME: with `?extensions=…` this will fail with 400 rather than 422 as
 	// it would with no query string.
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
 	stream: web::Payload,
 	server: web::Data<Addr<BoardServer>>,
+	boards: web::Data<Vec<Board>>,
 	_access: SocketAccess,
 ) -> Option<Result<HttpResponse, Error>> {
-	if id == 0 {
+	boards.get(id).map(|board| {
 		if let Some(extensions) = &options.extensions {
 			let extensions: Result<HashSet<Extension>, _> = extensions
 				.clone()
@@ -94,32 +95,30 @@ pub async fn socket(
 				.collect();
 
 			if let Ok(extensions) = extensions {
-				Some(ws::start(BoardSocket {
+				ws::start(BoardSocket {
 					extensions,
 					server
-				}, &request, stream))
+				}, &request, stream)
 			} else {
-				Some(Err(ErrorUnprocessableEntity(
+				Err(ErrorUnprocessableEntity(
 					"Requested extensions not supported"
-				)))
+				))
 			}
 		} else {
-			Some(Err(ErrorUnprocessableEntity(
+			Err(ErrorUnprocessableEntity(
 				"No extensions specified"
-			)))
+			))
 		}
-	} else {
-		None
-	}
+	})
 }
 
 #[get("/boards/{id}/data/colors")]
 pub async fn get_color_data(
-	web::Path(id): web::Path<u32>,
-	board: web::Data<Board>,
+	web::Path(id): web::Path<usize>,
+	boards: web::Data<Vec<Board>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	if id == 0 {
+	boards.get(id).map(|board| {
 		let disposition = header::ContentDisposition { 
 			disposition: header::DispositionType::Attachment,
 			parameters: vec![
@@ -128,60 +127,49 @@ pub async fn get_color_data(
 			],
 		};
 
-		Some(
-			HttpResponse::Ok()
-				.content_type("application/octet-stream")
-				// TODO: if possible, work out how to use disposition itself for the name.
-				.header("content-disposition", disposition)
-				.body(board.data.lock().unwrap().colors.clone())
-		)
-	} else {
-		None
-	}
+		HttpResponse::Ok()
+			.content_type("application/octet-stream")
+			// TODO: if possible, work out how to use disposition itself for the name.
+			.header("content-disposition", disposition)
+			.body(board.data.lock().unwrap().colors.clone())
+	})
 }
 
 #[get("/boards/{id}/data/timestamps")]
 pub async fn get_timestamp_data(
-	web::Path(id): web::Path<u32>,
-	board: web::Data<Board>,
+	web::Path(id): web::Path<usize>,
+	boards: web::Data<Vec<Board>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	if id == 0 {
-		Some(
-			HttpResponse::Ok()
-				.content_type("application/octet-stream")
-				.body(board.data.lock().unwrap().timestamps.clone())
-		)
-	} else {
-		None
-	}
+	boards.get(id).map(|board| {
+		HttpResponse::Ok()
+			.content_type("application/octet-stream")
+			.body(board.data.lock().unwrap().timestamps.clone())
+	})
 }
 
 #[get("/boards/{id}/data/mask")]
 pub async fn get_mask_data(
-	web::Path(id): web::Path<u32>,
-	board: web::Data<Board>,
+	web::Path(id): web::Path<usize>,
+	boards: web::Data<Vec<Board>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	if id == 0 {
-		Some(
-			HttpResponse::Ok()
-				.content_type("application/octet-stream")
-				.body(board.data.lock().unwrap().mask.clone())
-		)
-	} else {
-		None
-	}
+	boards.get(id).map(|board| {
+		HttpResponse::Ok()
+			.content_type("application/octet-stream")
+			.body(board.data.lock().unwrap().mask.clone())
+	})
 }
 
 #[get("/boards/{id}/users")]
 pub async fn get_users(
-	web::Path(id): web::Path<u32>,
-	board: web::Data<Addr<BoardServer>>,
+	web::Path(id): web::Path<usize>,
+	boards: web::Data<Vec<Board>>,
+	board_server: web::Data<Addr<BoardServer>>,
 	_access: BoardUsersAccess,
 ) -> Option<HttpResponse>  {
-	if id == 0 {
-		let user_count = board.send(RequestUserCount {}).await.unwrap();
+	if let Some(board) = boards.get(id) {
+		let user_count = board_server.send(RequestUserCount {}).await.unwrap();
 		
 		Some(HttpResponse::Ok().json(user_count))
 	} else {

@@ -20,7 +20,7 @@ pub struct BoardData {
 }
 
 pub struct Board {
-	pub meta: BoardInfo,
+	pub info: BoardInfo,
 	pub data: Mutex<BoardData>,
 }
 
@@ -35,7 +35,7 @@ impl Board {
 		let size = width * height;
 
 		Board {
-			meta: BoardInfo {
+			info: BoardInfo {
 				name,
 				created_at,
 				shape,
@@ -56,7 +56,7 @@ impl Board {
 		let timestamp = SystemTime::now()
 			.duration_since(UNIX_EPOCH).unwrap()
 			.as_secs();
-		let delta = timestamp.saturating_sub(self.meta.created_at);
+		let delta = timestamp.saturating_sub(self.info.created_at);
 
 		let mut data = self.data.lock().unwrap();
 
