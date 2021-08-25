@@ -5,8 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::{VecDeque, HashMap};
 use std::convert::TryFrom;
 use r2d2_sqlite::rusqlite::Result;
+use http::Uri;
 
-use crate::objects::{Color, Placement};
+use crate::objects::{Color, Placement, Reference};
 use crate::database::queries::{Connection, DatabaseLoadable, DatabaseStorable};
 
 #[derive(Serialize, Debug)]
@@ -47,6 +48,15 @@ impl Board {
 		
 		let timestamp_slice = &mut data.timestamps[index..index + 4];
 		timestamp_slice.as_mut().put_u32_le(delta as u32);
+	}
+}
+
+impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
+	fn from(board: &'l Board) -> Self {
+		Self {
+			uri: format!("/boards/{}", board.id).parse::<Uri>().unwrap(),
+			view: &board.info,
+		}
 	}
 }
 

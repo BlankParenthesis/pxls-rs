@@ -26,7 +26,7 @@ pub fn load_boards(connection: &Connection) -> Result<Vec<Board>> {
 	connection.prepare("SELECT `id` FROM `board`")?
 		.query_map([], |board| Ok(Board::load(
 			board.get(0)?, 
-			&connection,
+			connection,
 		)?.unwrap()))?
 		.collect()
 }

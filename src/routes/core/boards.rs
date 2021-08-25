@@ -13,7 +13,7 @@ use std::convert::TryFrom;
 use serde_qs::actix::QsQuery;
 
 use crate::BoardData;
-use crate::objects::{Page, PaginationOptions};
+use crate::objects::{Page, PaginationOptions, Reference};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
 
@@ -33,7 +33,7 @@ pub async fn list(
 	let limit = options.limit.unwrap_or(2).clamp(0, 10);
 
 	let board_infos = boards.iter()
-		.map(|(id, BoardData(board, _))| &board.info)
+		.map(|(id, BoardData(board, _))| Reference::from(board))
 		.collect::<Vec<_>>();
 	let mut chunks = board_infos.chunks(limit);
 	
@@ -63,11 +63,14 @@ pub async fn list(
 #[get("/boards/default{rest:(/.*$)?}")]
 pub async fn get_default(
 	Path(rest): Path<String>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse>  {
-	Some(HttpResponse::TemporaryRedirect()
-		.header("Location", format!("/boards/0{}", rest))
-		.finish())
+	boards.keys().last().map(|id| {
+		HttpResponse::TemporaryRedirect()
+			.header("Location", format!("/boards/{}{}", id, rest))
+			.finish()
+	})
 }
 
 #[get("/boards/{id}")]
