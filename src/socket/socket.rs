@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
-use actix_web::web::Data;
+use std::sync::Arc;
 
 use crate::socket::server::{BoardServer, Connect, Disconnect};
 use crate::socket::event::Event;
@@ -40,7 +40,7 @@ pub struct SocketOptions {
 
 pub struct BoardSocket {
 	pub extensions: HashSet<Extension>,
-	pub server: Data<Addr<BoardServer>>,
+	pub server: Arc<Addr<BoardServer>>,
 }
 
 impl Handler<Event> for BoardSocket {

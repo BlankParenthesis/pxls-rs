@@ -1,13 +1,21 @@
-use actix::Addr;
-use actix_web::{http::header, web, get, HttpRequest, HttpResponse, Error, error::ErrorUnprocessableEntity};
+use actix_web::{
+	http::header, 
+	web::{Path, Query, Data, Payload}, 
+	get, 
+	HttpRequest, 
+	HttpResponse, 
+	Error, 
+	error::ErrorUnprocessableEntity
+};
 use actix_web_actors::ws;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::convert::TryFrom;
 use serde_qs::actix::QsQuery;
 
-use crate::objects::{Board, Page, PaginationOptions};
+use crate::BoardData;
+use crate::objects::{Page, PaginationOptions};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
-use crate::socket::server::{BoardServer, RequestUserCount};
+use crate::socket::server::RequestUserCount;
 
 guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
@@ -17,15 +25,15 @@ guard!(SocketAccess, SocketCore);
 
 #[get("/boards")]
 pub async fn list(
-	web::Query(options): web::Query<PaginationOptions>,
-	boards: web::Data<Vec<Board>>,
+	Query(options): Query<PaginationOptions>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardListAccess,
 ) -> HttpResponse {
 	let page = options.page.unwrap_or(0);
 	let limit = options.limit.unwrap_or(2).clamp(0, 10);
 
 	let board_infos = boards.iter()
-		.map(|board| &board.info)
+		.map(|(id, BoardData(board, _))| &board.info)
 		.collect::<Vec<_>>();
 	let mut chunks = board_infos.chunks(limit);
 	
@@ -54,7 +62,7 @@ pub async fn list(
 
 #[get("/boards/default{rest:(/.*$)?}")]
 pub async fn get_default(
-	web::Path(rest): web::Path<String>,
+	Path(rest): Path<String>,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse>  {
 	Some(HttpResponse::TemporaryRedirect()
@@ -64,28 +72,27 @@ pub async fn get_default(
 
 #[get("/boards/{id}")]
 pub async fn get(
-	web::Path(id): web::Path<usize>,
-	boards: web::Data<Vec<Board>>,
+	Path(id): Path<usize>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse> {
-	boards.get(id).map(|board|
+	boards.get(&id).map(|BoardData(board, _)| {
 		HttpResponse::Ok().json(&board.info)
-	)
+	})
 }
 
 #[get("/boards/{id}/socket")]
 pub async fn socket(
-	web::Path(id): web::Path<usize>, 
+	Path(id): Path<usize>, 
 	// FIXME: with `?extensions=…` this will fail with 400 rather than 422 as
 	// it would with no query string.
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
-	stream: web::Payload,
-	server: web::Data<Addr<BoardServer>>,
-	boards: web::Data<Vec<Board>>,
+	stream: Payload,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: SocketAccess,
 ) -> Option<Result<HttpResponse, Error>> {
-	boards.get(id).map(|board| {
+	boards.get(&id).map(|BoardData(_, server)| {
 		if let Some(extensions) = &options.extensions {
 			let extensions: Result<HashSet<Extension>, _> = extensions
 				.clone()
@@ -96,7 +103,7 @@ pub async fn socket(
 			if let Ok(extensions) = extensions {
 				ws::start(BoardSocket {
 					extensions,
-					server
+					server: server.clone()
 				}, &request, stream)
 			} else {
 				Err(ErrorUnprocessableEntity(
@@ -113,11 +120,11 @@ pub async fn socket(
 
 #[get("/boards/{id}/data/colors")]
 pub async fn get_color_data(
-	web::Path(id): web::Path<usize>,
-	boards: web::Data<Vec<Board>>,
+	Path(id): Path<usize>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.get(id).map(|board| {
+	boards.get(&id).map(|BoardData(board, _)| {
 		let disposition = header::ContentDisposition { 
 			disposition: header::DispositionType::Attachment,
 			parameters: vec![
@@ -136,11 +143,11 @@ pub async fn get_color_data(
 
 #[get("/boards/{id}/data/timestamps")]
 pub async fn get_timestamp_data(
-	web::Path(id): web::Path<usize>,
-	boards: web::Data<Vec<Board>>,
+	Path(id): Path<usize>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.get(id).map(|board| {
+	boards.get(&id).map(|BoardData(board, _)| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
 			.body(board.data.read().unwrap().timestamps.clone())
@@ -149,11 +156,11 @@ pub async fn get_timestamp_data(
 
 #[get("/boards/{id}/data/mask")]
 pub async fn get_mask_data(
-	web::Path(id): web::Path<usize>,
-	boards: web::Data<Vec<Board>>,
+	Path(id): Path<usize>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.get(id).map(|board| {
+	boards.get(&id).map(|BoardData(board, _)| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
 			.body(board.data.read().unwrap().mask.clone())
@@ -162,11 +169,11 @@ pub async fn get_mask_data(
 
 #[get("/boards/{id}/data/initial")]
 pub async fn get_initial_data(
-	web::Path(id): web::Path<usize>,
-	boards: web::Data<Vec<Board>>,
+	Path(id): Path<usize>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.get(id).map(|board| {
+	boards.get(&id).map(|BoardData(board, _)| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
 			.body(board.data.read().unwrap().initial.clone())
@@ -175,13 +182,12 @@ pub async fn get_initial_data(
 
 #[get("/boards/{id}/users")]
 pub async fn get_users(
-	web::Path(id): web::Path<usize>,
-	boards: web::Data<Vec<Board>>,
-	board_server: web::Data<Addr<BoardServer>>,
+	Path(id): Path<usize>,
+	boards: Data<HashMap<usize, BoardData>>,
 	_access: BoardUsersAccess,
 ) -> Option<HttpResponse>  {
-	if let Some(board) = boards.get(id) {
-		let user_count = board_server.send(RequestUserCount {}).await.unwrap();
+	if let Some(BoardData(_, server)) = boards.get(&id) {
+		let user_count = server.send(RequestUserCount {}).await.unwrap();
 		
 		Some(HttpResponse::Ok().json(user_count))
 	} else {

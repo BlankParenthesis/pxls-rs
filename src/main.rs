@@ -6,16 +6,26 @@ mod socket;
 mod objects;
 mod database;
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use actix::prelude::*;
 use actix_web::{App, HttpServer, web::Data};
 use actix_web::middleware::{NormalizePath, normalize::TrailingSlash};
 
+use crate::objects::Board;
 use crate::socket::server::BoardServer;
+
+pub struct BoardData(Board, Arc<Addr<BoardServer>>,
+);
+
+impl BoardData {
+	fn new(board: Board) -> Self {
+		Self(board, Arc::new(BoardServer::default().start()))
+	}
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let board_server = Data::new(BoardServer::default().start());
-
 	let manager = r2d2_sqlite::SqliteConnectionManager::file("pxls.db");
 	let pool = r2d2::Pool::new(manager).unwrap();
 
@@ -24,12 +34,14 @@ async fn main() -> std::io::Result<()> {
 
 	let connection = pool.get().expect("Could not connected to database");
     let boards = Data::new(database::queries::load_boards(&connection)
-		.expect("Failed to load boards"));
+		.expect("Failed to load boards")
+		.into_iter()
+		.map(|board| (board.id, BoardData::new(board)))
+		.collect::<HashMap<_, _>>());
 
 	HttpServer::new(move || App::new()
 		.data(pool.clone())
 		.app_data(boards.clone())
-		.app_data(board_server.clone())
 		.wrap(NormalizePath::new(TrailingSlash::Trim))
 		.service(routes::core::info::info)
 		.service(routes::core::access::access)
