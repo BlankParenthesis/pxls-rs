@@ -2,7 +2,7 @@ use actix::{Context, Actor, Message, Recipient, Handler};
 use std::collections::HashSet;
 
 use crate::socket::event::Event;
-use crate::objects::user_count::UserCount;
+use crate::objects::UserCount;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {

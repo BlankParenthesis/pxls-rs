@@ -1,7 +1,7 @@
 use actix::Message;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
-use crate::objects::placement::Placement;
+use crate::objects::Placement;
 use crate::access::permissions::Permission;
 
 #[derive(Message, Debug)]

@@ -1,5 +1,11 @@
-pub mod placement;
-pub mod paginated_list;
-pub mod board;
-pub mod color;
-pub mod user_count;
+mod board;
+mod placement;
+mod paginated_list;
+mod color;
+mod user_count;
+
+pub use board::{Board, BoardData, BoardInfo};
+pub use placement::Placement;
+pub use paginated_list::{Page, PaginationOptions};
+pub use color::Color;
+pub use user_count::UserCount;

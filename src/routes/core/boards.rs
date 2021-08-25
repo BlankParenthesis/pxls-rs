@@ -5,8 +5,7 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use serde_qs::actix::QsQuery;
 
-use crate::objects::paginated_list::{Page, PaginationOptions};
-use crate::objects::board::Board;
+use crate::objects::{Board, Page, PaginationOptions};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::{BoardServer, RequestUserCount};
 

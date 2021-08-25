@@ -23,7 +23,7 @@ async fn main() -> std::io::Result<()> {
 	database::queries::init(connection).expect("Could not init database");
 
 	let connection = pool.get().expect("Could not connected to database");
-    let boards = Data::new(database::queries::load_boards(connection)
+    let boards = Data::new(database::queries::load_boards(&connection)
 		.expect("Failed to load boards"));
 
 	HttpServer::new(move || App::new()
