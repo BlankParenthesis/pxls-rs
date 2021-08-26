@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 use actix_web::web::{Bytes, BytesMut, BufMut};
-use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::{VecDeque, HashMap};
 use std::convert::TryFrom;
@@ -147,10 +146,19 @@ impl Board {
 		Ok(())
 	}
 
+	pub fn delete(self, connection: &mut Connection) -> Result<()> {
+		let transaction = connection.transaction()?;
+
+		transaction.execute("DELETE FROM `placement` WHERE `board` = ?1", [self.id])?;
+		transaction.execute("DELETE FROM `color` WHERE `board` = ?1", [self.id])?;
+		transaction.execute("DELETE FROM `board` WHERE `id` = ?1", [self.id])?;
+
+		transaction.commit()?;
+
+		Ok(())
+	}
+
 	pub fn put_color(&mut self, index: usize, color: u8) {
-		// NOTE: this creates a timestamp for when the request was made.
-		// It could be put before the lock so that the timestamp is for when the
-		// request is actually honoured.
 		let timestamp = SystemTime::now()
 			.duration_since(UNIX_EPOCH).unwrap()
 			.as_secs();

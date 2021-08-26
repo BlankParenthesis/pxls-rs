@@ -4,8 +4,9 @@ use actix_web::{
 	get,
 	post, 
 	patch,
+	delete,
 	HttpRequest, 
-	HttpResponse, 
+	HttpResponse,
 	Error, 
 	error::ErrorUnprocessableEntity
 };
@@ -14,6 +15,7 @@ use std::collections::{HashSet, HashMap};
 use std::convert::TryFrom;
 use std::sync::RwLock;
 use serde_qs::actix::QsQuery;
+use http::StatusCode;
 
 use crate::BoardData;
 use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board};
@@ -25,6 +27,7 @@ guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
 guard!(BoardPostAccess, BoardsPost);
 guard!(BoardPatchAccess, BoardsPatch);
+guard!(BoardDeleteAccess, BoardsDelete);
 guard!(BoardDataAccess, BoardsData);
 guard!(BoardUsersAccess, BoardsUsers);
 guard!(SocketAccess, SocketCore);
@@ -89,7 +92,8 @@ pub async fn post(
 	let BoardData(board, _) = boards.get(&id).unwrap();
 	let board = board.read().unwrap();
 
-	Ok(HttpResponse::Ok()
+	Ok(HttpResponse::build(StatusCode::CREATED)
+		.header("Location", format!("/boards/{}", board.id))
 		.json(Reference::from(&*board)))
 }
 
@@ -125,13 +129,27 @@ pub async fn patch(
 	pool: Data<Pool>,
 	_access: BoardPatchAccess,
 ) -> Option<HttpResponse> {
-	boards.write().unwrap().get(&id).map(|BoardData(board, _)| {
+	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
 		board.write().unwrap().update_info(
 			data, 
 			&mut pool.get().expect("pool"),
 		).expect("update");
 
 		HttpResponse::Ok().json(&board.read().unwrap().info)
+	})
+}
+
+#[delete("/boards/{id}")]
+pub async fn delete(
+	Path(id): Path<usize>,
+	boards: BoardDataMap,
+	pool: Data<Pool>,
+	_access: BoardDeleteAccess,
+) -> Option<HttpResponse> {
+	boards.write().unwrap().remove(&id).map(|BoardData(board, _)| {
+		board.into_inner().unwrap().delete(&mut pool.get().expect("pool")).unwrap();
+
+		HttpResponse::new(StatusCode::NO_CONTENT)
 	})
 }
 
