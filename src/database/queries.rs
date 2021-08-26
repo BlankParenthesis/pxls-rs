@@ -1,14 +1,12 @@
 use rusqlite::Result;
+use r2d2_sqlite::SqliteConnectionManager as Manager;
 
 use crate::objects::Board;
 
-pub type Connection = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
+pub type Connection = r2d2::PooledConnection<Manager>;
+pub type Pool = r2d2::Pool<Manager>;
 
-pub trait DatabaseStorable {
-	fn save(connection: &Connection) -> Result<()>;
-}
-
-pub trait DatabaseLoadable {
+pub trait FromDatabase {
 	fn load(id: usize, connection: &Connection) -> Result<Option<Self>>
 	where Self: std::marker::Sized;
 }

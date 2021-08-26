@@ -7,6 +7,8 @@ pub enum Permission {
 	Info,
 	BoardsList,
 	BoardsGet,
+	BoardsPost,
+	BoardsPatch,
 	BoardsData,
 	BoardsUsers,
 	SocketCore,
@@ -19,6 +21,8 @@ impl Serialize for Permission {
 			Permission::Info => serializer.serialize_str("info"),
 			Permission::BoardsList => serializer.serialize_str("boards.list"),
 			Permission::BoardsGet => serializer.serialize_str("boards.get"),
+			Permission::BoardsPost => serializer.serialize_str("boards.post"),
+			Permission::BoardsPatch => serializer.serialize_str("boards.patch"),
 			Permission::BoardsData => serializer.serialize_str("boards.data"),
 			Permission::BoardsUsers => serializer.serialize_str("boards.users"),
 			Permission::SocketCore => serializer.serialize_str("socket.core"),
@@ -32,6 +36,8 @@ lazy_static! {
 		set.insert(Permission::Info);
 		set.insert(Permission::BoardsList);
 		set.insert(Permission::BoardsGet);
+		set.insert(Permission::BoardsPost);
+		set.insert(Permission::BoardsPatch);
 		set.insert(Permission::BoardsData);
 		set.insert(Permission::BoardsUsers);
 		set.insert(Permission::SocketCore);

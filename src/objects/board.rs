@@ -1,21 +1,40 @@
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use actix_web::web::{Bytes, BytesMut, BufMut};
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::{VecDeque, HashMap};
 use std::convert::TryFrom;
 use r2d2_sqlite::rusqlite::Result;
+use rusqlite::params;
 use http::Uri;
 
-use crate::objects::{Color, Placement, Reference};
-use crate::database::queries::{Connection, DatabaseLoadable, DatabaseStorable};
+use crate::objects::{Color, Placement, Reference, Palette};
+use crate::database::queries::{Connection, FromDatabase};
+
+// TODO: support other shapes
+type Shape = [[usize; 2]; 1];
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
 	pub name: String,
 	pub created_at: u64,
-	pub shape: [[usize; 2]; 1], // TODO: support other shapes
-	pub palette: HashMap<usize, Color>,
+	pub shape: Shape,
+	pub palette: Palette,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct BoardInfoPost {
+	pub name: String,
+	pub shape: Shape,
+	pub palette: Palette,
+}
+
+
+#[derive(Deserialize, Debug)]
+pub struct BoardInfoPatch {
+	pub name: Option<String>,
+	pub shape: Option<Shape>,
+	pub palette: Option<Palette>,
 }
 
 pub struct BoardData {
@@ -28,10 +47,106 @@ pub struct BoardData {
 pub struct Board {
 	pub id: usize,
 	pub info: BoardInfo,
-	pub data: RwLock<BoardData>,
+	pub data: BoardData,
 }
 
 impl Board {
+	pub fn create(
+		info: BoardInfoPost, 
+		connection: &mut Connection
+	) -> Result<Self> {
+		let [[width, height]] = info.shape;
+		let size = width * height;
+		let empty_data = vec![0 as u8; size];
+
+		connection.execute("INSERT INTO `board` VALUES(null, ?1, ?2, ?3, ?4, ?5)", params![
+			info.name,
+			SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+			serde_json::to_string(&info.shape).unwrap(),
+			empty_data,
+			empty_data,
+		])?;
+
+		let id = connection.last_insert_rowid() as usize;
+
+		crate::objects::color::save_palette(&info.palette, id, connection)?;
+
+		Self::load(id, connection).map(|option| option.unwrap())
+	}
+
+	pub fn update_info(
+		&mut self, 
+		info: BoardInfoPatch, 
+		connection: &mut Connection,
+	) -> Result<()> {
+		assert!(info.name.is_some() || info.palette.is_some() || info.shape.is_some());
+
+		let transaction = connection.transaction()?;
+
+		if let Some(name) = &info.name {
+			transaction.execute(
+				"UPDATE `board` SET `name` = ?2 WHERE `id` = ?1",
+				params![self.id, name],
+			)?;
+		}
+
+		if let Some(palette) = &info.palette {
+			transaction.execute(
+				"DELETE FROM `color` WHERE `board` = ?1",
+				params![self.id],
+			)?;
+
+			crate::objects::color::save_palette_transaction(palette, self.id, &transaction)?;
+		}
+
+		let mut mask = None;
+		let mut initial = None;
+
+		if let Some(shape) = &info.shape {
+			let [[width, height]] = shape;
+			let size = width * height;
+
+			mask = Some({
+				let mut mask = BytesMut::from(&self.data.mask[..]);
+				mask.resize(size, 0);
+				mask.freeze()
+			});
+			initial = Some({
+				let mut initial = BytesMut::from(&self.data.initial[..]);
+				initial.resize(size, 0);
+				initial.freeze()
+			});
+
+			transaction.execute(
+				"UPDATE `board` SET `shape` = ?2, `mask` = ?3, `initial` = ?4 WHERE `id` = ?1",
+				params![
+					self.id,
+					serde_json::to_string(shape).unwrap(),
+					&mask.as_ref().unwrap()[..],
+					&initial.as_ref().unwrap()[..],
+				],
+			)?;
+		}
+
+		transaction.commit()?;
+
+		if let Some(name) = info.name {
+			self.info.name = name;
+		}
+
+		if let Some(palette) = info.palette {
+			self.info.palette = palette;
+		}
+
+		if let Some(shape) = info.shape {
+			self.info.shape = shape;
+			self.data.mask = mask.unwrap();
+			self.data.initial = initial.unwrap();
+		}
+
+		Ok(())
+	}
+
 	pub fn put_color(&mut self, index: usize, color: u8) {
 		// NOTE: this creates a timestamp for when the request was made.
 		// It could be put before the lock so that the timestamp is for when the
@@ -41,20 +156,24 @@ impl Board {
 			.as_secs();
 		let delta = timestamp.saturating_sub(self.info.created_at);
 
-		let data = self.data.get_mut().unwrap();
-
-		let color_slice = &mut data.colors[index..index + 1];
+		let color_slice = &mut self.data.colors[index..index + 1];
 		color_slice.as_mut().put_u8(color);
 		
-		let timestamp_slice = &mut data.timestamps[index..index + 4];
+		let timestamp_slice = &mut self.data.timestamps[index..index + 4];
 		timestamp_slice.as_mut().put_u32_le(delta as u32);
+	}
+}
+
+impl From<&Board> for Uri {
+	fn from(board: &Board) -> Self {
+		format!("/boards/{}", board.id).parse::<Uri>().unwrap()
 	}
 }
 
 impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
 	fn from(board: &'l Board) -> Self {
 		Self {
-			uri: format!("/boards/{}", board.id).parse::<Uri>().unwrap(),
+			uri: board.into(),
 			view: &board.info,
 		}
 	}
@@ -87,7 +206,7 @@ impl TryFrom<&rusqlite::Row<'_>> for BoardRow {
 	}
 }
 
-impl DatabaseLoadable for Board {
+impl FromDatabase for Board {
 	fn load(id: usize, connection: &Connection) -> Result<Option<Self>> {
 		Ok(connection.prepare("SELECT `id`, `name`, `created_at`, `shape`, `mask`, `initial` FROM `board` WHERE `id` = ?1")?
 			.query_map([id], |row| {
@@ -134,12 +253,12 @@ impl DatabaseLoadable for Board {
 					timestamp_slice.as_mut().put_u32_le(placement.modified);
 				};
 			
-				let data = RwLock::new(BoardData {
+				let data = BoardData {
 					colors: color_data,
 					timestamps: timestamp_data,
 					mask: Bytes::from(board.mask),
 					initial: Bytes::from(board.initial),
-				});
+				};
 			
 				Ok(Board { id, info, data })
 			})?

@@ -7,7 +7,7 @@ mod objects;
 mod database;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use actix::prelude::*;
 use actix_web::{App, HttpServer, web::Data};
 use actix_web::middleware::{NormalizePath, normalize::TrailingSlash};
@@ -15,12 +15,11 @@ use actix_web::middleware::{NormalizePath, normalize::TrailingSlash};
 use crate::objects::Board;
 use crate::socket::server::BoardServer;
 
-pub struct BoardData(Board, Arc<Addr<BoardServer>>,
-);
+pub struct BoardData(RwLock<Board>, Arc<Addr<BoardServer>>);
 
 impl BoardData {
 	fn new(board: Board) -> Self {
-		Self(board, Arc::new(BoardServer::default().start()))
+		Self(RwLock::new(board), Arc::new(BoardServer::default().start()))
 	}
 }
 
@@ -33,11 +32,12 @@ async fn main() -> std::io::Result<()> {
 	database::queries::init(connection).expect("Could not init database");
 
 	let connection = pool.get().expect("Could not connected to database");
-    let boards = Data::new(database::queries::load_boards(&connection)
+	let boards = database::queries::load_boards(&connection)
 		.expect("Failed to load boards")
 		.into_iter()
 		.map(|board| (board.id, BoardData::new(board)))
-		.collect::<HashMap<_, _>>());
+		.collect::<HashMap<_, _>>();
+	let boards = Data::new(RwLock::new(boards));
 
 	HttpServer::new(move || App::new()
 		.data(pool.clone())
@@ -54,6 +54,8 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::get_mask_data)
 		.service(routes::core::boards::get_initial_data)
 		.service(routes::core::boards::get_users)
+		.service(routes::core::boards::post)
+		.service(routes::core::boards::patch)
 	).bind("127.0.0.1:8000")?
 		.run()
 		.await
