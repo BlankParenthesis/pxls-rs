@@ -1,6 +1,6 @@
 use actix_web::{
 	http::header, 
-	web::{Path, Query, Data, Payload, Json}, 
+	web::{Path, Query, Data, Payload, Json, Bytes}, 
 	get,
 	post, 
 	patch,
@@ -18,7 +18,7 @@ use serde_qs::actix::QsQuery;
 use http::StatusCode;
 
 use crate::BoardData;
-use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board};
+use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board, Ranges};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
 use crate::database::queries::Pool;
@@ -194,22 +194,35 @@ pub async fn socket(
 pub async fn get_color_data(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
+	request: HttpRequest,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
 	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
-		let disposition = header::ContentDisposition { 
-			disposition: header::DispositionType::Attachment,
-			parameters: vec![
-				// TODO: maybe use the actual board name
-				header::DispositionParam::Filename(String::from("board.dat")),
-			],
-		};
+		if let Some(range) = request.headers().get(http::header::RANGE) {
+			let board = board.read().unwrap();
+			// FIXME: this should be safely handled
+			let range = range.to_str().expect("expected ascii header value");
+			match Ranges::parse(range, &board.data.colors) {
+				Ok(ranges) => HttpResponse::build(StatusCode::PARTIAL_CONTENT)
+					.body(Bytes::from(&ranges)),
+				Err(err) => actix_web::error::ErrorBadRequest(err).into(),
+			}
+		} else {
+			let disposition = header::ContentDisposition { 
+				disposition: header::DispositionType::Attachment,
+				parameters: vec![
+					// TODO: maybe use the actual board name
+					header::DispositionParam::Filename(String::from("board.dat")),
+				],
+			};
 
-		HttpResponse::Ok()
-			.content_type("application/octet-stream")
-			// TODO: if possible, work out how to use disposition itself for the name.
-			.header("content-disposition", disposition)
-			.body(board.read().unwrap().data.colors.clone())
+			HttpResponse::Ok()
+				.content_type("application/octet-stream")
+				// TODO: if possible, work out how to use disposition itself for the name.
+				.header("content-disposition", disposition)
+				.header("accept-ranges", "bytes")
+				.body(board.read().unwrap().data.colors.clone())
+		}
 	})
 }
 
