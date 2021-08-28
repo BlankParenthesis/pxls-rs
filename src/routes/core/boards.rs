@@ -18,7 +18,7 @@ use serde_qs::actix::QsQuery;
 use http::StatusCode;
 
 use crate::BoardData;
-use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board, Ranges};
+use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board, Ranges, HttpRange};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
 use crate::database::queries::Pool;
@@ -202,9 +202,41 @@ pub async fn get_color_data(
 			let board = board.read().unwrap();
 			// FIXME: this should be safely handled
 			let range = range.to_str().expect("expected ascii header value");
-			match Ranges::parse(range, &board.data.colors) {
-				Ok(ranges) => HttpResponse::build(StatusCode::PARTIAL_CONTENT)
-					.body(Bytes::from(&ranges)),
+			match Ranges::parse(range) {
+				Ok(Ranges::Multi { unit: _, ranges: _ }) => HttpResponse::build(StatusCode::RANGE_NOT_SATISFIABLE)
+					.header("content-range", header::ContentRangeSpec::Bytes {
+						range: None,
+						instance_length: Some(board.data.colors.len() as u64)
+					})
+					.finish(),
+				Ok(Ranges::Single { unit, range }) => {
+					if unit.eq("bytes") {
+						let length = board.data.colors.len();
+						let range = match range {
+							HttpRange::FromEndToLast(from_end) => length - from_end..length,
+							HttpRange::FromStartToLast(range) => range.start..length,
+							HttpRange::FromStartToEnd(range) => range,
+						};
+
+						if range.start > length || range.end > length {
+							HttpResponse::build(StatusCode::RANGE_NOT_SATISFIABLE)
+								.header("content-range", header::ContentRangeSpec::Bytes {
+									range: None,
+									instance_length: Some(board.data.colors.len() as u64)
+								})
+								.finish()
+						} else {
+							HttpResponse::build(StatusCode::PARTIAL_CONTENT)
+								.header("content-range", header::ContentRangeSpec::Bytes {
+									range: Some((range.start as u64, range.end as u64)),
+									instance_length: Some(board.data.colors.len() as u64)
+								})
+								.body(Vec::from(&board.data.colors[range]))
+						}
+					} else {
+						actix_web::error::ErrorBadRequest(format!("unknown unit {}", unit)).into()
+					}
+				},
 				Err(err) => actix_web::error::ErrorBadRequest(err).into(),
 			}
 		} else {
