@@ -32,6 +32,12 @@ guard!(BoardDataAccess, BoardsData);
 guard!(BoardUsersAccess, BoardsUsers);
 guard!(SocketAccess, SocketCore);
 
+macro_rules! board {
+	( $boards:ident[$id:ident] ) => {
+		$boards.read().unwrap().get(&$id)
+	}
+}
+
 type BoardDataMap = Data<RwLock<HashMap<usize, BoardData>>>;
 
 #[get("/boards")]
@@ -116,8 +122,9 @@ pub async fn get(
 	boards: BoardDataMap,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse> {
-	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
-		HttpResponse::Ok().json(&board.read().unwrap().info)
+	board!(boards[id]).map(|BoardData(board, _)| {
+		HttpResponse::Ok()
+			.json(&board.read().unwrap().info)
 	})
 }
 
@@ -129,7 +136,7 @@ pub async fn patch(
 	pool: Data<Pool>,
 	_access: BoardPatchAccess,
 ) -> Option<HttpResponse> {
-	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|BoardData(board, _)| {
 		board.write().unwrap().update_info(
 			data, 
 			&mut pool.get().expect("pool"),
@@ -164,7 +171,7 @@ pub async fn socket(
 	boards: BoardDataMap,
 	_access: SocketAccess,
 ) -> Option<Result<HttpResponse, Error>> {
-	boards.read().unwrap().get(&id).map(|BoardData(_, server)| {
+	board!(boards[id]).map(|BoardData(_, server)| {
 		if let Some(extensions) = &options.extensions {
 			let extensions: Result<HashSet<Extension>, _> = extensions
 				.clone()
@@ -197,7 +204,7 @@ pub async fn get_color_data(
 	request: HttpRequest,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|BoardData(board, _)| {
 		if let Some(range) = request.headers().get(http::header::RANGE) {
 			let board = board.read().unwrap();
 			// FIXME: this should be safely handled
@@ -264,7 +271,7 @@ pub async fn get_timestamp_data(
 	boards: BoardDataMap,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|BoardData(board, _)| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
 			.body(board.read().unwrap().data.timestamps.clone())
@@ -277,7 +284,7 @@ pub async fn get_mask_data(
 	boards: BoardDataMap,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|BoardData(board, _)| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
 			.body(board.read().unwrap().data.mask.clone())
@@ -290,7 +297,7 @@ pub async fn get_initial_data(
 	boards: BoardDataMap,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
-	boards.read().unwrap().get(&id).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|BoardData(board, _)| {
 		HttpResponse::Ok()
 			.content_type("application/octet-stream")
 			.body(board.read().unwrap().data.initial.clone())
@@ -303,7 +310,7 @@ pub async fn get_users(
 	boards: BoardDataMap,
 	_access: BoardUsersAccess,
 ) -> Option<HttpResponse>  {
-	if let Some(BoardData(_, server)) = boards.read().unwrap().get(&id) {
+	if let Some(BoardData(_, server)) = board!(boards[id]) {
 		let user_count = server.send(RequestUserCount {}).await.unwrap();
 		
 		Some(HttpResponse::Ok().json(user_count))
