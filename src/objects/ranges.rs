@@ -1,9 +1,14 @@
 use std::num::ParseIntError;
-use std::ops::{Range, RangeFrom};
+use std::ops::{Range, RangeFrom, RangeFull, Index};
 use std::fmt::{self, Display, Formatter};
+use actix_web::{FromRequest, HttpRequest, dev::{Payload, HttpResponseBuilder}, error, web::BytesMut, HttpResponse};
+use actix_web::http::header;
+use futures_util::future::{Ready, ready};
+use http::StatusCode;
 
 #[derive(Debug)]
 pub enum RangeParseError {
+	NotAscii,
 	MissingUnit,
 	MissingHyphenMinus(String),
 	ValueParseError(ParseIntError),
@@ -15,6 +20,7 @@ pub enum RangeParseError {
 impl Display for RangeParseError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		write!(f, "invalid range format: {}", match self {
+			Self::NotAscii => "header contained non-ascii characters",
 			Self::MissingUnit => "missing unit",
 			Self::MissingHyphenMinus(range) => "missing hyphen-minus",
 			Self::ValueParseError(err) => "value parse error",
@@ -25,13 +31,85 @@ impl Display for RangeParseError {
 	}
 }
 
+impl From<RangeParseError> for error::Error {
+	fn from(error: RangeParseError) -> Self {
+		HttpResponse::build(StatusCode::BAD_REQUEST)
+			.header("accept-ranges", "bytes")
+			.finish()
+			.into()
+	}
+}
+
+#[derive(Debug)]
+pub enum RangeIndexError {
+	UnknownUnit(usize),
+	MultiUnsupported(usize),
+	TooLarge(usize),
+}
+
+impl Display for RangeIndexError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		write!(f, "cannot index with range: {}", match self {
+			Self::UnknownUnit(_length) => "unit not supported",
+			Self::MultiUnsupported(_length) => "multi ranges not supported",
+			Self::TooLarge(_length) => "range exceeds bounds",
+		})
+	}
+}
+
+impl From<RangeIndexError> for error::Error {
+	fn from(error: RangeIndexError) -> Self {
+		if let RangeIndexError::UnknownUnit(_) = error {
+			HttpResponse::build(StatusCode::BAD_REQUEST)
+				.header("accept-ranges", "bytes")
+				.finish()
+				.into()
+		} else {
+			let length = match error {
+				RangeIndexError::UnknownUnit(length) => length,
+				RangeIndexError::MultiUnsupported(length) => length,
+				RangeIndexError::TooLarge(length) => length,
+			};
+
+			let range_spec = header::ContentRangeSpec::Bytes {
+				range: None,
+				instance_length: Some(length as u64)
+			};
+
+			HttpResponse::build(StatusCode::RANGE_NOT_SATISFIABLE)
+				.header("accept-ranges", "bytes")
+				.header("content-range", range_spec)
+				.finish()
+				.into()
+		}
+	}
+}
+
 pub enum HttpRange {
 	FromStartToEnd(Range<usize>),
 	FromStartToLast(RangeFrom<usize>),
 	FromEndToLast(usize),
 }
 
-pub enum Ranges {
+impl HttpRange {
+	fn with_length(&self, length: usize) -> Range<usize> {
+		match self {
+			Self::FromEndToLast(from_end) => length - from_end..length,
+			Self::FromStartToLast(range) => range.start..length,
+			Self::FromStartToEnd(range) => range.clone(),
+		}
+	}
+}
+
+pub trait TryIndex<Idx>
+where Idx: ?Sized {
+	type Error;
+	type Output: ?Sized;
+
+	fn try_index(&self, index: &Idx) -> Result<&Self::Output, Self::Error>;
+}
+
+pub enum RangeHeader {
 	Multi {
 		unit: String, 
 		ranges: Vec<HttpRange>,
@@ -40,48 +118,135 @@ pub enum Ranges {
 		unit: String, 
 		range: HttpRange,
 	},
+	None,
 }
 
-impl Ranges {
-	pub fn parse(header: &str) -> Result<Self, RangeParseError> {
-		let split_header = header.split_once('=');
-		let (unit, range_data) = split_header.ok_or(RangeParseError::MissingUnit)?;
-		let unit = String::from(unit);
+impl RangeHeader {
+	pub fn respond_with(&self, data: &BytesMut) -> HttpResponse {
+		data.try_index(self).map(|bytes| {
+			let mut builder = match self {
+				Self::Multi { unit, ranges } => unimplemented!(),
+				Self::Single { unit, range } => {
+					let range = range.with_length(data.len());
+					
+					let mut builder = HttpResponse::build(StatusCode::PARTIAL_CONTENT);
 
-		let mut ranges: Vec<HttpRange> = range_data.split(',')
-			.map(|range| {
-				let tuple = range.split_once('-').ok_or(
-					RangeParseError::MissingHyphenMinus(String::from(range))
-				)?;
-				let http_range = match tuple {
-					("", "") => Err(RangeParseError::RangeEmpty),
-					("", since_end) => since_end.parse()
-						.map(HttpRange::FromEndToLast)
-						.map_err(RangeParseError::ValueParseError),
-					(start, "") => start.parse()
-						.map(|start| HttpRange::FromStartToLast(start..))
-						.map_err(RangeParseError::ValueParseError),
-					(start, end) => start.parse()
-						.and_then(|start| end.parse()
-						.map(|end| HttpRange::FromStartToEnd(start..end)))
-						.map_err(RangeParseError::ValueParseError),
-				}?;
-				if let HttpRange::FromStartToEnd(range) = &http_range {
-					if range.end < range.start {
-						Err(RangeParseError::Backwards)
-					} else {
-						Ok(http_range)
-					}
-				} else {
-					Ok(http_range)
+					builder.header("content-range", header::ContentRangeSpec::Bytes {
+						range: Some((range.start as u64, range.end as u64)),
+						instance_length: Some(data.len() as u64)
+					});
+
+					builder
+				},
+				Self::None => HttpResponse::build(StatusCode::OK),
+			};
+
+			//let disposition = header::ContentDisposition { 
+			//	disposition: header::DispositionType::Attachment,
+			//	parameters: vec![
+			//		// TODO: maybe use the actual board name
+			//		header::DispositionParam::Filename(String::from("board.dat")),
+			//	],
+			//};
+		
+			builder.content_type("application/octet-stream")
+				.header("accept-ranges", "bytes")
+				//.header("content-disposition", disposition)
+				.body(BytesMut::from(bytes).freeze())
+		}).into()
+	}
+}
+
+impl TryIndex<RangeHeader> for actix_web::web::BytesMut {
+	type Error = RangeIndexError;
+	type Output = [u8];
+
+	fn try_index(&self, index: &RangeHeader) -> Result<&Self::Output, Self::Error> {
+		let length = self[..].len();
+
+		match index {
+			RangeHeader::Single { unit, range } => {
+				match unit.as_str() {
+					"bytes" => {
+						let range = range.with_length(length);
+			
+						if range.end <= length {
+							Ok(&self[range])
+						} else {
+							Err(RangeIndexError::TooLarge(length))
+						}
+					},
+					_ => Err(RangeIndexError::UnknownUnit(length)),
+				}
+			},
+			RangeHeader::Multi { unit: _, ranges: _ }  => Err(RangeIndexError::MultiUnsupported(length)),
+			RangeHeader::None => Ok(&self[..]),
+		}
+	}
+}
+
+impl From<Option<RangeHeader>> for RangeHeader {
+	fn from(option: Option<RangeHeader>) -> Self {
+		match option {
+			None => RangeHeader::None,
+			Some(value) => value,
+		}
+	}
+}
+
+impl FromRequest for RangeHeader {
+    type Error = RangeParseError;
+    type Future = Ready<Result<Self, Self::Error>>;
+    type Config = ();
+
+	fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+		ready(req.headers().get(http::header::RANGE)
+			.map(|header| {
+				let header = header.to_str()
+					.map_err(|_| RangeParseError::NotAscii)?;
+
+				let (unit, range_data) = header
+					.split_once('=')
+					.ok_or(RangeParseError::MissingUnit)?;
+				let unit = String::from(unit);
+		
+				let mut ranges: Vec<HttpRange> = range_data.split(',')
+					.map(|range| {
+						let tuple = range.split_once('-').ok_or(
+							RangeParseError::MissingHyphenMinus(String::from(range))
+						)?;
+						let http_range = match tuple {
+							("", "") => Err(RangeParseError::RangeEmpty),
+							("", since_end) => since_end.parse()
+								.map(HttpRange::FromEndToLast)
+								.map_err(RangeParseError::ValueParseError),
+							(start, "") => start.parse()
+								.map(|start| HttpRange::FromStartToLast(start..))
+								.map_err(RangeParseError::ValueParseError),
+							(start, end) => start.parse()
+								.and_then(|start| end.parse()
+								.map(|end| HttpRange::FromStartToEnd(start..end)))
+								.map_err(RangeParseError::ValueParseError),
+						}?;
+						if let HttpRange::FromStartToEnd(range) = &http_range {
+							if range.end < range.start {
+								Err(RangeParseError::Backwards)
+							} else {
+								Ok(http_range)
+							}
+						} else {
+							Ok(http_range)
+						}
+					})
+					.collect::<Result<_, _>>()?;
+		
+				match ranges.len() {
+					0 => Err(RangeParseError::NoRange),
+					1 => Ok(Self::Single { unit, range: ranges.swap_remove(0) }),
+					len => Ok(Self::Multi { unit, ranges }),
 				}
 			})
-			.collect::<Result<_, _>>()?;
-
-		match ranges.len() {
-			0 => Err(RangeParseError::NoRange),
-			1 => Ok(Self::Single { unit, range: ranges.swap_remove(0) }),
-			len => Ok(Self::Multi { unit, ranges }),
-		}
+			.unwrap_or(Ok(RangeHeader::None))
+		)
 	}
 }

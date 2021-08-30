@@ -39,8 +39,8 @@ pub struct BoardInfoPatch {
 pub struct BoardData {
 	pub colors: BytesMut,
 	pub timestamps: BytesMut,
-	pub mask: Bytes,
-	pub initial: Bytes,
+	pub mask: BytesMut,
+	pub initial: BytesMut,
 }
 
 pub struct Board {
@@ -105,26 +105,24 @@ impl Board {
 			let [[width, height]] = shape;
 			let size = width * height;
 
-			mask = Some({
-				let mut mask = BytesMut::from(&self.data.mask[..]);
-				mask.resize(size, 0);
-				mask.freeze()
-			});
-			initial = Some({
-				let mut initial = BytesMut::from(&self.data.initial[..]);
-				initial.resize(size, 0);
-				initial.freeze()
-			});
+			let mut mask_data = BytesMut::from(&self.data.mask[..]);
+			mask_data.resize(size, 0);
+
+			let mut initial_data = BytesMut::from(&self.data.initial[..]);
+			initial_data.resize(size, 0);
 
 			transaction.execute(
 				"UPDATE `board` SET `shape` = ?2, `mask` = ?3, `initial` = ?4 WHERE `id` = ?1",
 				params![
 					self.id,
 					serde_json::to_string(shape).unwrap(),
-					&mask.as_ref().unwrap()[..],
-					&initial.as_ref().unwrap()[..],
+					&mask_data[..],
+					&initial_data[..],
 				],
 			)?;
+
+			mask = Some(mask_data);
+			initial = Some(initial_data);
 		}
 
 		transaction.commit()?;
@@ -264,8 +262,8 @@ impl FromDatabase for Board {
 				let data = BoardData {
 					colors: color_data,
 					timestamps: timestamp_data,
-					mask: Bytes::from(board.mask),
-					initial: Bytes::from(board.initial),
+					mask: BytesMut::from(&board.mask[..]),
+					initial: BytesMut::from(&board.initial[..]),
 				};
 			
 				Ok(Board { id, info, data })

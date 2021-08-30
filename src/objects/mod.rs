@@ -12,4 +12,4 @@ pub use paginated_list::{Page, PaginationOptions};
 pub use color::{Color, Palette};
 pub use user_count::UserCount;
 pub use reference::Reference;
-pub use ranges::{Ranges, HttpRange};
+pub use ranges::{RangeHeader, HttpRange, TryIndex};

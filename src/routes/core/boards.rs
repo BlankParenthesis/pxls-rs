@@ -1,5 +1,5 @@
 use actix_web::{
-	http::header, 
+	http::header::{self, Header}, 
 	web::{Path, Query, Data, Payload, Json, Bytes}, 
 	get,
 	post, 
@@ -18,7 +18,7 @@ use serde_qs::actix::QsQuery;
 use http::StatusCode;
 
 use crate::BoardData;
-use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board, Ranges, HttpRange};
+use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board, RangeHeader, HttpRange, TryIndex};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
 use crate::database::queries::Pool;
@@ -201,67 +201,11 @@ pub async fn socket(
 pub async fn get_color_data(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
-	request: HttpRequest,
+	range: RangeHeader,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
 	board!(boards[id]).map(|BoardData(board, _)| {
-		if let Some(range) = request.headers().get(http::header::RANGE) {
-			let board = board.read().unwrap();
-			// FIXME: this should be safely handled
-			let range = range.to_str().expect("expected ascii header value");
-			match Ranges::parse(range) {
-				Ok(Ranges::Multi { unit: _, ranges: _ }) => HttpResponse::build(StatusCode::RANGE_NOT_SATISFIABLE)
-					.header("content-range", header::ContentRangeSpec::Bytes {
-						range: None,
-						instance_length: Some(board.data.colors.len() as u64)
-					})
-					.finish(),
-				Ok(Ranges::Single { unit, range }) => {
-					if unit.eq("bytes") {
-						let length = board.data.colors.len();
-						let range = match range {
-							HttpRange::FromEndToLast(from_end) => length - from_end..length,
-							HttpRange::FromStartToLast(range) => range.start..length,
-							HttpRange::FromStartToEnd(range) => range,
-						};
-
-						if range.start > length || range.end > length {
-							HttpResponse::build(StatusCode::RANGE_NOT_SATISFIABLE)
-								.header("content-range", header::ContentRangeSpec::Bytes {
-									range: None,
-									instance_length: Some(board.data.colors.len() as u64)
-								})
-								.finish()
-						} else {
-							HttpResponse::build(StatusCode::PARTIAL_CONTENT)
-								.header("content-range", header::ContentRangeSpec::Bytes {
-									range: Some((range.start as u64, range.end as u64)),
-									instance_length: Some(board.data.colors.len() as u64)
-								})
-								.body(Vec::from(&board.data.colors[range]))
-						}
-					} else {
-						actix_web::error::ErrorBadRequest(format!("unknown unit {}", unit)).into()
-					}
-				},
-				Err(err) => actix_web::error::ErrorBadRequest(err).into(),
-			}
-		} else {
-			let disposition = header::ContentDisposition { 
-				disposition: header::DispositionType::Attachment,
-				parameters: vec![
-					// TODO: maybe use the actual board name
-					header::DispositionParam::Filename(String::from("board.dat")),
-				],
-			};
-
-			HttpResponse::Ok()
-				.content_type("application/octet-stream")
-				// TODO: if possible, work out how to use disposition itself for the name.
-				.header("content-disposition", disposition)
-				.header("accept-ranges", "bytes")
-				.body(board.read().unwrap().data.colors.clone())
-		}
+		range.respond_with(&board.read().unwrap().data.colors)
 	})
 }
 
@@ -269,12 +213,11 @@ pub async fn get_color_data(
 pub async fn get_timestamp_data(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
+	range: RangeHeader,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
 	board!(boards[id]).map(|BoardData(board, _)| {
-		HttpResponse::Ok()
-			.content_type("application/octet-stream")
-			.body(board.read().unwrap().data.timestamps.clone())
+		range.respond_with(&board.read().unwrap().data.timestamps)
 	})
 }
 
@@ -282,12 +225,11 @@ pub async fn get_timestamp_data(
 pub async fn get_mask_data(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
+	range: RangeHeader,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
 	board!(boards[id]).map(|BoardData(board, _)| {
-		HttpResponse::Ok()
-			.content_type("application/octet-stream")
-			.body(board.read().unwrap().data.mask.clone())
+		range.respond_with(&board.read().unwrap().data.mask)
 	})
 }
 
@@ -295,12 +237,11 @@ pub async fn get_mask_data(
 pub async fn get_initial_data(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
+	range: RangeHeader,
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
 	board!(boards[id]).map(|BoardData(board, _)| {
-		HttpResponse::Ok()
-			.content_type("application/octet-stream")
-			.body(board.read().unwrap().data.initial.clone())
+		range.respond_with(&board.read().unwrap().data.initial)
 	})
 }
 
