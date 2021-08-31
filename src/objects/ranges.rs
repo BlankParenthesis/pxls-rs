@@ -1,10 +1,11 @@
 use std::num::ParseIntError;
 use std::ops::{Range, RangeFrom, RangeFull, Index};
 use std::fmt::{self, Display, Formatter};
-use actix_web::{FromRequest, HttpRequest, dev::{Payload, HttpResponseBuilder}, error, web::BytesMut, HttpResponse};
+use actix_web::{FromRequest, HttpRequest, dev::{Payload, HttpResponseBuilder}, error, web::{BytesMut, Bytes}, HttpResponse};
 use actix_web::http::header;
 use futures_util::future::{Ready, ready};
 use http::StatusCode;
+use core::borrow::Borrow;
 
 #[derive(Debug)]
 pub enum RangeParseError {
@@ -35,7 +36,7 @@ impl From<RangeParseError> for error::Error {
 	fn from(error: RangeParseError) -> Self {
 		HttpResponse::build(StatusCode::BAD_REQUEST)
 			.header("accept-ranges", "bytes")
-			.finish()
+			.body(error.to_string())
 			.into()
 	}
 }
@@ -92,21 +93,19 @@ pub enum HttpRange {
 }
 
 impl HttpRange {
-	fn with_length(&self, length: usize) -> Range<usize> {
-		match self {
+	fn with_length(&self, length: usize) -> Result<Range<usize>, RangeIndexError> {
+		let range = match self {
 			Self::FromEndToLast(from_end) => length - from_end..length,
 			Self::FromStartToLast(range) => range.start..length,
 			Self::FromStartToEnd(range) => range.clone(),
+		};
+
+		if range.end <= length {
+			Ok(range)
+		} else {
+			Err(RangeIndexError::TooLarge(length))
 		}
 	}
-}
-
-pub trait TryIndex<Idx>
-where Idx: ?Sized {
-	type Error;
-	type Output: ?Sized;
-
-	fn try_index(&self, index: &Idx) -> Result<&Self::Output, Self::Error>;
 }
 
 pub enum RangeHeader {
@@ -123,64 +122,87 @@ pub enum RangeHeader {
 
 impl RangeHeader {
 	pub fn respond_with(&self, data: &BytesMut) -> HttpResponse {
-		data.try_index(self).map(|bytes| {
-			let mut builder = match self {
-				Self::Multi { unit, ranges } => unimplemented!(),
-				Self::Single { unit, range } => {
-					let range = range.with_length(data.len());
-					
-					let mut builder = HttpResponse::build(StatusCode::PARTIAL_CONTENT);
+		match self {
+			Self::Multi { unit, ranges } => {
+				// TODO: sort, eliminate small gaps
+				let result = ranges.iter()
+					.map(|http_range| http_range.with_length(data.len()))
+					.collect::<Result<Vec<_>, _>>()
+					.map(|ranges| {
+						// TODO: compute capacity
+						let mut joined = Vec::new();
+						
+						let boundary = "--hey, red";
 
-					builder.header("content-range", header::ContentRangeSpec::Bytes {
-						range: Some((range.start as u64, range.end as u64)),
-						instance_length: Some(data.len() as u64)
+						for range in ranges {
+							joined.extend_from_slice(boundary.as_bytes());
+							joined.extend_from_slice(b"\r\n");
+							joined.extend_from_slice(b"content-type: application/octet-stream");
+							joined.extend_from_slice(b"\r\n");
+							joined.extend_from_slice(format!(
+								"content-range: bytes {}-{}/{}",
+								range.start,
+								range.end,
+								data.len()
+							).as_bytes());
+							joined.extend_from_slice(b"\r\n");
+							joined.extend_from_slice(b"\r\n");
+							joined.extend_from_slice(&data[range]);
+						}
+						joined.extend_from_slice(boundary.as_bytes());
+						
+						joined
+					})
+					.map_err(error::Error::from)
+					.and_then(|ranges| {
+						// TODO: might be nicer to check this first
+						if unit.eq("bytes") {
+							Ok(ranges)
+						} else {
+							Err(RangeIndexError::UnknownUnit(data.len()).into())
+						}
 					});
 
-					builder
-				},
-				Self::None => HttpResponse::build(StatusCode::OK),
-			};
+				match result {
+					Ok(data) => {
+				
+						let boundary = "hey, red";
 
-			//let disposition = header::ContentDisposition { 
-			//	disposition: header::DispositionType::Attachment,
-			//	parameters: vec![
-			//		// TODO: maybe use the actual board name
-			//		header::DispositionParam::Filename(String::from("board.dat")),
-			//	],
-			//};
-		
-			builder.content_type("application/octet-stream")
-				.header("accept-ranges", "bytes")
-				//.header("content-disposition", disposition)
-				.body(BytesMut::from(bytes).freeze())
-		}).into()
-	}
-}
-
-impl TryIndex<RangeHeader> for actix_web::web::BytesMut {
-	type Error = RangeIndexError;
-	type Output = [u8];
-
-	fn try_index(&self, index: &RangeHeader) -> Result<&Self::Output, Self::Error> {
-		let length = self[..].len();
-
-		match index {
-			RangeHeader::Single { unit, range } => {
-				match unit.as_str() {
-					"bytes" => {
-						let range = range.with_length(length);
-			
-						if range.end <= length {
-							Ok(&self[range])
-						} else {
-							Err(RangeIndexError::TooLarge(length))
-						}
+						HttpResponse::build(StatusCode::PARTIAL_CONTENT)
+							.content_type(format!("multipart/byteranges; boundary={}", boundary))
+							.body(data)
 					},
-					_ => Err(RangeIndexError::UnknownUnit(length)),
+					Err(error) => error.into(),
 				}
 			},
-			RangeHeader::Multi { unit: _, ranges: _ }  => Err(RangeIndexError::MultiUnsupported(length)),
-			RangeHeader::None => Ok(&self[..]),
+			Self::Single { unit, range } => {
+				let result = range.with_length(data.len())
+					.map_err(error::Error::from)
+					.and_then(|ranges| {
+						if unit.eq("bytes") {
+							Ok(ranges)
+						} else {
+							Err(RangeIndexError::UnknownUnit(data.len()).into())
+						}
+					});
+				
+				match result {
+					Ok(range) => {
+						HttpResponse::build(StatusCode::PARTIAL_CONTENT)
+							.content_type("application/octet-stream")
+							.header("content-range", header::ContentRangeSpec::Bytes {
+								range: Some((range.start as u64, range.end as u64)),
+								instance_length: Some(data.len() as u64)
+							})
+							.body(Vec::from(&data[range]))
+					},
+					Err(error) => error.into(),
+				}
+			},
+			Self::None => HttpResponse::build(StatusCode::OK)
+				.content_type("application/octet-stream")
+				.header("accept-ranges", "bytes")
+				.body(Vec::from(data.as_ref())),
 		}
 	}
 }
@@ -195,9 +217,9 @@ impl From<Option<RangeHeader>> for RangeHeader {
 }
 
 impl FromRequest for RangeHeader {
-    type Error = RangeParseError;
-    type Future = Ready<Result<Self, Self::Error>>;
-    type Config = ();
+	type Error = RangeParseError;
+	type Future = Ready<Result<Self, Self::Error>>;
+	type Config = ();
 
 	fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
 		ready(req.headers().get(http::header::RANGE)
@@ -212,9 +234,9 @@ impl FromRequest for RangeHeader {
 		
 				let mut ranges: Vec<HttpRange> = range_data.split(',')
 					.map(|range| {
-						let tuple = range.split_once('-').ok_or(
+						let tuple = range.split_once('-').ok_or_else(|| {
 							RangeParseError::MissingHyphenMinus(String::from(range))
-						)?;
+						})?;
 						let http_range = match tuple {
 							("", "") => Err(RangeParseError::RangeEmpty),
 							("", since_end) => since_end.parse()
@@ -243,7 +265,7 @@ impl FromRequest for RangeHeader {
 				match ranges.len() {
 					0 => Err(RangeParseError::NoRange),
 					1 => Ok(Self::Single { unit, range: ranges.swap_remove(0) }),
-					len => Ok(Self::Multi { unit, ranges }),
+					_ => Ok(Self::Multi { unit, ranges }),
 				}
 			})
 			.unwrap_or(Ok(RangeHeader::None))

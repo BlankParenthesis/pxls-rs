@@ -1,6 +1,5 @@
 use actix_web::{
-	http::header::{self, Header}, 
-	web::{Path, Query, Data, Payload, Json, Bytes}, 
+	web::{Path, Query, Data, Payload, Json}, 
 	get,
 	post, 
 	patch,
@@ -18,7 +17,15 @@ use serde_qs::actix::QsQuery;
 use http::StatusCode;
 
 use crate::BoardData;
-use crate::objects::{Page, PaginationOptions, Reference, BoardInfoPost, BoardInfoPatch, Board, RangeHeader, HttpRange, TryIndex};
+use crate::objects::{
+	Page, 
+	PaginationOptions, 
+	Reference, 
+	BoardInfoPost, 
+	BoardInfoPatch, 
+	Board, 
+	RangeHeader
+};
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
 use crate::database::queries::Pool;
@@ -205,6 +212,7 @@ pub async fn get_color_data(
 	_access: BoardDataAccess,
 ) -> Option<HttpResponse>  {
 	board!(boards[id]).map(|BoardData(board, _)| {
+		// TODO: content disposition
 		range.respond_with(&board.read().unwrap().data.colors)
 	})
 }

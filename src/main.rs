@@ -44,6 +44,7 @@ async fn main() -> std::io::Result<()> {
 		.app_data(boards.clone())
 		.wrap(actix_cors::Cors::default()
 			.allow_any_origin()
+			.allow_any_header()
 			.allow_any_method())
 		.wrap(NormalizePath::new(TrailingSlash::Trim))
 		.service(routes::core::info::info)
