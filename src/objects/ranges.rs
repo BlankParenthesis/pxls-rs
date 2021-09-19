@@ -132,6 +132,7 @@ impl RangeHeader {
 						// TODO: compute capacity
 						let mut joined = Vec::new();
 						
+						// TODO: select a valid boundary (and also use it later in the multipart content type)
 						let boundary = "--hey, red";
 
 						for range in ranges {
@@ -165,7 +166,6 @@ impl RangeHeader {
 
 				match result {
 					Ok(data) => {
-				
 						let boundary = "hey, red";
 
 						HttpResponse::build(StatusCode::PARTIAL_CONTENT)

@@ -168,6 +168,34 @@ impl Board {
 		let timestamp_slice = &mut self.data.timestamps[index..index + 4];
 		timestamp_slice.as_mut().put_u32_le(delta as u32);
 	}
+
+	pub fn list_placements(
+		&self,
+		board_id: usize,
+		timestamp: u32,
+		id: usize,
+		limit: usize,
+		reverse: bool,
+		connection: &mut Connection
+	) -> Result<Vec<Placement>> {
+		let query = if reverse {
+			include_str!("../database/sql/placement_page_backward.sql")
+		} else {
+			include_str!("../database/sql/placement_page_forward.sql")
+		};
+
+		connection.prepare(query)?
+			.query_map(params![board_id, timestamp, id, limit], |placement| {
+				Ok(Placement {
+					id: placement.get(0)?,
+					position: placement.get(1)?,
+					color: placement.get(2)?,
+					timestamp: placement.get(3)?,
+				})
+			})?
+			.collect()
+
+	}
 }
 
 impl From<&Board> for Uri {
@@ -247,16 +275,17 @@ impl FromDatabase for Board {
 				let placements: Vec<Placement> = connection
 					.prepare(include_str!("../database/sql/current_placements.sql"))?
 					.query_map([id], |placement| Ok(Placement {
-						position: placement.get(0)?,
-						color: placement.get(1)?,
-						modified: placement.get(2)?,
+						id: placement.get(0)?,
+						position: placement.get(1)?,
+						color: placement.get(2)?,
+						timestamp: placement.get(3)?,
 					}))?
 					.collect::<Result<_>>()?;
 				for placement in placements {
 					let index = placement.position;
 					color_data[index] = placement.color;
 					let timestamp_slice = &mut timestamp_data[index * 4..index * 4 + 4];
-					timestamp_slice.as_mut().put_u32_le(placement.modified);
+					timestamp_slice.as_mut().put_u32_le(placement.timestamp);
 				};
 			
 				let data = BoardData {

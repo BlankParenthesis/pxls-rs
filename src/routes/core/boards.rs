@@ -20,6 +20,7 @@ use crate::BoardData;
 use crate::objects::{
 	Page, 
 	PaginationOptions, 
+	PageToken, 
 	Reference, 
 	BoardInfoPost, 
 	BoardInfoPatch, 
@@ -36,6 +37,7 @@ guard!(BoardPostAccess, BoardsPost);
 guard!(BoardPatchAccess, BoardsPatch);
 guard!(BoardDeleteAccess, BoardsDelete);
 guard!(BoardDataAccess, BoardsData);
+guard!(BoardsPixelsListAccess, BoardsPixelsList);
 guard!(BoardUsersAccess, BoardsUsers);
 guard!(SocketAccess, SocketCore);
 
@@ -49,12 +51,12 @@ type BoardDataMap = Data<RwLock<HashMap<usize, BoardData>>>;
 
 #[get("/boards")]
 pub async fn list(
-	Query(options): Query<PaginationOptions>,
+	Query(options): Query<PaginationOptions<usize>>,
 	boards: BoardDataMap,
 	_access: BoardListAccess,
 ) -> HttpResponse {
 	let page = options.page.unwrap_or(0);
-	let limit = options.limit.unwrap_or(2).clamp(0, 10);
+	let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
 	let boards = boards.read().unwrap();
 	let boards = boards.iter()
@@ -92,11 +94,11 @@ pub async fn list(
 pub async fn post(
 	Json(data): Json<BoardInfoPost>,
 	boards: BoardDataMap,
-	pool: Data<Pool>,
+	database_pool: Data<Pool>,
 	_access: BoardPostAccess,
 ) -> Result<HttpResponse, Error> {
 	// FIXME: properly raise the error, don't just expect.
-	let board = Board::create(data, &mut pool.get().expect("pool")).expect("create");
+	let board = Board::create(data, &mut database_pool.get().expect("pool")).expect("create");
 	let id = board.id;
 
 	let mut boards = boards.write().unwrap();
@@ -140,13 +142,13 @@ pub async fn patch(
 	Json(data): Json<BoardInfoPatch>,
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
-	pool: Data<Pool>,
+	database_pool: Data<Pool>,
 	_access: BoardPatchAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).map(|BoardData(board, _)| {
 		board.write().unwrap().update_info(
 			data, 
-			&mut pool.get().expect("pool"),
+			&mut database_pool.get().expect("pool"),
 		).expect("update");
 
 		HttpResponse::Ok().json(&board.read().unwrap().info)
@@ -157,11 +159,12 @@ pub async fn patch(
 pub async fn delete(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
-	pool: Data<Pool>,
+	database_pool: Data<Pool>,
 	_access: BoardDeleteAccess,
 ) -> Option<HttpResponse> {
 	boards.write().unwrap().remove(&id).map(|BoardData(board, _)| {
-		board.into_inner().unwrap().delete(&mut pool.get().expect("pool")).unwrap();
+		board.into_inner().unwrap()
+			.delete(&mut database_pool.get().expect("pool")).unwrap();
 
 		HttpResponse::new(StatusCode::NO_CONTENT)
 	})
@@ -250,6 +253,64 @@ pub async fn get_initial_data(
 ) -> Option<HttpResponse>  {
 	board!(boards[id]).map(|BoardData(board, _)| {
 		range.respond_with(&board.read().unwrap().data.initial)
+	})
+}
+
+#[get("/boards/{id}/pixels")]
+pub async fn get_pixels(
+	Path(id): Path<usize>,
+	Query(options): Query<PaginationOptions<PageToken>>,
+	boards: BoardDataMap,
+	database_pool: Data<Pool>,
+	_access: BoardsPixelsListAccess,
+) -> Option<HttpResponse>  {
+	board!(boards[id]).map(|BoardData(board, _)| {
+		let page = options.page.unwrap_or_else(PageToken::start);
+		let limit = options.limit.unwrap_or(10).clamp(1, 100);
+
+		let board = board.try_read().unwrap();
+		let board_id = board.id;
+		let connection = &mut database_pool.get().expect("pool");
+		let previous_placements = board
+			.list_placements(board_id, page.timestamp, page.id, limit, true, connection)
+			.expect("previous placements");
+		let placements = board
+			// Limit is +1 to get the start of the next page as the last element.
+			// This is required for paging.
+			.list_placements(board_id, page.timestamp, page.id, limit + 1, false, connection)
+			.expect("placements");
+		
+		fn page_uri(
+			board_id:usize,
+			timestamp: u32,
+			placement_id: usize,
+			limit: usize,
+		) -> String {
+			format!(
+				"/boards/{}/pixels?page={}_{}&limit={}",
+				board_id, timestamp, placement_id, limit
+			)
+		}
+
+		HttpResponse::Ok()
+			.json(Page {
+				previous: previous_placements.get(0)
+					.map(|placement| page_uri(
+						board_id,
+						placement.timestamp,
+						placement.id,
+						limit,
+					)),
+				items: &placements[..placements.len().clamp(0, limit)],
+				next: (placements.len() > limit)
+					.then(|| placements.iter().last().unwrap())
+					.map(|placement| page_uri(
+						board_id,
+						placement.timestamp,
+						placement.id,
+						limit,
+					)),
+			})
 	})
 }
 

@@ -1,4 +1,4 @@
-SELECT DISTINCT `position`, `color`, max(`timestamp`)
+SELECT DISTINCT `id`, `position`, `color`, max(`timestamp`)
 FROM `placement`
 WHERE `board` = ?1
 GROUP BY `position`
