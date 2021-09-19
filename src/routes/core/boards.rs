@@ -38,6 +38,7 @@ guard!(BoardPatchAccess, BoardsPatch);
 guard!(BoardDeleteAccess, BoardsDelete);
 guard!(BoardDataAccess, BoardsData);
 guard!(BoardsPixelsListAccess, BoardsPixelsList);
+guard!(BoardsPixelsGetAccess, BoardsPixelsGet);
 guard!(BoardUsersAccess, BoardsUsers);
 guard!(SocketAccess, SocketCore);
 
@@ -256,28 +257,27 @@ pub async fn get_initial_data(
 	})
 }
 
-#[get("/boards/{id}/pixels")]
+#[get("/boards/{board_id}/pixels")]
 pub async fn get_pixels(
-	Path(id): Path<usize>,
+	Path(board_id): Path<usize>,
 	Query(options): Query<PaginationOptions<PageToken>>,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
 	_access: BoardsPixelsListAccess,
 ) -> Option<HttpResponse>  {
-	board!(boards[id]).map(|BoardData(board, _)| {
+	board!(boards[board_id]).map(|BoardData(board, _)| {
 		let page = options.page.unwrap_or_else(PageToken::start);
 		let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
 		let board = board.try_read().unwrap();
-		let board_id = board.id;
 		let connection = &mut database_pool.get().expect("pool");
 		let previous_placements = board
-			.list_placements(board_id, page.timestamp, page.id, limit, true, connection)
+			.list_placements(page.timestamp, page.id, limit, true, connection)
 			.expect("previous placements");
 		let placements = board
 			// Limit is +1 to get the start of the next page as the last element.
 			// This is required for paging.
-			.list_placements(board_id, page.timestamp, page.id, limit + 1, false, connection)
+			.list_placements(page.timestamp, page.id, limit + 1, false, connection)
 			.expect("placements");
 		
 		fn page_uri(
@@ -311,6 +311,27 @@ pub async fn get_pixels(
 						limit,
 					)),
 			})
+	})
+}
+
+#[get("/boards/{id}/pixels/{x}/{y}")]
+pub async fn get_pixel(
+	Path((id, x, y)): Path<(usize, usize, usize)>,
+	boards: BoardDataMap,
+	database_pool: Data<Pool>,
+	_access: BoardsPixelsGetAccess,
+) -> Option<HttpResponse> {
+	board!(boards[id]).and_then(|BoardData(board, _)| {
+		let board = board.try_read().unwrap();
+		let shape = board.info.shape[0];
+		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
+			let connection = &mut database_pool.get().expect("pool");
+
+			board.lookup(x, y, connection).expect("lookup")
+				.map(|placement| HttpResponse::Ok().json(placement))
+		} else {
+			None
+		}
 	})
 }
 

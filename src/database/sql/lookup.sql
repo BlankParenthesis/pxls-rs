@@ -1,5 +1,5 @@
 SELECT `id`, `position`, `color`, `timestamp`
 FROM `placement`
-WHERE `board` = ?1 AND (`timestamp`, `id`) < (?2, ?3)
+WHERE `board` = ?1 AND `position` = ?2
 ORDER BY `timestamp` DESC, `id` DESC
-LIMIT ?4;
+LIMIT 1;

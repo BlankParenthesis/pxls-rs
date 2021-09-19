@@ -171,7 +171,6 @@ impl Board {
 
 	pub fn list_placements(
 		&self,
-		board_id: usize,
 		timestamp: u32,
 		id: usize,
 		limit: usize,
@@ -185,7 +184,7 @@ impl Board {
 		};
 
 		connection.prepare(query)?
-			.query_map(params![board_id, timestamp, id, limit], |placement| {
+			.query_map(params![self.id, timestamp, id, limit], |placement| {
 				Ok(Placement {
 					id: placement.get(0)?,
 					position: placement.get(1)?,
@@ -195,6 +194,28 @@ impl Board {
 			})?
 			.collect()
 
+	}
+
+	pub fn lookup(
+		&self,
+		x: usize,
+		y: usize,
+		connection: &mut Connection
+	) -> Result<Option<Placement>> {
+		// TODO: convert from arbitrary shapes
+		let position = x + y * self.info.shape[0][0];
+
+		Ok(connection.prepare(include_str!("../database/sql/lookup.sql"))?
+			.query_map(params![self.id, position], |placement| {
+				Ok(Placement {
+					id: placement.get(0)?,
+					position: placement.get(1)?,
+					color: placement.get(2)?,
+					timestamp: placement.get(3)?,
+				})
+			})?
+			.collect::<Result<Vec<_>, _>>()?
+			.pop())
 	}
 }
 

@@ -62,6 +62,7 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::patch)
 		.service(routes::core::boards::delete)
 		.service(routes::core::boards::get_pixels)
+		.service(routes::core::boards::get_pixel)
 	).bind("127.0.0.1:8000")?
 		.run()
 		.await
