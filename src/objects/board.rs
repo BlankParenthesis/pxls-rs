@@ -1,11 +1,13 @@
 use serde::{Serialize, Deserialize};
-use actix_web::web::{Bytes, BytesMut, BufMut};
+use actix_web::web::{Bytes, BytesMut, Buf, BufMut};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::{VecDeque, HashMap};
 use std::convert::TryFrom;
 use r2d2_sqlite::rusqlite::Result;
 use rusqlite::params;
 use http::Uri;
+use num_derive::FromPrimitive;    
+use num_traits::FromPrimitive;
 
 use crate::objects::{Color, Placement, Reference, Palette};
 use crate::database::queries::{Connection, FromDatabase};
@@ -47,6 +49,45 @@ pub struct Board {
 	pub id: usize,
 	pub info: BoardInfo,
 	pub data: BoardData,
+}
+
+#[derive(FromPrimitive)]
+pub enum MaskValue {
+	NoPlace = 0,
+	Place = 1,
+	Adjacent = 2,
+}
+
+#[derive(Debug)]
+pub enum PlaceError {
+	UnknownMaskValue,
+	Unplacable,
+	InvalidColor,
+	NoOp,
+}
+
+impl std::error::Error for PlaceError {}
+
+impl std::fmt::Display for PlaceError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			PlaceError::UnknownMaskValue => write!(formatter, "Unknown mask value"),
+			PlaceError::Unplacable => write!(formatter, "Position is unplacable"),
+			PlaceError::InvalidColor => write!(formatter, "No such color on palette"),
+			PlaceError::NoOp => write!(formatter, "Placement would have no effect"),
+		}
+	}
+}
+
+impl From<PlaceError> for actix_web::Error {
+	fn from(place_error: PlaceError) -> Self {
+		match place_error {
+			PlaceError::UnknownMaskValue => actix_web::error::ErrorInternalServerError(place_error),
+			PlaceError::Unplacable => actix_web::error::ErrorForbidden(place_error),
+			PlaceError::InvalidColor => actix_web::error::ErrorUnprocessableEntity(place_error),
+			PlaceError::NoOp => actix_web::error::ErrorConflict(place_error),
+		}
+	}
 }
 
 impl Board {
@@ -98,6 +139,8 @@ impl Board {
 			crate::objects::color::save_palette_transaction(palette, self.id, &transaction)?;
 		}
 
+		let mut colors = None;
+		let mut timestamps = None;
 		let mut mask = None;
 		let mut initial = None;
 
@@ -105,8 +148,14 @@ impl Board {
 			let [[width, height]] = shape;
 			let size = width * height;
 
+			let mut colors_data = BytesMut::from(&self.data.colors[..]);
+			colors_data.resize(size, 0);
+
+			let mut timestamps_data = BytesMut::from(&self.data.timestamps[..]);
+			timestamps_data.resize(size * 4, 0);
+
 			let mut mask_data = BytesMut::from(&self.data.mask[..]);
-			mask_data.resize(size, 0);
+			mask_data.resize(size, 2);
 
 			let mut initial_data = BytesMut::from(&self.data.initial[..]);
 			initial_data.resize(size, 0);
@@ -121,6 +170,8 @@ impl Board {
 				],
 			)?;
 
+			colors = Some(colors_data);
+			timestamps = Some(timestamps_data);
 			mask = Some(mask_data);
 			initial = Some(initial_data);
 		}
@@ -137,6 +188,8 @@ impl Board {
 
 		if let Some(shape) = info.shape {
 			self.info.shape = shape;
+			self.data.colors = colors.unwrap();
+			self.data.timestamps = timestamps.unwrap();
 			self.data.mask = mask.unwrap();
 			self.data.initial = initial.unwrap();
 		}
@@ -156,17 +209,86 @@ impl Board {
 		Ok(())
 	}
 
-	pub fn put_color(&mut self, index: usize, color: u8) {
-		let timestamp = SystemTime::now()
+	pub fn try_place(
+		&mut self,
+		position: usize,
+		color: u8,
+		connection: &mut Connection,
+	) -> std::result::Result<Placement, PlaceError> {
+		match FromPrimitive::from_u8(self.data.mask[position]) {
+			Some(MaskValue::Place) => Ok(()),
+			Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
+			Some(MaskValue::Adjacent) => {
+				[1, -1, self.info.shape[0][0] as isize, -(self.info.shape[0][0] as isize)]
+					.iter()
+					.map(|offset| {
+						let checked = if offset.is_negative() {
+							position.checked_sub(offset.wrapping_abs() as usize)
+						} else {
+							position.checked_add(*offset as usize)
+						};
+
+						checked.and_then(|position| {
+							if position < self.data.colors.len() {
+								Some(position)
+							} else {
+								None
+							}
+						})
+					})
+					.flatten()
+					.find(|position| {
+						let position = position * 4;
+						(&self.data.timestamps[position..position + 4])
+							.get_u32_le() > 0
+					})
+					.map(|_| ())
+					.ok_or(PlaceError::Unplacable)
+			},
+			None => Err(PlaceError::UnknownMaskValue),
+		}?;
+
+		self.info.palette.contains_key(&(color as usize))
+			.then(|| ())
+			.ok_or(PlaceError::InvalidColor)?;
+
+		(self.data.colors[position] != color)
+			.then(|| ())
+			.ok_or(PlaceError::NoOp)?;
+
+		let unix_time = SystemTime::now()
 			.duration_since(UNIX_EPOCH).unwrap()
 			.as_secs();
-		let delta = timestamp.saturating_sub(self.info.created_at);
+		let timestamp = unix_time.saturating_sub(self.info.created_at) as u32;
 
-		let color_slice = &mut self.data.colors[index..index + 1];
-		color_slice.as_mut().put_u8(color);
+		connection.execute(
+			include_str!("../database/sql/insert_placement.sql"),
+			params![self.id, position, color, timestamp]
+		).expect("insert");
+
+		let id = connection.last_insert_rowid() as usize;
+
+		let placement = Placement {
+			id,
+			position, 
+			color, 
+			timestamp,
+		};
+
+		self.do_placement(&placement);
+		Ok(placement)
+	}
+
+	fn do_placement(&mut self, placement: &Placement) {
+		let position = placement.position;
+		let range = position..position + 1;
+		let range_u32 = position * 4..(position + 1) * 4;
+
+		let color_slice = &mut self.data.colors[range];
+		color_slice.as_mut().put_u8(placement.color);
 		
-		let timestamp_slice = &mut self.data.timestamps[index..index + 4];
-		timestamp_slice.as_mut().put_u32_le(delta as u32);
+		let timestamp_slice = &mut self.data.timestamps[range_u32];
+		timestamp_slice.as_mut().put_u32_le(placement.timestamp);
 	}
 
 	pub fn list_placements(

@@ -22,6 +22,7 @@ use crate::objects::{
 	PaginationOptions, 
 	PageToken, 
 	Reference, 
+	PlacementRequest,
 	BoardInfoPost, 
 	BoardInfoPatch, 
 	Board, 
@@ -29,7 +30,7 @@ use crate::objects::{
 };
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
-use crate::database::queries::Pool;
+use crate::database::{queries::Pool, open_database};
 
 guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
@@ -39,6 +40,7 @@ guard!(BoardDeleteAccess, BoardsDelete);
 guard!(BoardDataAccess, BoardsData);
 guard!(BoardsPixelsListAccess, BoardsPixelsList);
 guard!(BoardsPixelsGetAccess, BoardsPixelsGet);
+guard!(BoardsPixelsPostAccess, BoardsPixelsPost);
 guard!(BoardUsersAccess, BoardsUsers);
 guard!(SocketAccess, SocketCore);
 
@@ -99,7 +101,7 @@ pub async fn post(
 	_access: BoardPostAccess,
 ) -> Result<HttpResponse, Error> {
 	// FIXME: properly raise the error, don't just expect.
-	let board = Board::create(data, &mut database_pool.get().expect("pool")).expect("create");
+	let board = Board::create(data, &mut open_database(&database_pool)).expect("create");
 	let id = board.id;
 
 	let mut boards = boards.write().unwrap();
@@ -109,7 +111,7 @@ pub async fn post(
 	let board = board.read().unwrap();
 
 	Ok(HttpResponse::build(StatusCode::CREATED)
-		.header("Location", format!("/boards/{}", board.id))
+		.header("Location", http::Uri::from(&*board).to_string())
 		.json(Reference::from(&*board)))
 }
 
@@ -149,7 +151,7 @@ pub async fn patch(
 	board!(boards[id]).map(|BoardData(board, _)| {
 		board.write().unwrap().update_info(
 			data, 
-			&mut database_pool.get().expect("pool"),
+			&mut open_database(&database_pool),
 		).expect("update");
 
 		HttpResponse::Ok().json(&board.read().unwrap().info)
@@ -165,7 +167,7 @@ pub async fn delete(
 ) -> Option<HttpResponse> {
 	boards.write().unwrap().remove(&id).map(|BoardData(board, _)| {
 		board.into_inner().unwrap()
-			.delete(&mut database_pool.get().expect("pool")).unwrap();
+			.delete(&mut open_database(&database_pool)).unwrap();
 
 		HttpResponse::new(StatusCode::NO_CONTENT)
 	})
@@ -245,6 +247,8 @@ pub async fn get_mask_data(
 	})
 }
 
+// TODO: put mask
+
 #[get("/boards/{id}/data/initial")]
 pub async fn get_initial_data(
 	Path(id): Path<usize>,
@@ -256,6 +260,8 @@ pub async fn get_initial_data(
 		range.respond_with(&board.read().unwrap().data.initial)
 	})
 }
+
+// TODO: put intitial
 
 #[get("/boards/{board_id}/pixels")]
 pub async fn get_pixels(
@@ -270,7 +276,7 @@ pub async fn get_pixels(
 		let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
 		let board = board.try_read().unwrap();
-		let connection = &mut database_pool.get().expect("pool");
+		let connection = &mut open_database(&database_pool);
 		let previous_placements = board
 			.list_placements(page.timestamp, page.id, limit, true, connection)
 			.expect("previous placements");
@@ -325,10 +331,38 @@ pub async fn get_pixel(
 		let board = board.try_read().unwrap();
 		let shape = board.info.shape[0];
 		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
-			let connection = &mut database_pool.get().expect("pool");
+			let connection = &mut open_database(&database_pool);
 
 			board.lookup(x, y, connection).expect("lookup")
 				.map(|placement| HttpResponse::Ok().json(placement))
+		} else {
+			None
+		}
+	})
+}
+
+#[post("/boards/{id}/pixels/{x}/{y}")]
+pub async fn post_pixel(
+	Path((id, x, y)): Path<(usize, usize, usize)>,
+	Json(placement): Json<PlacementRequest>,
+	boards: BoardDataMap,
+	database_pool: Data<Pool>,
+	_access: BoardsPixelsPostAccess,
+) -> Option<HttpResponse> {
+	board!(boards[id]).and_then(|BoardData(board, _)| {
+		let mut board = board.try_write().unwrap();
+		let shape = board.info.shape[0];
+		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
+			let connection = &mut open_database(&database_pool);
+			
+			Some(match board.try_place(x + y * shape[0], placement.color, connection) {
+				Ok(placement) => {
+					HttpResponse::build(StatusCode::CREATED)
+						.json(placement)
+				},
+				Err(e) => actix_web::Error::from(e).into(),
+			})
+			
 		} else {
 			None
 		}

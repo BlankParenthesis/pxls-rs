@@ -12,7 +12,6 @@ pub trait FromDatabase {
 }
 
 pub fn init(connection: Connection) -> Result<()> {
-	connection.execute(include_str!("sql/setup.sql"), [])?;
 	connection.execute(include_str!("sql/create_board_table.sql"), [])?;
 	connection.execute(include_str!("sql/create_color_table.sql"), [])?;
 	connection.execute(include_str!("sql/create_placement_table.sql"), [])?;

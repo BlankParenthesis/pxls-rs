@@ -1,10 +1,10 @@
 #[macro_use] extern crate lazy_static;
 
 #[macro_use] mod access;
+#[macro_use] mod database;
 mod routes;
 mod socket;
 mod objects;
-mod database;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -28,10 +28,10 @@ async fn main() -> std::io::Result<()> {
 	let manager = r2d2_sqlite::SqliteConnectionManager::file("pxls.db");
 	let pool = r2d2::Pool::new(manager).unwrap();
 
-	let connection = pool.get().expect("Could not connected to database");
+	let connection = database::open_database(&pool);
 	database::queries::init(connection).expect("Could not init database");
 
-	let connection = pool.get().expect("Could not connected to database");
+	let connection = database::open_database(&pool);
 	let boards = database::queries::load_boards(&connection)
 		.expect("Failed to load boards")
 		.into_iter()
@@ -63,6 +63,7 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::delete)
 		.service(routes::core::boards::get_pixels)
 		.service(routes::core::boards::get_pixel)
+		.service(routes::core::boards::post_pixel)
 	).bind("127.0.0.1:8000")?
 		.run()
 		.await
