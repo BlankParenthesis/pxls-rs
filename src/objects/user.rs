@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use futures_util::future::{Ready, ready};
 use actix_web::{FromRequest, HttpRequest, dev::Payload};
 use actix_web_httpauth::extractors::{AuthenticationError, bearer::BearerAuth};
 use actix_web_httpauth::headers::www_authenticate::bearer::Bearer;
@@ -9,6 +8,7 @@ use serde::Deserialize;
 use http::StatusCode;
 
 use crate::access::permissions::Permission;
+use crate::database::queries::Connection;
 
 pub struct User {
 	pub id: Option<String>,

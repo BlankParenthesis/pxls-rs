@@ -212,6 +212,25 @@ impl Board {
 		Ok(())
 	}
 
+	pub fn last_place_time(&self, user: &User, connection: &mut Connection) -> Result<u32> {
+		let pixel = connection.prepare(include_str!("../database/sql/user_last_pixel.sql"))?
+			.query_map(params![self.id, user.id], |placement| {
+				Ok(Placement {
+					id: placement.get(0)?,
+					position: placement.get(1)?,
+					color: placement.get(2)?,
+					timestamp: placement.get(3)?,
+				})
+			})?
+			.collect::<Result<Vec<_>, _>>()?
+			.pop();
+		Ok(pixel.map(|pixel| pixel.timestamp).unwrap_or(0))
+	}
+
+	pub fn cooldown(&self) -> u32 {
+		30
+	}
+
 	pub fn try_place(
 		&mut self,
 		user: &User,
@@ -267,9 +286,9 @@ impl Board {
 			.as_secs();
 		let timestamp = unix_time.saturating_sub(self.info.created_at) as u32;
 
-		//((unix_time - user.last_place_time) > cooldown)
-		//	.then(|| ())
-		//	.ok_or(PlaceError::Cooldown)?;
+		((timestamp - self.last_place_time(user, connection).unwrap()) > self.cooldown())
+			.then(|| ())
+			.ok_or(PlaceError::Cooldown)?;
 
 		connection.execute(
 			include_str!("../database/sql/insert_placement.sql"),
