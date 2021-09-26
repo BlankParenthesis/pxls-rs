@@ -26,7 +26,8 @@ use crate::objects::{
 	BoardInfoPost, 
 	BoardInfoPatch, 
 	Board, 
-	RangeHeader
+	RangeHeader,
+	User,
 };
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
@@ -84,7 +85,7 @@ pub async fn list(
 			),
 			items: chunks
 				.next()
-				.unwrap_or(&[]),
+				.unwrap_or_default(),
 			next: page.checked_add(1).and_then(
 				|page| chunks
 					.next()
@@ -272,7 +273,7 @@ pub async fn get_pixels(
 	_access: BoardsPixelsListAccess,
 ) -> Option<HttpResponse>  {
 	board!(boards[board_id]).map(|BoardData(board, _)| {
-		let page = options.page.unwrap_or_else(PageToken::start);
+		let page = options.page.unwrap_or_default();
 		let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
 		let board = board.try_read().unwrap();
@@ -347,6 +348,7 @@ pub async fn post_pixel(
 	Json(placement): Json<PlacementRequest>,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
+	user: User,
 	_access: BoardsPixelsPostAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).and_then(|BoardData(board, _)| {
@@ -355,7 +357,7 @@ pub async fn post_pixel(
 		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
 			let connection = &mut open_database(&database_pool);
 			
-			Some(match board.try_place(x + y * shape[0], placement.color, connection) {
+			Some(match board.try_place(&user, x + y * shape[0], placement.color, connection) {
 				Ok(placement) => {
 					HttpResponse::build(StatusCode::CREATED)
 						.json(placement)

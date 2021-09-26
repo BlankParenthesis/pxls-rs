@@ -9,7 +9,7 @@ use http::Uri;
 use num_derive::FromPrimitive;    
 use num_traits::FromPrimitive;
 
-use crate::objects::{Color, Placement, Reference, Palette};
+use crate::objects::{Color, Placement, Reference, Palette, User};
 use crate::database::queries::{Connection, FromDatabase};
 
 // TODO: support other shapes
@@ -64,6 +64,7 @@ pub enum PlaceError {
 	Unplacable,
 	InvalidColor,
 	NoOp,
+	Cooldown,
 }
 
 impl std::error::Error for PlaceError {}
@@ -75,6 +76,7 @@ impl std::fmt::Display for PlaceError {
 			PlaceError::Unplacable => write!(formatter, "Position is unplacable"),
 			PlaceError::InvalidColor => write!(formatter, "No such color on palette"),
 			PlaceError::NoOp => write!(formatter, "Placement would have no effect"),
+			PlaceError::Cooldown => write!(formatter, "No placements available"),
 		}
 	}
 }
@@ -86,6 +88,7 @@ impl From<PlaceError> for actix_web::Error {
 			PlaceError::Unplacable => actix_web::error::ErrorForbidden(place_error),
 			PlaceError::InvalidColor => actix_web::error::ErrorUnprocessableEntity(place_error),
 			PlaceError::NoOp => actix_web::error::ErrorConflict(place_error),
+			PlaceError::Cooldown => actix_web::error::ErrorTooManyRequests(place_error),
 		}
 	}
 }
@@ -211,10 +214,13 @@ impl Board {
 
 	pub fn try_place(
 		&mut self,
+		user: &User,
 		position: usize,
 		color: u8,
 		connection: &mut Connection,
 	) -> std::result::Result<Placement, PlaceError> {
+		// TODO: I hate everything about how this is written. Redo it and/oir move stuff.
+
 		match FromPrimitive::from_u8(self.data.mask[position]) {
 			Some(MaskValue::Place) => Ok(()),
 			Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
@@ -261,9 +267,13 @@ impl Board {
 			.as_secs();
 		let timestamp = unix_time.saturating_sub(self.info.created_at) as u32;
 
+		//((unix_time - user.last_place_time) > cooldown)
+		//	.then(|| ())
+		//	.ok_or(PlaceError::Cooldown)?;
+
 		connection.execute(
 			include_str!("../database/sql/insert_placement.sql"),
-			params![self.id, position, color, timestamp]
+			params![self.id, position, color, timestamp, user.id]
 		).expect("insert");
 
 		let id = connection.last_insert_rowid() as usize;

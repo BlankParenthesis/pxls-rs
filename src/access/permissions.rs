@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-use lazy_static;
 use serde::{Serialize, Serializer};
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -38,25 +36,6 @@ impl Serialize for Permission {
 	}
 }
 
-lazy_static! {
-	pub static ref DEFAULT_PERMISSIONS: HashSet<Permission> = {
-		let mut set = HashSet::new();
-		set.insert(Permission::Info);
-		set.insert(Permission::BoardsList);
-		set.insert(Permission::BoardsGet);
-		set.insert(Permission::BoardsPost);
-		set.insert(Permission::BoardsPatch);
-		set.insert(Permission::BoardsDelete);
-		set.insert(Permission::BoardsData);
-		set.insert(Permission::BoardsUsers);
-		set.insert(Permission::BoardsPixelsList);
-		set.insert(Permission::BoardsPixelsGet);
-		set.insert(Permission::BoardsPixelsPost);
-		set.insert(Permission::SocketCore);
-		set
-	};
-}
-
 // creates a named guard which succeeds if the client has all specified permissions
 macro_rules! guard {
 	( $guard_name:ident, $( $permission:ident ),* ) => {
@@ -65,19 +44,26 @@ macro_rules! guard {
 		impl actix_web::FromRequest for $guard_name {
 			type Config = ();
 			type Error = actix_web::error::Error;
-			type Future = futures_util::future::Ready<Result<Self, Self::Error>>;
+			type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self, Self::Error>>>>;
 
-			fn from_request(_request: &actix_web::HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
+			fn from_request(
+				request: &actix_web::HttpRequest,
+				payload: &mut actix_web::dev::Payload,
+			) -> Self::Future {
 				let mut required_permissions = std::collections::HashSet::new();
 				$(
 					required_permissions.insert(crate::access::permissions::Permission::$permission);
 				)*
 
-				if crate::access::permissions::DEFAULT_PERMISSIONS.is_superset(&required_permissions) {
-					futures_util::future::ok($guard_name {})
-				} else {
-					futures_util::future::err(actix_web::error::ErrorForbidden("Missing Permissions"))
-				}
+				let user = crate::objects::User::from_request(request, payload);
+
+				Box::pin(async move {
+					if user.await.unwrap_or_default().permissions.is_superset(&required_permissions) {
+						Ok($guard_name {})
+					} else {
+						Err(actix_web::error::ErrorForbidden("Missing Permissions"))
+					}
+				})
 			}
 		}
 	}
