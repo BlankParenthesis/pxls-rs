@@ -1,22 +1,28 @@
 use actix_web::{get, HttpResponse};
 use serde::Serialize;
+use url::Url;
 
 #[derive(Serialize)]
 pub struct AuthInfo {
-	auth_uri: &'static str,
-	token_uri: &'static str,
-	client_id: Option<&'static str>,
+	issuer: Url,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	client_id: Option<String>,
 }
 
-const AUTH_INFO: AuthInfo = AuthInfo {
-	auth_uri: "http://localhost:8180/auth/realms/pxls/protocol/openid-connect/auth",
-	token_uri: "http://localhost:8180/auth/realms/pxls/protocol/openid-connect/token",
-	client_id: Some("pxls"),
-};
+lazy_static! {
+	static ref AUTH_INFO: AuthInfo = {
+		let config = crate::config::CONFIG.try_read().unwrap();
+
+		AuthInfo {
+			issuer: config.oidc_issuer.clone(),
+			client_id: config.oidc_client_id.clone(),
+		}
+	};
+}
 
 guard!(InfoAccess, Info);
 
 #[get("/auth")]
 pub async fn auth() -> HttpResponse {
-	HttpResponse::Ok().json(AUTH_INFO)
+	HttpResponse::Ok().json(&*AUTH_INFO)
 }

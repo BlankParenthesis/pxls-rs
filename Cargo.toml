@@ -23,3 +23,5 @@ http = "0.2.4"
 http-serde = "1.0.3"
 num-traits = "0.2"
 num-derive = "0.3"
+envy = "0.4"
+url = { version = "2.0", features = ["serde"] }

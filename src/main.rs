@@ -5,6 +5,7 @@
 mod routes;
 mod socket;
 mod objects;
+mod config;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -25,7 +26,11 @@ impl BoardData {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-	let manager = r2d2_sqlite::SqliteConnectionManager::file("pxls.db");
+	let config = crate::config::CONFIG.try_read().unwrap();
+
+	// TODO: switch to postgresql
+	// maybe use diesel?
+	let manager = r2d2_sqlite::SqliteConnectionManager::file(&config.db_host);
 	let pool = r2d2::Pool::new(manager).unwrap();
 
 	let connection = database::open_database(&pool);
@@ -65,7 +70,7 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::get_pixel)
 		.service(routes::core::boards::post_pixel)
 		.service(routes::auth::auth::auth)
-	).bind("127.0.0.1:8000")?
+	).bind(format!("{}:{}", config.host, config.port))?
 		.run()
 		.await
 }
