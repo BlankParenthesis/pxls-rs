@@ -56,6 +56,7 @@ async fn main() -> std::io::Result<()> {
 			.allow_any_header()
 			.allow_any_method())
 		.wrap(NormalizePath::new(TrailingSlash::Trim))
+		.wrap(Compress::default())
 		.service(routes::core::info::info)
 		.service(routes::core::access::access)
 		.service(routes::core::boards::list)
