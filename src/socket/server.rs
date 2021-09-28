@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::socket::event::Event;
 use crate::objects::UserCount;
+use crate::database::model;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {
@@ -25,6 +26,12 @@ pub struct Disconnect {
 	pub handler: Recipient<Event>,
 }
 
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Place {
+	pub placement: model::Placement,
+}
+
 impl Handler<Connect> for BoardServer {
 	type Result = ();
 
@@ -33,9 +40,6 @@ impl Handler<Connect> for BoardServer {
 		msg: Connect,
 		_: &mut Self::Context,
 	) -> Self::Result {
-		msg.handler.do_send(Event::PermissionsChanged {
-			permissions: vec![],
-		}).unwrap();
 		self.connections.insert(msg.handler);
 	}
 }
@@ -49,6 +53,23 @@ impl Handler<Disconnect> for BoardServer {
 		_: &mut Self::Context,
 	) -> Self::Result {
 		self.connections.remove(&msg.handler);
+	}
+}
+
+impl Handler<Place> for BoardServer {
+	type Result = ();
+
+	fn handle(
+		&mut self, 
+		msg: Place,
+		_: &mut Self::Context,
+	) -> Self::Result {
+		for connection in self.connections.iter() {
+			connection.do_send(Event::BoardUpdate {
+				// TODO: remove this clone — this doesn't need to be duplicated for every connection.
+				pixels: vec![msg.placement.clone()],
+			}).unwrap();
+		}
 	}
 }
 

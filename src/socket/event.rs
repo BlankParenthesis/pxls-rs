@@ -10,6 +10,7 @@ pub enum Event {
 	BoardUpdate {
 		pixels: Vec<Placement>,
 	},
+	// TODO: send these
 	PixelsAvailable {
 		count: u32,
 		next: Option<u64>,

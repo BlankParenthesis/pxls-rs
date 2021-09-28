@@ -35,7 +35,7 @@ pub struct Color {
 	pub value: i32,
 }
 
-#[derive(Queryable, Identifiable, Associations, Serialize, Debug)]
+#[derive(Queryable, Identifiable, Associations, Serialize, Debug, Clone)]
 #[table_name="placement"]
 #[belongs_to(Board, foreign_key = "board")]
 pub struct Placement {

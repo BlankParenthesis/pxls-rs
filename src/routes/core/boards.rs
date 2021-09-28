@@ -29,7 +29,7 @@ use crate::objects::{
 	User,
 };
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
-use crate::socket::server::RequestUserCount;
+use crate::socket::server::{RequestUserCount, Place};
 use crate::database::Pool;
 use crate::BoardDataMap;
 
@@ -350,7 +350,7 @@ pub async fn post_pixel(
 	user: User,
 	_access: BoardsPixelsPostAccess,
 ) -> Option<HttpResponse> {
-	board!(boards[id]).and_then(|BoardData(board, _)| {
+	board!(boards[id]).and_then(|BoardData(board, server)| {
 		let mut board = board.try_write().unwrap();
 		let shape = board.info.shape[0];
 		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
@@ -358,6 +358,7 @@ pub async fn post_pixel(
 			
 			Some(match board.try_place(&user, (x + y * shape[0]) as u64, placement.color, connection) {
 				Ok(placement) => {
+					server.do_send(Place { placement: placement.clone() });
 					HttpResponse::build(StatusCode::CREATED)
 						.json(placement)
 				},
