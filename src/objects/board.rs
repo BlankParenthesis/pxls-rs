@@ -12,7 +12,7 @@ use crate::objects::{Color, Reference, Palette, User};
 use crate::database::{Connection, model, schema};
 
 // TODO: support other shapes
-type Shape = [[usize; 2]; 1];
+pub type Shape = [[usize; 2]; 1];
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {

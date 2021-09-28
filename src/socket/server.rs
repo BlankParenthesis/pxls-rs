@@ -1,7 +1,7 @@
 use actix::{Context, Actor, Message, Recipient, Handler};
 use std::collections::HashSet;
 
-use crate::socket::event::Event;
+use crate::socket::event::{Event, BoardData, Change};
 use crate::objects::UserCount;
 use crate::database::model;
 
@@ -64,11 +64,25 @@ impl Handler<Place> for BoardServer {
 		msg: Place,
 		_: &mut Self::Context,
 	) -> Self::Result {
+		let update = Event::BoardUpdate {
+			info: None,
+			data: Some(BoardData {
+				colors: Some(vec![Change {
+					position: msg.placement.position as u64,
+					values: vec![msg.placement.color as u8],
+				}]),
+				timestamps: Some(vec![Change {
+					position: msg.placement.position as u64,
+					values: vec![msg.placement.timestamp as u32],
+				}]),
+				initial: None,
+				mask: None,
+			})
+		};
+		
 		for connection in self.connections.iter() {
-			connection.do_send(Event::BoardUpdate {
-				// TODO: remove this clone — this doesn't need to be duplicated for every connection.
-				pixels: vec![msg.placement.clone()],
-			}).unwrap();
+			// TODO: remove this clone — this doesn't need to be duplicated for every connection.
+			connection.do_send(update.clone()).unwrap();
 		}
 	}
 }

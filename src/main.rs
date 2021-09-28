@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use actix::prelude::*;
 use actix_web::{App, HttpServer, web::Data};
-use actix_web::middleware::{NormalizePath, normalize::TrailingSlash};
+use actix_web::middleware::{NormalizePath, normalize::TrailingSlash, Compress};
 
 use crate::objects::Board;
 use crate::socket::server::BoardServer;

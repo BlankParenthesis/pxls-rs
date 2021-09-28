@@ -1,6 +1,6 @@
 use serde::{Serialize, Serializer};
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Permission {
 	Info,
 	BoardsList,
