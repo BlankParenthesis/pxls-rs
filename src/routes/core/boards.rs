@@ -320,30 +320,25 @@ pub async fn get_pixels(
 	})
 }
 
-#[get("/boards/{id}/pixels/{x}/{y}")]
+#[get("/boards/{id}/pixels/{position}")]
 pub async fn get_pixel(
-	Path((id, x, y)): Path<(usize, usize, usize)>,
+	Path((id, position)): Path<(usize, u64)>,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
 	_access: BoardsPixelsGetAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).and_then(|BoardData(board, _)| {
 		let board = board.try_read().unwrap();
-		let shape = board.info.shape[0];
-		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
-			let connection = &mut database_pool.get().unwrap();
+		let connection = &mut database_pool.get().unwrap();
 
-			board.lookup(x, y, connection).expect("lookup")
-				.map(|placement| HttpResponse::Ok().json(placement))
-		} else {
-			None
-		}
+		board.lookup(position, connection).expect("lookup")
+			.map(|placement| HttpResponse::Ok().json(placement))
 	})
 }
 
-#[post("/boards/{id}/pixels/{x}/{y}")]
+#[post("/boards/{id}/pixels/{position}")]
 pub async fn post_pixel(
-	Path((id, x, y)): Path<(usize, usize, usize)>,
+	Path((id, position)): Path<(usize, u64)>,
 	Json(placement): Json<PlacementRequest>,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
@@ -352,22 +347,16 @@ pub async fn post_pixel(
 ) -> Option<HttpResponse> {
 	board!(boards[id]).and_then(|BoardData(board, server)| {
 		let mut board = board.try_write().unwrap();
-		let shape = board.info.shape[0];
-		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
-			let connection = &mut database_pool.get().unwrap();
-			
-			Some(match board.try_place(&user, (x + y * shape[0]) as u64, placement.color, connection) {
-				Ok(placement) => {
-					server.do_send(Place { placement: placement.clone() });
-					HttpResponse::build(StatusCode::CREATED)
-						.json(placement)
-				},
-				Err(e) => actix_web::Error::from(e).into(),
-			})
-			
-		} else {
-			None
-		}
+		let connection = &mut database_pool.get().unwrap();
+		
+		Some(match board.try_place(&user, position, placement.color, connection) {
+			Ok(placement) => {
+				server.do_send(Place { placement: placement.clone() });
+				HttpResponse::build(StatusCode::CREATED)
+					.json(placement)
+			},
+			Err(e) => actix_web::Error::from(e).into(),
+		})
 	})
 }
 

@@ -64,6 +64,7 @@ pub enum PlaceError {
 	InvalidColor,
 	NoOp,
 	Cooldown,
+	OutOfBounds,
 }
 
 impl std::error::Error for PlaceError {}
@@ -76,6 +77,7 @@ impl std::fmt::Display for PlaceError {
 			PlaceError::InvalidColor => write!(formatter, "No such color on palette"),
 			PlaceError::NoOp => write!(formatter, "Placement would have no effect"),
 			PlaceError::Cooldown => write!(formatter, "No placements available"),
+			PlaceError::OutOfBounds => write!(formatter, "Position is out of bounds"),
 		}
 	}
 }
@@ -88,6 +90,7 @@ impl From<PlaceError> for actix_web::Error {
 			PlaceError::InvalidColor => actix_web::error::ErrorUnprocessableEntity(place_error),
 			PlaceError::NoOp => actix_web::error::ErrorConflict(place_error),
 			PlaceError::Cooldown => actix_web::error::ErrorTooManyRequests(place_error),
+			PlaceError::OutOfBounds => actix_web::error::ErrorNotFound(place_error),
 		}
 	}
 }
@@ -243,6 +246,11 @@ impl Board {
 	) -> Result<model::Placement, PlaceError> {
 		// TODO: I hate everything about how this is written. Redo it and/oir move stuff.
 
+		let shape = self.info.shape[0];
+		(0..shape[0] as u64 * shape[1] as u64).contains(&position)
+			.then(|| ())
+			.ok_or(PlaceError::OutOfBounds)?;
+
 		match FromPrimitive::from_u8(self.data.mask[position as usize]) {
 			Some(MaskValue::Place) => Ok(()),
 			Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
@@ -363,13 +371,9 @@ impl Board {
 
 	pub fn lookup(
 		&self,
-		x: usize,
-		y: usize,
+		position: u64,
 		connection: &Connection
 	) -> QueryResult<Option<model::Placement>> {
-		// TODO: convert from arbitrary shapes
-		let position = x + y * self.info.shape[0][0];
-
 		Ok(schema::placement::table
 			.filter(
 				schema::placement::board.eq(self.id as i32)
