@@ -1,8 +1,10 @@
-pub mod queries;
+use diesel::r2d2::ConnectionManager as Manager;
 
-pub fn open_database(pool: &queries::Pool) -> queries::Connection {
-	let connection = pool.get().expect("pool");
-	connection.execute(include_str!("sql/setup.sql"), [])
-		.expect("setup failed");
-	connection
-}
+use diesel::PgConnection;
+
+pub type Connection = r2d2::PooledConnection<Manager<PgConnection>>;
+pub type Pool = r2d2::Pool<Manager<PgConnection>>;
+
+pub mod schema;
+pub mod model;
+pub mod queries;

@@ -8,7 +8,7 @@ pub mod ranges;
 pub mod user;
 
 pub use board::{Board, BoardData, BoardInfo, BoardInfoPost, BoardInfoPatch};
-pub use placement::{Placement, PlacementRequest};
+pub use placement::{PlacementRequest};
 pub use paginated_list::{Page, PaginationOptions, PageToken};
 pub use color::{Color, Palette};
 pub use user_count::UserCount;

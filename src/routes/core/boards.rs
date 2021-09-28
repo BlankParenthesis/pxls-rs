@@ -10,9 +10,8 @@ use actix_web::{
 	error::ErrorUnprocessableEntity
 };
 use actix_web_actors::ws;
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::sync::RwLock;
 use serde_qs::actix::QsQuery;
 use http::StatusCode;
 
@@ -31,7 +30,8 @@ use crate::objects::{
 };
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::RequestUserCount;
-use crate::database::{queries::Pool, open_database};
+use crate::database::Pool;
+use crate::BoardDataMap;
 
 guard!(BoardListAccess, BoardsList);
 guard!(BoardGetAccess, BoardsGet);
@@ -50,8 +50,6 @@ macro_rules! board {
 		$boards.read().unwrap().get(&$id)
 	}
 }
-
-type BoardDataMap = Data<RwLock<HashMap<usize, BoardData>>>;
 
 #[get("/boards")]
 pub async fn list(
@@ -102,8 +100,9 @@ pub async fn post(
 	_access: BoardPostAccess,
 ) -> Result<HttpResponse, Error> {
 	// FIXME: properly raise the error, don't just expect.
-	let board = Board::create(data, &mut open_database(&database_pool)).expect("create");
-	let id = board.id;
+	let board = Board::create(data, &database_pool.get().unwrap())
+		.expect("create");
+	let id = board.id as usize;
 
 	let mut boards = boards.write().unwrap();
 	boards.insert(id, BoardData::new(board));
@@ -152,7 +151,7 @@ pub async fn patch(
 	board!(boards[id]).map(|BoardData(board, _)| {
 		board.write().unwrap().update_info(
 			data, 
-			&mut open_database(&database_pool),
+			&database_pool.get().unwrap(),
 		).expect("update");
 
 		HttpResponse::Ok().json(&board.read().unwrap().info)
@@ -168,7 +167,7 @@ pub async fn delete(
 ) -> Option<HttpResponse> {
 	boards.write().unwrap().remove(&id).map(|BoardData(board, _)| {
 		board.into_inner().unwrap()
-			.delete(&mut open_database(&database_pool)).unwrap();
+			.delete(&database_pool.get().unwrap()).unwrap();
 
 		HttpResponse::new(StatusCode::NO_CONTENT)
 	})
@@ -277,7 +276,7 @@ pub async fn get_pixels(
 		let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
 		let board = board.try_read().unwrap();
-		let connection = &mut open_database(&database_pool);
+		let connection = &mut database_pool.get().unwrap();
 		let previous_placements = board
 			.list_placements(page.timestamp, page.id, limit, true, connection)
 			.expect("previous placements");
@@ -290,7 +289,7 @@ pub async fn get_pixels(
 		fn page_uri(
 			board_id:usize,
 			timestamp: u32,
-			placement_id: usize,
+			placement_id: i64,
 			limit: usize,
 		) -> String {
 			format!(
@@ -304,7 +303,7 @@ pub async fn get_pixels(
 				previous: previous_placements.get(0)
 					.map(|placement| page_uri(
 						board_id,
-						placement.timestamp,
+						placement.timestamp as u32,
 						placement.id,
 						limit,
 					)),
@@ -313,7 +312,7 @@ pub async fn get_pixels(
 					.then(|| placements.iter().last().unwrap())
 					.map(|placement| page_uri(
 						board_id,
-						placement.timestamp,
+						placement.timestamp as u32,
 						placement.id,
 						limit,
 					)),
@@ -332,7 +331,7 @@ pub async fn get_pixel(
 		let board = board.try_read().unwrap();
 		let shape = board.info.shape[0];
 		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
-			let connection = &mut open_database(&database_pool);
+			let connection = &mut database_pool.get().unwrap();
 
 			board.lookup(x, y, connection).expect("lookup")
 				.map(|placement| HttpResponse::Ok().json(placement))
@@ -355,9 +354,9 @@ pub async fn post_pixel(
 		let mut board = board.try_write().unwrap();
 		let shape = board.info.shape[0];
 		if (0..shape[0]).contains(&x) && (0..shape[1]).contains(&y) {
-			let connection = &mut open_database(&database_pool);
+			let connection = &mut database_pool.get().unwrap();
 			
-			Some(match board.try_place(&user, x + y * shape[0], placement.color, connection) {
+			Some(match board.try_place(&user, (x + y * shape[0]) as u64, placement.color, connection) {
 				Ok(placement) => {
 					HttpResponse::build(StatusCode::CREATED)
 						.json(placement)

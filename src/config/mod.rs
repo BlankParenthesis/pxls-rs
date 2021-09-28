@@ -6,8 +6,7 @@ use std::sync::RwLock;
 pub struct Config {
 	pub host: String,
 	pub port: u16,
-	pub db_host: String,
-	pub db_port: u16,
+	pub database_url: Url,
 	pub oidc_issuer: Url,
 	pub oidc_client_id: Option<String>,
 }

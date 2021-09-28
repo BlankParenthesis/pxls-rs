@@ -1,11 +1,10 @@
 use std::num::ParseIntError;
-use std::ops::{Range, RangeFrom, RangeFull, Index};
+use std::ops::{Range, RangeFrom};
 use std::fmt::{self, Display, Formatter};
-use actix_web::{FromRequest, HttpRequest, dev::{Payload, HttpResponseBuilder}, error, web::{BytesMut, Bytes}, HttpResponse};
+use actix_web::{FromRequest, HttpRequest, dev::Payload, error, web::BytesMut, HttpResponse};
 use actix_web::http::header;
 use futures_util::future::{Ready, ready};
 use http::StatusCode;
-use core::borrow::Borrow;
 
 #[derive(Debug)]
 pub enum RangeParseError {
@@ -23,8 +22,8 @@ impl Display for RangeParseError {
 		write!(f, "invalid range format: {}", match self {
 			Self::NotAscii => "header contained non-ascii characters",
 			Self::MissingUnit => "missing unit",
-			Self::MissingHyphenMinus(range) => "missing hyphen-minus",
-			Self::ValueParseError(err) => "value parse error",
+			Self::MissingHyphenMinus(_range) => "missing hyphen-minus",
+			Self::ValueParseError(_err) => "value parse error",
 			Self::RangeEmpty => "empty range",
 			Self::NoRange => "no ranges",
 			Self::Backwards => "range ended before beginning",

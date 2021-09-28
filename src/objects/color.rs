@@ -1,8 +1,11 @@
 use serde::{Serialize, Deserialize};
-use rusqlite::{Result, Connection, params, Transaction};
 use std::collections::HashMap;
+use diesel::prelude::*;
+use diesel::Connection as DConnection;
 
-pub type Palette = HashMap<usize, Color>;
+use crate::database::{Connection, model, schema};
+
+pub type Palette = HashMap<u32, Color>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Color {
@@ -10,31 +13,35 @@ pub struct Color {
 	pub value: u32,
 }
 
-pub fn save_palette(
-	palette: &Palette, 
-	board_id: usize,
-	connection: &mut Connection,
-) -> Result<()> {
-	let transaction = connection.transaction()?;
-	
-	save_palette_transaction(palette, board_id, &transaction)?;
-
-	transaction.commit()?;
-
-	Ok(())
+impl From<model::Color> for Color {
+	fn from(color: model::Color) -> Self {
+		Color { 
+			name: color.name,
+			value: color.value as u32,
+		}
+	}
 }
 
-pub fn save_palette_transaction(
+pub fn replace_palette(
 	palette: &Palette, 
-	board_id: usize,
-	transaction: &Transaction,
-) -> Result<()> {
-	for (index, Color{ name, value }) in palette {
-		transaction.execute(
-			"INSERT INTO `color` VALUES(?1, ?2, ?3, ?4)",
-			params![board_id, index, name, value],
-		)?;
-	}
+	board_id: i32,
+	connection: &Connection,
+) -> QueryResult<()> {
+	connection.transaction(|| {
+		diesel::delete(schema::color::table)
+			.filter(schema::color::board.eq(board_id))
+			.execute(connection)?;
 
-	Ok(())
+		for (index, Color{ name, value }) in palette {
+			diesel::insert_into(schema::color::table)
+				.values(model::Color {
+					board: board_id,
+					index: *index as i32,
+					name: name.clone(),
+					value: *value as i32,
+				})
+				.execute(connection)?;
+		}
+		Ok(())
+	})
 }

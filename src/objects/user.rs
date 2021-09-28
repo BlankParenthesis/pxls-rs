@@ -8,7 +8,6 @@ use serde::Deserialize;
 use http::StatusCode;
 
 use crate::access::permissions::Permission;
-use crate::database::queries::Connection;
 
 pub struct User {
 	pub id: Option<String>,

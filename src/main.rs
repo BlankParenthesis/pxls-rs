@@ -1,4 +1,6 @@
 #[macro_use] extern crate lazy_static;
+#[macro_use] extern crate diesel;
+#[macro_use] extern crate diesel_migrations;
 
 #[macro_use] mod access;
 #[macro_use] mod database;
@@ -17,6 +19,7 @@ use crate::objects::Board;
 use crate::socket::server::BoardServer;
 
 pub struct BoardData(RwLock<Board>, Arc<Addr<BoardServer>>);
+pub type BoardDataMap = Data<RwLock<HashMap<usize, BoardData>>>;
 
 impl BoardData {
 	fn new(board: Board) -> Self {
@@ -24,25 +27,26 @@ impl BoardData {
 	}
 }
 
+embed_migrations!();
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
 	let config = crate::config::CONFIG.try_read().unwrap();
 
-	// TODO: switch to postgresql
-	// maybe use diesel?
-	let manager = r2d2_sqlite::SqliteConnectionManager::file(&config.db_host);
+	let manager = diesel::r2d2::ConnectionManager::new(config.database_url.to_string());
 	let pool = r2d2::Pool::new(manager).unwrap();
+	let connection = pool.get().unwrap();
 
-	let connection = database::open_database(&pool);
-	database::queries::init(connection).expect("Could not init database");
+    embedded_migrations::run_with_output(&connection, &mut std::io::stdout())
+		.expect("Migration failed");
 
-	let connection = database::open_database(&pool);
+	let connection = pool.get().unwrap();
 	let boards = database::queries::load_boards(&connection)
 		.expect("Failed to load boards")
 		.into_iter()
-		.map(|board| (board.id, BoardData::new(board)))
+		.map(|board| (board.id as usize, BoardData::new(board)))
 		.collect::<HashMap<_, _>>();
-	let boards = Data::new(RwLock::new(boards));
+	let boards: BoardDataMap = Data::new(RwLock::new(boards));
 
 	HttpServer::new(move || App::new()
 		.data(pool.clone())
