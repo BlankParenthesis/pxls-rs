@@ -383,6 +383,7 @@ impl Board {
 				schema::placement::timestamp.desc(),
 				schema::placement::id.desc(),
 			))
+			.limit(1)
 			.load::<model::Placement>(connection)?
 			.pop())
 	}
@@ -413,7 +414,15 @@ impl Board {
 		let mut color_data = BytesMut::from(&board.initial[..]);
 		let mut timestamp_data = BytesMut::from(&vec![0; size * 4][..]);
 
-		let placements = model::Placement::belonging_to(&board)
+		// TODO: maybe this will be possible in qsl one day…
+		// until then, maybe there's a non-nested way to do this.
+		let placements = diesel::sql_query("
+			SElECT DISTINCT ON (position) * FROM (
+				SELECT * FROM placement
+				WHERE board = $1
+				ORDER BY timestamp DESC, id DESC
+			) AS ordered")
+			.bind::<diesel::sql_types::Int4, _>(board.id)
 			.load::<model::Placement>(connection)?;
 
 		for placement in placements {
