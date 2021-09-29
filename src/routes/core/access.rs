@@ -1,9 +1,7 @@
-use actix_web::{get, HttpResponse};
-
-use crate::objects::User;
+use super::*;
 
 #[get("/access")]
-pub async fn access(user: Option<User>) -> HttpResponse {
+pub async fn get(user: Option<User>) -> HttpResponse {
 	let permissions = user.unwrap_or_default().permissions;
 
 	HttpResponse::Ok()

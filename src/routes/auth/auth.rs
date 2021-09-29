@@ -1,6 +1,4 @@
-use actix_web::{get, HttpResponse};
-use serde::Serialize;
-use url::Url;
+use super::*;
 
 #[derive(Serialize)]
 pub struct AuthInfo {
@@ -23,6 +21,6 @@ lazy_static! {
 guard!(InfoAccess, Info);
 
 #[get("/auth")]
-pub async fn auth() -> HttpResponse {
+pub async fn get() -> HttpResponse {
 	HttpResponse::Ok().json(&*AUTH_INFO)
 }

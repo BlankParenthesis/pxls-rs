@@ -1,8 +1,4 @@
-use actix_web::{get, HttpResponse};
-use serde::Serialize;
-
-use crate::objects::User;
-use crate::access::permissions::Permission;
+use super::*;
 
 #[derive(Serialize)]
 pub struct ServerInfo {
@@ -27,7 +23,7 @@ lazy_static! {
 guard!(InfoAccess, Info);
 
 #[get("/info")]
-pub async fn info(user: Option<User>) -> HttpResponse {
+pub async fn get(user: Option<User>) -> HttpResponse {
 	if user.unwrap_or_default().permissions.contains(&Permission::Info) {
 		HttpResponse::Ok().json(&*SERVER_INFO)
 	} else {
