@@ -6,6 +6,7 @@ pub mod user_count;
 pub mod reference;
 pub mod ranges;
 pub mod user;
+pub mod patch;
 
 pub use board::{Board, BoardData, BoardInfo, BoardInfoPost, BoardInfoPatch};
 pub use placement::{PlacementRequest};
@@ -15,3 +16,4 @@ pub use user_count::UserCount;
 pub use reference::Reference;
 pub use ranges::{RangeHeader, HttpRange};
 pub use user::User;
+pub use patch::{BinaryPatch, Patchable};

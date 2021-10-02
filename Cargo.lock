@@ -1396,6 +1396,7 @@ dependencies = [
  "http",
  "http-serde",
  "lazy_static",
+ "mime",
  "num-derive",
  "num-traits",
  "r2d2",

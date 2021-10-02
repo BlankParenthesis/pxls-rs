@@ -118,6 +118,7 @@ pub async fn get(
 
 #[patch("/boards/{id}")]
 pub async fn patch(
+	// TODO: require application/merge-patch+json type?
 	Json(data): Json<BoardInfoPatch>,
 	Path(id): Path<usize>,
 	boards: BoardDataMap,

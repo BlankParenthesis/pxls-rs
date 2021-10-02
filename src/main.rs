@@ -70,6 +70,8 @@ async fn main() -> std::io::Result<()> {
 		.service(routes::core::boards::data::get_timestamps)
 		.service(routes::core::boards::data::get_mask)
 		.service(routes::core::boards::data::get_initial)
+		.service(routes::core::boards::data::patch_initial)
+		.service(routes::core::boards::data::patch_mask)
 		.service(routes::core::boards::users::get)
 		.service(routes::core::boards::pixels::list)
 		.service(routes::core::boards::pixels::get)

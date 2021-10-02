@@ -23,11 +23,11 @@ impl Default for User {
 		permissions.insert(Permission::BoardsPost);
 		permissions.insert(Permission::BoardsPatch);
 		permissions.insert(Permission::BoardsDelete);
-		permissions.insert(Permission::BoardsData);
+		permissions.insert(Permission::BoardsDataGet);
+		permissions.insert(Permission::BoardsDataPatch);
 		permissions.insert(Permission::BoardsUsers);
 		permissions.insert(Permission::BoardsPixelsList);
 		permissions.insert(Permission::BoardsPixelsGet);
-		permissions.insert(Permission::BoardsPixelsPost);
 		permissions.insert(Permission::SocketCore);
 		
 		Self {

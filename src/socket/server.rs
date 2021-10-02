@@ -14,6 +14,7 @@ impl Actor for BoardServer {
 	type Context = Context<Self>;
 }
 
+// TODO: move messages to separate module?
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Connect {
