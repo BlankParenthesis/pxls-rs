@@ -22,4 +22,4 @@ pub use user::User;
 pub use patch::BinaryPatch;
 pub use board_sector::{BoardSector, SectorBuffer};
 pub use shape::{Shape, VecShape};
-pub use sector_cache::SectorCache;
+pub use sector_cache::{SectorCache, SectorCacheAccess};

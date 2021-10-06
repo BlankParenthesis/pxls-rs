@@ -20,6 +20,7 @@ use crate::objects::{
 	VecShape,
 	SectorCache,
 	SectorBuffer,
+	SectorCacheAccess,
 };
 
 
@@ -49,7 +50,7 @@ pub struct BoardInfoPatch {
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
-	pub sectors: SectorCache,
+	sectors: SectorCache,
 }
 
 #[derive(FromPrimitive)]
@@ -121,6 +122,14 @@ impl Board {
 		)?;
 
 		Self::load(new_board, connection)
+	}
+
+	pub fn read<'l>(
+		&'l self,
+		buffer: SectorBuffer,
+		connection: &'l Connection,
+	) -> SectorCacheAccess<'l> {
+		self.sectors.access(buffer, connection)
 	}
 
 	// TODO: proper error type
@@ -263,6 +272,7 @@ impl Board {
 	}
 
 	pub fn cooldown(&self) -> u32 {
+		// TODO: proper cooldown
 		30
 	}
 

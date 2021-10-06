@@ -15,7 +15,7 @@ pub async fn get_colors(
 		// TODO: content disposition
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut colors_data = board.sectors.access(
+		let mut colors_data = board.read(
 			SectorBuffer::Colors,
 			&connection,
 		);
@@ -35,7 +35,7 @@ pub async fn get_timestamps(
 	board!(boards[id]).map(|BoardData(board, _)| {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut timestamp_data = board.sectors.access(
+		let mut timestamp_data = board.read(
 			SectorBuffer::Timestamps,
 			&connection,
 		);
@@ -55,7 +55,7 @@ pub async fn get_mask(
 	board!(boards[id]).map(|BoardData(board, _)| {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut mask_data = board.sectors.access(
+		let mut mask_data = board.read(
 			SectorBuffer::Mask,
 			&connection,
 		);
@@ -75,7 +75,7 @@ pub async fn get_initial(
 	board!(boards[id]).map(|BoardData(board, _)| {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut initial_data = board.sectors.access(
+		let mut initial_data = board.read(
 			SectorBuffer::Initial,
 			&connection,
 		);
