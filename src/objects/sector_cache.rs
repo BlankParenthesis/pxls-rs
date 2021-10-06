@@ -215,8 +215,12 @@ impl<'l> Read for SectorCacheAccess<'l> {
 				SectorBuffer::Mask => &sector.mask,
 			}[offset..];
 
-			// FIXME: if write_len = 0, this will probably loop forever.
 			let write_len = buf.read(output)?;
+			
+			if write_len == 0 {
+				break;
+			}
+
 			output = &mut output[write_len..];
 			written += write_len;
 			self.cursor += write_len;
@@ -255,6 +259,11 @@ impl<'l> Write for SectorCacheAccess<'l> {
 				}[offset..];
 
 				let write_len: usize = input.read(buf).unwrap();
+				
+				if write_len == 0 {
+					break;
+				}
+
 				written = write_len;
 				self.cursor += write_len;
 				
