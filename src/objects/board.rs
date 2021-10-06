@@ -1,7 +1,9 @@
 use serde::{Serialize, Deserialize};
+use actix::prelude::*;
 use actix_web::web::BufMut;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::{Write, Seek, SeekFrom};
+use std::sync::Arc;
 use http::Uri;
 use num_derive::FromPrimitive;    
 use num_traits::FromPrimitive;
@@ -23,6 +25,7 @@ use crate::objects::{
 	SectorCacheAccess,
 };
 
+use crate::socket::server::BoardServer;
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -51,6 +54,7 @@ pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
 	sectors: SectorCache,
+	pub server: Arc<Addr<BoardServer>>,
 }
 
 #[derive(FromPrimitive)]
@@ -136,7 +140,7 @@ impl Board {
 	// TODO: notify the damn websocket server.
 	// Poor websocket server never gets told about anything 😭.
 	pub fn try_patch_initial(
-		&mut self,
+		&self,
 		patch: &BinaryPatch,
 		connection: &Connection,
 	) -> Result<(), &'static str> {
@@ -154,7 +158,7 @@ impl Board {
 	}
 
 	pub fn try_patch_mask(
-		&mut self,
+		&self,
 		patch: &BinaryPatch,
 		connection: &Connection
 	) -> Result<(), &'static str> {
@@ -277,7 +281,7 @@ impl Board {
 	}
 
 	pub fn try_place(
-		&mut self,
+		&self,
 		user: &User,
 		position: u64,
 		color: u8,
@@ -426,7 +430,9 @@ impl Board {
 			info.shape.sector_size(),
 		);
 
-		Ok(Board { id, info, sectors })
+		let server = Arc::new(BoardServer::default().start());
+
+		Ok(Board { id, info, sectors, server })
 	}
 }
 

@@ -8,7 +8,9 @@ pub async fn get(
 	boards: BoardDataMap,
 	_access: BoardUsersAccess,
 ) -> Option<HttpResponse>  {
-	if let Some(BoardData(_, server)) = board!(boards[id]) {
+	if let Some(board) = board!(boards[id]) {
+		let board = board.read().unwrap();
+		let server = &board.server;
 		let user_count = server.send(RequestUserCount {}).await.unwrap();
 		
 		Some(HttpResponse::Ok().json(user_count))

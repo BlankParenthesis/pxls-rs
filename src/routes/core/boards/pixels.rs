@@ -12,11 +12,11 @@ pub async fn list(
 	database_pool: Data<Pool>,
 	_access: BoardsPixelsListAccess,
 ) -> Option<HttpResponse>  {
-	board!(boards[board_id]).map(|BoardData(board, _)| {
+	board!(boards[board_id]).map(|board| {
 		let page = options.page.unwrap_or_default();
 		let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
-		let board = board.try_read().unwrap();
+		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 		let previous_placements = board
 			.list_placements(page.timestamp, page.id, limit, true, connection)
@@ -68,8 +68,8 @@ pub async fn get(
 	database_pool: Data<Pool>,
 	_access: BoardsPixelsGetAccess,
 ) -> Option<HttpResponse> {
-	board!(boards[id]).and_then(|BoardData(board, _)| {
-		let board = board.try_read().unwrap();
+	board!(boards[id]).and_then(|board| {
+		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 
 		board.lookup(position, connection).unwrap()
@@ -86,8 +86,9 @@ pub async fn post(
 	user: User,
 	_access: BoardsPixelsPostAccess,
 ) -> Option<HttpResponse> {
-	board!(boards[id]).and_then(|BoardData(board, server)| {
-		let mut board = board.try_write().unwrap();
+	board!(boards[id]).and_then(|board| {
+		let board = board.read().unwrap();
+		let server = &board.server;
 		let connection = &mut database_pool.get().unwrap();
 		
 		Some(match board.try_place(&user, position, placement.color, connection) {

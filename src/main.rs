@@ -10,22 +10,13 @@ mod objects;
 mod config;
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use actix::prelude::*;
+use std::sync::RwLock;
 use actix_web::{App, HttpServer, web::Data};
 use actix_web::middleware::{NormalizePath, normalize::TrailingSlash, Compress};
 
 use crate::objects::Board;
-use crate::socket::server::BoardServer;
 
-pub struct BoardData(RwLock<Board>, Arc<Addr<BoardServer>>);
-pub type BoardDataMap = Data<RwLock<HashMap<usize, BoardData>>>;
-
-impl BoardData {
-	fn new(board: Board) -> Self {
-		Self(RwLock::new(board), Arc::new(BoardServer::default().start()))
-	}
-}
+pub type BoardDataMap = Data<RwLock<HashMap<usize, RwLock<Board>>>>;
 
 embed_migrations!();
 
@@ -44,7 +35,7 @@ async fn main() -> std::io::Result<()> {
 	let boards = database::queries::load_boards(&connection)
 		.expect("Failed to load boards")
 		.into_iter()
-		.map(|board| (board.id as usize, BoardData::new(board)))
+		.map(|board| (board.id as usize, RwLock::new(board)))
 		.collect::<HashMap<_, _>>();
 	let boards: BoardDataMap = Data::new(RwLock::new(boards));
 

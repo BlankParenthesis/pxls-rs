@@ -4,10 +4,10 @@ use web::{Path, Query, Data, Payload, Json};
 use actix_web_actors::ws;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::sync::RwLock;
 
 use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
 use crate::socket::server::{RequestUserCount, Place};
-use crate::BoardData;
 use crate::BoardDataMap;
 
 macro_rules! board {
@@ -38,7 +38,7 @@ pub async fn list(
 
 	let boards = boards.read().unwrap();
 	let boards = boards.iter()
-		.map(|(id, BoardData(board, _))| (id, board.read().unwrap()))
+		.map(|(id, board)| (id, board.read().unwrap()))
 		.collect::<Vec<_>>();
 	let board_infos = boards.iter()
 		.map(|(_id, board)| Reference::from(&**board))
@@ -79,10 +79,9 @@ pub async fn post(
 	let id = board.id as usize;
 
 	let mut boards = boards.write().unwrap();
-	boards.insert(id, BoardData::new(board));
+	boards.insert(id, RwLock::new(board));
 
-	let BoardData(board, _) = boards.get(&id).unwrap();
-	let board = board.read().unwrap();
+	let board = boards.get(&id).unwrap().read().unwrap();
 
 	Ok(HttpResponse::build(StatusCode::CREATED)
 		.header("Location", http::Uri::from(&*board).to_string())
@@ -108,7 +107,7 @@ pub async fn get(
 	boards: BoardDataMap,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse> {
-	board!(boards[id]).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|board| {
 		HttpResponse::Ok()
 			.json(&board.read().unwrap().info)
 	})
@@ -123,7 +122,7 @@ pub async fn patch(
 	database_pool: Data<Pool>,
 	_access: BoardPatchAccess,
 ) -> Option<HttpResponse> {
-	board!(boards[id]).map(|BoardData(board, _)| {
+	board!(boards[id]).map(|board| {
 		board.write().unwrap().update_info(
 			data, 
 			&database_pool.get().unwrap(),
@@ -140,7 +139,7 @@ pub async fn delete(
 	database_pool: Data<Pool>,
 	_access: BoardDeleteAccess,
 ) -> Option<HttpResponse> {
-	boards.write().unwrap().remove(&id).map(|BoardData(board, _)| {
+	boards.write().unwrap().remove(&id).map(|board| {
 		board.into_inner().unwrap()
 			.delete(&database_pool.get().unwrap()).unwrap();
 
@@ -159,7 +158,9 @@ pub async fn socket(
 	boards: BoardDataMap,
 	_access: SocketAccess,
 ) -> Option<Result<HttpResponse, Error>> {
-	board!(boards[id]).map(|BoardData(_, server)| {
+	board!(boards[id]).map(|board| {
+		let board = board.read().unwrap();
+		let server = &board.server;
 		if let Some(extensions) = &options.extensions {
 			let extensions: Result<HashSet<Extension>, _> = extensions
 				.clone()
