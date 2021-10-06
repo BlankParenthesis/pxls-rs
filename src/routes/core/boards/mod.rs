@@ -75,9 +75,7 @@ pub async fn post(
 	database_pool: Data<Pool>,
 	_access: BoardPostAccess,
 ) -> Result<HttpResponse, Error> {
-	// FIXME: properly raise the error, don't just expect.
-	let board = Board::create(data, &database_pool.get().unwrap())
-		.expect("create");
+	let board = Board::create(data, &database_pool.get().unwrap()).unwrap();
 	let id = board.id as usize;
 
 	let mut boards = boards.write().unwrap();
@@ -129,7 +127,7 @@ pub async fn patch(
 		board.write().unwrap().update_info(
 			data, 
 			&database_pool.get().unwrap(),
-		).expect("update");
+		).unwrap();
 
 		HttpResponse::Ok().json(&board.read().unwrap().info)
 	})

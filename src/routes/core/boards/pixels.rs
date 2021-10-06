@@ -20,12 +20,12 @@ pub async fn list(
 		let connection = &mut database_pool.get().unwrap();
 		let previous_placements = board
 			.list_placements(page.timestamp, page.id, limit, true, connection)
-			.expect("previous placements");
+			.unwrap();
 		let placements = board
 			// Limit is +1 to get the start of the next page as the last element.
 			// This is required for paging.
 			.list_placements(page.timestamp, page.id, limit + 1, false, connection)
-			.expect("placements");
+			.unwrap();
 		
 		fn page_uri(
 			board_id:usize,
@@ -72,7 +72,7 @@ pub async fn get(
 		let board = board.try_read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 
-		board.lookup(position, connection).expect("lookup")
+		board.lookup(position, connection).unwrap()
 			.map(|placement| HttpResponse::Ok().json(placement))
 	})
 }
