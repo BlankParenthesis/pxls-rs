@@ -280,6 +280,6 @@ impl<'l> Write for SectorCacheAccess<'l> {
 	}
 
 	fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
-		todo!("maybe write to db?")
+		Ok(())
 	}
 }
