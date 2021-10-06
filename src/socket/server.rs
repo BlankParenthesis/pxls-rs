@@ -1,13 +1,14 @@
 use actix::{Context, Actor, Message, Recipient, Handler};
 use std::collections::HashSet;
 
-use crate::socket::event::{Event, BoardData, Change};
+use std::sync::Arc;
+
+use crate::socket::event::Event;
 use crate::objects::UserCount;
-use crate::database::model;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {
-	connections: HashSet<Recipient<Event>>,
+	connections: HashSet<Recipient<Arc<Event>>>,
 }
 
 impl Actor for BoardServer {
@@ -18,19 +19,19 @@ impl Actor for BoardServer {
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Connect {
-	pub handler: Recipient<Event>,
+	pub handler: Recipient<Arc<Event>>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Disconnect {
-	pub handler: Recipient<Event>,
+	pub handler: Recipient<Arc<Event>>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct Place {
-	pub placement: model::Placement,
+pub struct RunEvent {
+	pub event: Event,
 }
 
 impl Handler<Connect> for BoardServer {
@@ -57,33 +58,17 @@ impl Handler<Disconnect> for BoardServer {
 	}
 }
 
-impl Handler<Place> for BoardServer {
+impl Handler<RunEvent> for BoardServer {
 	type Result = ();
 
 	fn handle(
 		&mut self, 
-		msg: Place,
+		msg: RunEvent,
 		_: &mut Self::Context,
 	) -> Self::Result {
-		let update = Event::BoardUpdate {
-			info: None,
-			data: Some(BoardData {
-				colors: Some(vec![Change {
-					position: msg.placement.position as u64,
-					values: vec![msg.placement.color as u8],
-				}]),
-				timestamps: Some(vec![Change {
-					position: msg.placement.position as u64,
-					values: vec![msg.placement.timestamp as u32],
-				}]),
-				initial: None,
-				mask: None,
-			})
-		};
-		
+		let event = Arc::new(msg.event);
 		for connection in self.connections.iter() {
-			// TODO: remove this clone — this doesn't need to be duplicated for every connection.
-			connection.do_send(update.clone()).unwrap();
+			connection.do_send(event.clone()).unwrap();
 		}
 	}
 }

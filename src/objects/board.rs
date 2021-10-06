@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::{Write, Seek, SeekFrom};
 use std::sync::Arc;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use http::Uri;
 use num_derive::FromPrimitive;    
 use num_traits::FromPrimitive;
@@ -26,8 +27,9 @@ use crate::objects::{
 	SectorCacheAccess,
 	UserCount,
 };
-use crate::socket::server::{BoardServer, RequestUserCount};
+use crate::socket::server::{BoardServer, RequestUserCount, RunEvent};
 use crate::socket::socket::{BoardSocket, Extension};
+use crate::socket::event::{Event, BoardInfo as EventBoardInfo, BoardData, Change};
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -139,8 +141,6 @@ impl Board {
 	}
 
 	// TODO: proper error type
-	// TODO: notify the damn websocket server.
-	// Poor websocket server never gets told about anything 😭.
 	pub fn try_patch_initial(
 		&self,
 		patch: &BinaryPatch,
@@ -155,6 +155,21 @@ impl Board {
 
 		sector_data.write(&*patch.data)
 			.map_err(|_| "write error")?;
+
+		let event = Event::BoardUpdate {
+			info: None,
+			data: Some(BoardData {
+				colors: None,
+				timestamps: None,
+				initial: Some(vec![Change {
+					position: patch.start,
+					values: Vec::from(&*patch.data),
+				}]),
+				mask: None,
+			}),
+		};
+
+		self.server.do_send(RunEvent { event });
 
 		Ok(())
 	}
@@ -172,6 +187,21 @@ impl Board {
 
 		sector_data.write(&*patch.data)
 			.map_err(|_| "write error")?;
+
+		let event = Event::BoardUpdate {
+			info: None,
+			data: Some(BoardData {
+				colors: None,
+				timestamps: None,
+				initial: None,
+				mask: Some(vec![Change {
+					position: patch.start,
+					values: Vec::from(&*patch.data),
+				}]),
+			}),
+		};
+
+		self.server.do_send(RunEvent { event });
 
 		Ok(())
 	}
@@ -213,16 +243,16 @@ impl Board {
 			Ok(())
 		})?;
 
-		if let Some(name) = info.name {
-			self.info.name = name;
+		if let Some(ref name) = info.name {
+			self.info.name = name.clone();
 		}
 
-		if let Some(palette) = info.palette {
-			self.info.palette = palette;
+		if let Some(ref palette) = info.palette {
+			self.info.palette = palette.clone();
 		}
 
-		if let Some(shape) = info.shape {
-			self.info.shape = shape;
+		if let Some(ref shape) = info.shape {
+			self.info.shape = shape.clone();
 
 			self.sectors = SectorCache::new(
 				self.id,
@@ -230,6 +260,17 @@ impl Board {
 				self.info.shape.sector_size(),
 			)
 		}
+
+		let event = Event::BoardUpdate {
+			info: Some(EventBoardInfo {
+				name: info.name,
+				palette: info.palette,
+				shape: info.shape,
+			}),
+			data: None,
+		};
+
+		self.server.do_send(RunEvent { event });
 
 		Ok(())
 	}
@@ -319,9 +360,10 @@ impl Board {
 		let unix_time = SystemTime::now()
 			.duration_since(UNIX_EPOCH).unwrap()
 			.as_secs();
-		let timestamp = unix_time
+		let timestamp = u32::try_from(unix_time
 			.saturating_sub(self.info.created_at)
-			.max(1) as u32;
+			.max(1))
+			.unwrap();
 
 		((timestamp - self.last_place_time(user, connection).unwrap()) > self.cooldown())
 			.then(|| ())
@@ -342,7 +384,25 @@ impl Board {
 		let timestamp_slice = &mut sector.timestamps[
 			(sector_offset * 4)..((sector_offset + 1) * 4)
 		];
-		timestamp_slice.as_mut().put_u32_le(timestamp as u32);
+		timestamp_slice.as_mut().put_u32_le(timestamp);
+
+		let event = Event::BoardUpdate {
+			info: None,
+			data: Some(BoardData {
+				colors: Some(vec![Change {
+					position,
+					values: vec![color as u8],
+				}]),
+				timestamps: Some(vec![Change {
+					position,
+					values: vec![timestamp],
+				}]),
+				initial: None,
+				mask: None,
+			}),
+		};
+
+		self.server.do_send(RunEvent { event });
 
 		Ok(new_placement)
 	}

@@ -43,12 +43,12 @@ pub struct BoardSocket {
 	pub server: Arc<Addr<BoardServer>>,
 }
 
-impl Handler<Event> for BoardSocket {
+impl Handler<Arc<Event>> for BoardSocket {
 	type Result = ();
 
 	fn handle(
 		&mut self, 
-		msg: Event,
+		msg: Arc<Event>,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
 		ctx.text(serde_json::to_string(&msg).unwrap())

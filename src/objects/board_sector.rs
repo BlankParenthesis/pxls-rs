@@ -53,7 +53,6 @@ impl BoardSector {
 		sector_index: i32,
 		connection: &Connection,
 	) -> QueryResult<Option<Self>> {
-		// TODO: return None if nothing in database?
 		let sector = schema::board_sector::table
 			.find((board_id, sector_index))
 			.load::<model::BoardSector>(connection)?

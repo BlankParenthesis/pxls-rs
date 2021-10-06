@@ -44,9 +44,6 @@ pub enum Event {
 		count: u32,
 		next: Option<u64>,
 	},
-	PermissionsChanged {
-		permissions: Vec<Permission>,
-	},
 }
 
 impl Serialize for Event {
@@ -69,12 +66,6 @@ impl Serialize for Event {
 				map.serialize_entry("type", "pixels-available")?;
 				map.serialize_entry("count", count)?;
 				map.serialize_entry("next", next)?;
-				map.end()
-			},
-			Event::PermissionsChanged { permissions } => {
-				let mut map = serializer.serialize_map(Some(2))?;
-				map.serialize_entry("type", "permissions-changed")?;
-				map.serialize_entry("permissions", permissions)?;
 				map.end()
 			},
 		}
