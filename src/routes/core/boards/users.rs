@@ -10,8 +10,7 @@ pub async fn get(
 ) -> Option<HttpResponse>  {
 	if let Some(board) = board!(boards[id]) {
 		let board = board.read().unwrap();
-		let server = &board.server;
-		let user_count = server.send(RequestUserCount {}).await.unwrap();
+		let user_count = board.user_count().await;
 		
 		Some(HttpResponse::Ok().json(user_count))
 	} else {

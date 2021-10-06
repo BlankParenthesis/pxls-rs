@@ -6,8 +6,7 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::RwLock;
 
-use crate::socket::socket::{BoardSocket, Extension, SocketOptions};
-use crate::socket::server::{RequestUserCount, Place};
+use crate::socket::socket::{Extension, SocketOptions};
 use crate::BoardDataMap;
 
 macro_rules! board {
@@ -160,7 +159,6 @@ pub async fn socket(
 ) -> Option<Result<HttpResponse, Error>> {
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
-		let server = &board.server;
 		if let Some(extensions) = &options.extensions {
 			let extensions: Result<HashSet<Extension>, _> = extensions
 				.clone()
@@ -169,10 +167,7 @@ pub async fn socket(
 				.collect();
 
 			if let Ok(extensions) = extensions {
-				ws::start(BoardSocket {
-					extensions,
-					server: server.clone()
-				}, &request, stream)
+				ws::start(board.new_socket(extensions), &request, stream)
 			} else {
 				Err(error::ErrorUnprocessableEntity(
 					"Requested extensions not supported"

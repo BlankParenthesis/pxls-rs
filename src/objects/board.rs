@@ -4,6 +4,7 @@ use actix_web::web::BufMut;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::{Write, Seek, SeekFrom};
 use std::sync::Arc;
+use std::collections::HashSet;
 use http::Uri;
 use num_derive::FromPrimitive;    
 use num_traits::FromPrimitive;
@@ -23,9 +24,10 @@ use crate::objects::{
 	SectorCache,
 	SectorBuffer,
 	SectorCacheAccess,
+	UserCount,
 };
-
-use crate::socket::server::BoardServer;
+use crate::socket::server::{BoardServer, RequestUserCount};
+use crate::socket::socket::{BoardSocket, Extension};
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -54,7 +56,7 @@ pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
 	sectors: SectorCache,
-	pub server: Arc<Addr<BoardServer>>,
+	server: Arc<Addr<BoardServer>>,
 }
 
 #[derive(FromPrimitive)]
@@ -433,6 +435,17 @@ impl Board {
 		let server = Arc::new(BoardServer::default().start());
 
 		Ok(Board { id, info, sectors, server })
+	}
+
+	pub async fn user_count(&self) -> UserCount {
+		self.server.send(RequestUserCount {}).await.unwrap()
+	}
+
+	pub fn new_socket(&self, extensions: HashSet<Extension>) -> BoardSocket {
+		BoardSocket {
+			extensions,
+			server: self.server.clone()
+		}
 	}
 }
 

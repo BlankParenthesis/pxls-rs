@@ -88,12 +88,10 @@ pub async fn post(
 ) -> Option<HttpResponse> {
 	board!(boards[id]).and_then(|board| {
 		let board = board.read().unwrap();
-		let server = &board.server;
 		let connection = &mut database_pool.get().unwrap();
 		
 		Some(match board.try_place(&user, position, placement.color, connection) {
 			Ok(placement) => {
-				server.do_send(Place { placement: placement.clone() });
 				HttpResponse::build(StatusCode::CREATED)
 					.json(placement)
 			},
