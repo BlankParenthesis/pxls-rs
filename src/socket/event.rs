@@ -2,8 +2,7 @@ use actix::Message;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
 use crate::access::permissions::Permission;
-use crate::objects::board::Shape;
-use crate::objects::color::Palette;
+use crate::objects::{VecShape, Palette};
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Change<T> {
@@ -16,7 +15,7 @@ pub struct BoardInfo {
 	#[serde(skip_serializing_if="Option::is_none")]
 	pub name: Option<String>,
 	#[serde(skip_serializing_if="Option::is_none")]
-	pub shape: Option<Shape>,
+	pub shape: Option<VecShape>,
 	#[serde(skip_serializing_if="Option::is_none")]
 	pub palette: Option<Palette>,
 }

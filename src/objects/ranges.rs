@@ -1,7 +1,10 @@
 use std::num::ParseIntError;
 use std::ops::{Range, RangeFrom};
 use std::fmt::{self, Display, Formatter};
-use actix_web::{FromRequest, HttpRequest, dev::Payload, error, web::BytesMut, HttpResponse};
+use std::io::{Read, Seek};
+use std::convert::TryFrom;
+
+use actix_web::{FromRequest, HttpRequest, dev::Payload, error, HttpResponse};
 use actix_web::http::header;
 use futures_util::future::{Ready, ready};
 use http::StatusCode;
@@ -120,7 +123,8 @@ pub enum RangeHeader {
 }
 
 impl RangeHeader {
-	pub fn respond_with(&self, data: &BytesMut) -> HttpResponse {
+	pub fn respond_with<D>(&self, data: &mut D) -> HttpResponse
+	where D: Read + Seek + crate::objects::sector_cache::Len {
 		match self {
 			Self::Multi { unit, ranges } => {
 				// TODO: sort, eliminate small gaps
@@ -147,7 +151,16 @@ impl RangeHeader {
 							).as_bytes());
 							joined.extend_from_slice(b"\r\n");
 							joined.extend_from_slice(b"\r\n");
-							joined.extend_from_slice(&data[range]);
+
+							let length = range.end - range.start;
+
+							let start = joined.len();
+							joined.extend(std::iter::repeat(0).take(length));
+
+							data.seek(std::io::SeekFrom::Start(
+								u64::try_from(range.start).unwrap()
+							)).unwrap();
+							data.read_exact(&mut joined[start..]).unwrap();
 						}
 						joined.extend_from_slice(boundary.as_bytes());
 						
@@ -193,7 +206,18 @@ impl RangeHeader {
 								range: Some((range.start as u64, range.end as u64)),
 								instance_length: Some(data.len() as u64)
 							})
-							.body(Vec::from(&data[range]))
+							.body({
+								let length = range.end - range.start;
+								let mut buffer = vec![0; length];
+								
+								data.seek(std::io::SeekFrom::Start(
+									u64::try_from(range.start).unwrap()
+								)).unwrap();
+								
+								data.read_exact(&mut buffer).unwrap();
+
+								buffer
+							})
 					},
 					Err(error) => error.into(),
 				}
@@ -201,7 +225,14 @@ impl RangeHeader {
 			Self::None => HttpResponse::build(StatusCode::OK)
 				.content_type("application/octet-stream")
 				.header("accept-ranges", "bytes")
-				.body(Vec::from(data.as_ref())),
+				.body({
+					let length = data.len();
+					let mut buffer = vec![0; length];
+
+					data.read_exact(&mut buffer).unwrap();
+
+					buffer
+				}),
 		}
 	}
 }

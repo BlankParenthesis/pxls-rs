@@ -3,7 +3,14 @@ table! {
         id -> Int4,
         name -> Text,
         created_at -> Int8,
-        shape -> Text,
+        shape -> Jsonb,
+    }
+}
+
+table! {
+    board_sector (board, index) {
+        board -> Int4,
+        index -> Int4,
         mask -> Bytea,
         initial -> Bytea,
     }
@@ -29,11 +36,13 @@ table! {
     }
 }
 
+joinable!(board_sector -> board (board));
 joinable!(color -> board (board));
 joinable!(placement -> board (board));
 
 allow_tables_to_appear_in_same_query!(
     board,
+    board_sector,
     color,
     placement,
 );

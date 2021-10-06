@@ -1,23 +1,18 @@
-use actix_web::web::{Bytes, BytesMut};
+use actix_web::web::Bytes;
 use actix_web::{FromRequest, HttpMessage, error};
 use actix_web::http::header;
 
 use std::pin::Pin;
 use std::future::Future;
-
-pub struct BinaryPatch {
-	/// Tuple is always ordered.
-	/// It always matches the data in length.
-	range: Option<(usize, usize)>,
-	data: Bytes,
-	expected_length: Option<usize>,
-}
+use std::convert::TryFrom;
 
 #[derive(Debug)]
 pub enum InvalidPatch {
 	EmptyPatch,
 	LengthMismatch,
 	RangeMisordered,
+	BoundsExceeded,
+	UnexpectedSize,
 }
 
 impl std::fmt::Display for InvalidPatch {
@@ -26,6 +21,8 @@ impl std::fmt::Display for InvalidPatch {
 			InvalidPatch::EmptyPatch => write!(formatter, "Empty Patch"),
 			InvalidPatch::LengthMismatch => write!(formatter, "Length Mismatch"),
 			InvalidPatch::RangeMisordered => write!(formatter, "Range Misordered"),
+			InvalidPatch::BoundsExceeded => write!(formatter, "Patch exceeds object bounds"),
+			InvalidPatch::UnexpectedSize => write!(formatter, "Expected length mismatch"),
 		}
 	}
 }
@@ -36,6 +33,12 @@ impl From<InvalidPatch> for error::Error {
 	}
 }
 
+pub struct BinaryPatch {
+	pub start: u64,
+	pub data: Bytes,
+	pub expected_length: Option<usize>,
+}
+
 impl BinaryPatch {
 	/// Attempt to formulate a new binary patch.
 	/// Result in Err if range and data length are mismatched.
@@ -44,7 +47,6 @@ impl BinaryPatch {
 		data: Bytes,
 		expected_length: Option<u64>,
 	) -> Result<Self, InvalidPatch> {
-		let range = range.map(|(start, end)| (start as usize, end as usize));
 		let expected_length = expected_length.map(|length| length as usize);
 
 		if let Some((start, end)) = range {
@@ -56,13 +58,15 @@ impl BinaryPatch {
 				return Err(InvalidPatch::RangeMisordered);
 			}
 
-			if end - start != data.len() {
+			if usize::try_from(end - start).unwrap() != data.len() {
 				return Err(InvalidPatch::LengthMismatch);
 			}
 		}
 
+		let start = range.map(|(start, _end)| start).unwrap_or(0);
+
 		Ok(Self {
-			range,
+			start,
 			data,
 			expected_length,
 		})
@@ -108,47 +112,5 @@ impl FromRequest for BinaryPatch {
 				_ => Err(error::ErrorBadRequest("Unknown content-range unit")),
 			}
 		})
-	}
-}
-
-pub trait Patchable {
-	type Patch;
-
-	fn can_patch(&self, patch: &Self::Patch) -> bool;
-	fn unchecked_patch(&mut self, patch: &Self::Patch);
-
-	fn patch(&mut self, patch: &Self::Patch) -> Result<(), ()> {
-		if self.can_patch(patch) {
-			self.unchecked_patch(patch);
-			Ok(())
-		} else {
-			Err(())
-		}
-	}
-}
-
-impl Patchable for BytesMut {
-	type Patch = BinaryPatch;
-
-	fn can_patch(&self, patch: &Self::Patch) -> bool {
-		if let Some(length) = patch.expected_length {
-			if length != self.len() {
-				return false;
-			}
-		}
-
-		match patch.range {
-			Some((_, end)) => (end <= self.len()),
-			None => (self.len() == patch.data.len()),
-		}
-	}
-
-	fn unchecked_patch(&mut self, patch: &Self::Patch) {
-		if let Some((start, end)) = patch.range {
-			let data = &mut self[start..end];
-			data.copy_from_slice(&*patch.data);
-		} else {
-			self.copy_from_slice(&*patch.data);
-		}
 	}
 }

@@ -24,6 +24,7 @@ num-traits = "0.2"
 num-derive = "0.3"
 envy = "0.4"
 url = { version = "2.0", features = ["serde"] }
-diesel = { version = "1.4.4", features = ["postgres", "r2d2"] }
+diesel = { version = "1.4.4", features = ["postgres", "r2d2", "serde_json"] }
 diesel_migrations = "1.4.0"
 mime = "0.3.16"
+parking_lot = "0.11.2"

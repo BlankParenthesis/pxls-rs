@@ -9,9 +9,7 @@ pub struct Board {
 	pub id: i32,
 	pub name: String,
 	pub created_at: i64,
-	pub shape: String,
-	pub mask: Vec<u8>,
-	pub initial: Vec<u8>,
+	pub shape: serde_json::Value,
 }
 
 #[derive(Insertable)]
@@ -19,9 +17,7 @@ pub struct Board {
 pub struct NewBoard {
 	pub name: String,
 	pub created_at: i64,
-	pub shape: String,
-	pub mask: Vec<u8>,
-	pub initial: Vec<u8>,
+	pub shape: serde_json::Value,
 }
 
 #[derive(Queryable, Insertable, Identifiable, Associations)]
@@ -58,4 +54,15 @@ pub struct NewPlacement {
 	pub color: i16,
 	pub timestamp: i32,
 	pub user_id: Option<String>,
+}
+
+#[derive(Queryable, Insertable, Identifiable, Associations)]
+#[table_name="board_sector"]
+#[primary_key(board, index)]
+#[belongs_to(Board, foreign_key = "board")]
+pub struct BoardSector {
+	pub board: i32,
+	pub index: i32,
+	pub mask: Vec<u8>,
+	pub initial: Vec<u8>,
 }
