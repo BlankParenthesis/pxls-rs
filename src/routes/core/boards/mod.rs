@@ -164,8 +164,6 @@ pub async fn delete(
 #[get("/boards/{id}/socket")]
 pub async fn socket(
 	Path(id): Path<usize>, 
-	// FIXME: with `?extensions=…` this will fail with 400 rather than 422 as
-	// it would with no query string.
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
 	stream: Payload,

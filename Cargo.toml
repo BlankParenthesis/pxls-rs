@@ -28,3 +28,4 @@ diesel = { version = "1.4.4", features = ["postgres", "r2d2", "serde_json"] }
 diesel_migrations = "1.4.0"
 mime = "0.3.16"
 parking_lot = "0.11.2"
+enum-map = "1.1.1"

@@ -6,11 +6,12 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
 use std::sync::Arc;
+use enum_map::Enum;
 
 use crate::socket::server::{BoardServer, Connect, Disconnect};
 use crate::socket::event::Event;
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Enum)]
 pub enum Extension {
 	Core,
 }
@@ -60,7 +61,10 @@ impl Actor for BoardSocket {
 
 	fn started(&mut self, ctx: &mut Self::Context) {
 		self.server
-			.send(Connect { handler: ctx.address().recipient() })
+			.send(Connect {
+				handler: ctx.address().recipient(),
+				extensions: self.extensions.clone(),
+			})
 			.into_actor(self)
 			.then(|res, _act, ctx| {
 				if res.is_err() {

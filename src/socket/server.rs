@@ -2,14 +2,17 @@ use actix::{Context, Actor, Message, Recipient, Handler};
 use std::collections::HashSet;
 
 use std::sync::Arc;
+use enum_map::EnumMap;
 
 use crate::socket::event::Event;
+use crate::socket::socket::Extension;
 use crate::objects::UserCount;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {
 	// TODO: respect extensions specification
-	connections: HashSet<Recipient<Arc<Event>>>,
+	connections_by_extension: EnumMap<Extension, HashSet<Recipient<Arc<Event>>>>,
+	//connections_by_user_id: HashMap<Option<String>, HashSet<Recipient<Arc<Event>>>>,
 }
 
 impl Actor for BoardServer {
@@ -20,6 +23,7 @@ impl Actor for BoardServer {
 #[rtype(result = "()")]
 pub struct Connect {
 	pub handler: Recipient<Arc<Event>>,
+	pub extensions: HashSet<Extension>,
 }
 
 #[derive(Message)]
@@ -42,7 +46,9 @@ impl Handler<Connect> for BoardServer {
 		msg: Connect,
 		_: &mut Self::Context,
 	) -> Self::Result {
-		self.connections.insert(msg.handler);
+		for extension in msg.extensions {
+			self.connections_by_extension[extension].insert(msg.handler.clone());
+		}
 	}
 }
 
@@ -54,7 +60,9 @@ impl Handler<Disconnect> for BoardServer {
 		msg: Disconnect,
 		_: &mut Self::Context,
 	) -> Self::Result {
-		self.connections.remove(&msg.handler);
+		for (_, connections) in self.connections_by_extension.iter_mut() {
+			connections.remove(&msg.handler);
+		}
 	}
 }
 
@@ -67,7 +75,8 @@ impl Handler<RunEvent> for BoardServer {
 		_: &mut Self::Context,
 	) -> Self::Result {
 		let event = Arc::new(msg.event);
-		for connection in self.connections.iter() {
+		let connections = &self.connections_by_extension[event.as_ref().into()];
+		for connection in connections.iter() {
 			connection.do_send(event.clone()).unwrap();
 		}
 	}
@@ -86,7 +95,7 @@ impl Handler<RequestUserCount> for BoardServer {
 		_: &mut Self::Context,
 	) -> Self::Result {
 		UserCount {
-			active: self.connections.len(),
+			active: self.connections_by_extension[Extension::Core].len(),
 			idle: 0,
 			idle_timeout: 5 * 60,
 		}

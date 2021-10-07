@@ -2,6 +2,7 @@ use actix::Message;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
 use crate::objects::{VecShape, Palette};
+use crate::socket::socket::Extension;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Change<T> {
@@ -43,6 +44,15 @@ pub enum Event {
 		count: u32,
 		next: Option<u64>,
 	},
+}
+
+impl From<&Event> for Extension {
+	fn from(event: &Event) -> Self {
+		match event {
+			Event::BoardUpdate { info, data } => Extension::Core,
+			Event::PixelsAvailable { count, next } => Extension::Core,
+		}
+	}
 }
 
 impl Serialize for Event {

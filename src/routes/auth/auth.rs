@@ -9,7 +9,7 @@ pub struct AuthInfo {
 
 lazy_static! {
 	static ref AUTH_INFO: AuthInfo = {
-		let config = crate::config::CONFIG.try_read().unwrap();
+		let config = crate::config::CONFIG.read().unwrap();
 
 		AuthInfo {
 			issuer: config.oidc_issuer.clone(),
