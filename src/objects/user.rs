@@ -52,11 +52,19 @@ impl FromRequest for User {
 		Box::pin(async {
 			match auth {
 				Ok(auth) => {
-					let mut response = actix_web::client::Client::new()
-						// FIXME: discover this from $OIDC_ISSUER/.well-known/openid-configuration
-						// the "userinfo_endpoint" entry.
-						// probably put that in a once-cell too since you probably only need to fetch it once
-						.get("http://localhost:8180/auth/realms/pxls/protocol/openid-connect/userinfo")
+					let client = actix_web::client::Client::new();
+
+					let config = crate::config::CONFIG.read().unwrap();
+					let userinfo_endpoint = 
+						config.oidc_configration(&client).await?
+						.userinfo_endpoint.ok_or_else(|| 
+							actix_web::error::ErrorBadGateway(
+								"Identity provider lacks userinfo endpoint"
+							)
+						)?;
+
+					let mut response = client
+						.get(userinfo_endpoint)
 						.header("Authorization", format!("Bearer {}", auth.token()))
 						.send().await
 						.map_err(actix_web::error::ErrorBadGateway)?;
