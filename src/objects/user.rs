@@ -53,6 +53,9 @@ impl FromRequest for User {
 			match auth {
 				Ok(auth) => {
 					let mut response = actix_web::client::Client::new()
+						// FIXME: discover this from $OIDC_ISSUER/.well-known/openid-configuration
+						// the "userinfo_endpoint" entry.
+						// probably put that in a once-cell too since you probably only need to fetch it once
 						.get("http://localhost:8180/auth/realms/pxls/protocol/openid-connect/userinfo")
 						.header("Authorization", format!("Bearer {}", auth.token()))
 						.send().await
@@ -77,7 +80,9 @@ impl FromRequest for User {
 									.finish()
 							)))
 						},
-						code => Err(actix_web::error::ErrorBadGateway(format!("Got unexpected response from identity provider: {}", code)))
+						code => Err(actix_web::error::ErrorBadGateway(
+							format!("Got unexpected response from identity provider: {}", code))
+						)
 					}
 				},
 				Err(e) => Err(e.into()),

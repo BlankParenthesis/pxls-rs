@@ -8,6 +8,7 @@ use crate::objects::UserCount;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {
+	// TODO: respect extensions specification
 	connections: HashSet<Recipient<Arc<Event>>>,
 }
 
@@ -15,7 +16,6 @@ impl Actor for BoardServer {
 	type Context = Context<Self>;
 }
 
-// TODO: move messages to separate module?
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Connect {

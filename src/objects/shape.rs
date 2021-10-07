@@ -56,7 +56,7 @@ impl Shape for VecShape {
 	}
 
 	fn transform(from: &Self, to: &Self, position: usize) -> usize {
-		todo!()
+		todo!("implement shape-to-shape transforming")
 	}
 
 	fn to_local(&self, position: usize) -> Option<(usize, usize)> {

@@ -13,6 +13,15 @@ pub struct ServerInfo {
 
 lazy_static! {
 	static ref SERVER_INFO: ServerInfo = ServerInfo {
+		// TODO: think of a good name. ideas:
+		// iridescence / pearlescence
+
+		// Using the pxls name seems bit presumptions given this shares
+		// basically nothing with original pxls, but pxls-based names could be:
+		// pxls-rs
+		// pxls 2
+		// neo-pxls
+
 		name: Some("unnamed-newpxls-rs"),
 		version: option_env!("CARGO_PKG_VERSION").filter(|s| !s.is_empty()),
 		source: option_env!("CARGO_PKG_REPOSITORY").filter(|s| !s.is_empty()),

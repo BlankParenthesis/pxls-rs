@@ -22,7 +22,7 @@ embed_migrations!();
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-	let config = crate::config::CONFIG.try_read().unwrap();
+	let config = crate::config::CONFIG.read().unwrap();
 
 	let manager = diesel::r2d2::ConnectionManager::new(config.database_url.to_string());
 	let pool = r2d2::Pool::new(manager).unwrap();
