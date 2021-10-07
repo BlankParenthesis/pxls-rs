@@ -61,7 +61,9 @@ impl FromRequest for User {
 					match response.status() {
 						StatusCode::OK => {
 							let mut permissions = HashSet::new();
+							// TODO: user permissions
 							permissions.insert(Permission::BoardsPixelsPost);
+							permissions.insert(Permission::BoardsGet);
 							response.json().await
 								.map(|user_info: UserInfo| User {
 									id: Some(user_info.sub),

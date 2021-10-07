@@ -74,7 +74,8 @@ pub async fn post(
 	database_pool: Data<Pool>,
 	_access: BoardPostAccess,
 ) -> Result<HttpResponse, Error> {
-	let board = Board::create(data, &database_pool.get().unwrap()).unwrap();
+	let connection = &database_pool.get().unwrap();
+	let board = Board::create(data, connection).unwrap();
 	let id = board.id as usize;
 
 	let mut boards = boards.write().unwrap();
@@ -104,11 +105,25 @@ pub async fn get_default(
 pub async fn get(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
+	user: Option<User>,
+	database_pool: Data<Pool>,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).map(|board| {
-		HttpResponse::Ok()
-			.json(&board.read().unwrap().info)
+		let board = board.read().unwrap();
+		let connection = &database_pool.get().unwrap();
+		let mut response = HttpResponse::Ok();
+		
+		if let Some(user) = user {
+			let cooldown_info = board.user_cooldown_info(&user, connection)
+				.unwrap();
+	
+			for (key, value) in cooldown_info.into_headers() {
+				response.header(key, value);
+			}
+		}
+
+		response.json(&board.info)
 	})
 }
 

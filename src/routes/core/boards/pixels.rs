@@ -86,17 +86,35 @@ pub async fn post(
 	user: User,
 	_access: BoardsPixelsPostAccess,
 ) -> Option<HttpResponse> {
-	board!(boards[id]).and_then(|board| {
+	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 		
-		Some(match board.try_place(&user, position, placement.color, connection) {
+		let place_attempt = board.try_place(
+			&user,
+			position,
+			placement.color,
+			connection,
+		);
+
+		let mut response = match place_attempt {
 			Ok(placement) => {
 				HttpResponse::build(StatusCode::CREATED)
 					.json(placement)
 			},
 			Err(e) => actix_web::Error::from(e).into(),
-		})
+		};
+
+		let headers = response.headers_mut();
+
+		let cooldown_info = board.user_cooldown_info(&user, connection)
+			.unwrap();
+
+		for (key, value) in cooldown_info.into_headers() {
+			headers.append(key, value);
+		}
+
+		response
 	})
 }
 

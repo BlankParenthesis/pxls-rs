@@ -12,6 +12,7 @@ use num_traits::FromPrimitive;
 use diesel::types::Record;
 use diesel::prelude::*;
 use diesel::Connection as DConnection;
+use actix_web::http::{HeaderName, HeaderValue};
 
 use crate::database::{Connection, model, schema};
 use crate::objects::{
@@ -59,6 +60,20 @@ pub struct Board {
 	pub info: BoardInfo,
 	sectors: SectorCache,
 	server: Arc<Addr<BoardServer>>,
+}
+
+pub struct CooldownInfo {
+	pixels_available: usize,
+	next_available: u32,
+}
+
+impl CooldownInfo {
+	pub fn into_headers(self) -> Vec<(HeaderName, HeaderValue)> {
+		vec![
+			(HeaderName::from_static("pxls-pixels-available"), self.pixels_available.into()),
+			(HeaderName::from_static("pxls-next-available"), self.next_available.into()),
+		]
+	}
 }
 
 #[derive(FromPrimitive)]
@@ -365,9 +380,11 @@ impl Board {
 			.max(1))
 			.unwrap();
 
-		((timestamp - self.last_place_time(user, connection).unwrap()) > self.cooldown())
-			.then(|| ())
-			.ok_or(PlaceError::Cooldown)?;
+		let cooldown_info = self.user_cooldown_info(user, connection).unwrap();
+		
+		if cooldown_info.pixels_available == 0 {
+			return Err(PlaceError::Cooldown);
+		}
 
 		let new_placement = diesel::insert_into(schema::placement::table)
 			.values(model::NewPlacement {
@@ -495,6 +512,33 @@ impl Board {
 		let server = Arc::new(BoardServer::default().start());
 
 		Ok(Board { id, info, sectors, server })
+	}
+
+	fn current_timestamp(&self) -> u32 {
+		let unix_time = SystemTime::now()
+			.duration_since(UNIX_EPOCH).unwrap()
+			.as_secs();
+
+		u32::try_from(unix_time
+			.saturating_sub(self.info.created_at)
+			.max(1))
+			.unwrap()
+	}
+
+	pub fn user_cooldown_info(
+		&self,
+		user: &User,
+		connection: &Connection,
+	) -> QueryResult<CooldownInfo> {
+		let next_available = 
+			self.last_place_time(user, connection)? + self.cooldown();
+		let pixels_available = 
+			(self.current_timestamp() >= next_available).into();
+
+		Ok(CooldownInfo {
+			pixels_available,
+			next_available,
+		})
 	}
 
 	pub async fn user_count(&self) -> UserCount {
