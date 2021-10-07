@@ -127,18 +127,36 @@ impl RangeHeader {
 	where D: Read + Seek + crate::objects::sector_cache::Len {
 		match self {
 			Self::Multi { unit, ranges } => {
-				// TODO: sort, eliminate small gaps
 				let result = ranges.iter()
 					.map(|http_range| http_range.with_length(data.len()))
 					.collect::<Result<Vec<_>, _>>()
-					.map(|ranges| {
+					.map(|mut ranges| {
+						ranges.sort_by_key(|range| range.start);
+
+						// gaps smaller than this will be collapsed
+						let inbetween_threshold = 128;
+						let mut iter = ranges.into_iter();
+						// TODO: if ranges are collapsed to a single range,
+						// it would be nice to not bother with a multipart response.
+						let mut efficient_ranges = vec![iter.next().unwrap()];
+
+						for range in iter {
+							let mut current_range = efficient_ranges.last_mut().unwrap();
+
+							if (range.start.saturating_sub(current_range.end)) < inbetween_threshold {
+								current_range.end = range.end;
+							} else {
+								efficient_ranges.push(range);
+							}
+						}
+
 						// TODO: compute capacity
 						let mut joined = Vec::new();
 						
 						// TODO: select a valid boundary (and also use it later in the multipart content type)
 						let boundary = "--hey, red";
 
-						for range in ranges {
+						for range in efficient_ranges {
 							joined.extend_from_slice(boundary.as_bytes());
 							joined.extend_from_slice(b"\r\n");
 							joined.extend_from_slice(b"content-type: application/octet-stream");
