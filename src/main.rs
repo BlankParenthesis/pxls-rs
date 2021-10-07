@@ -28,7 +28,7 @@ async fn main() -> std::io::Result<()> {
 	let pool = r2d2::Pool::new(manager).unwrap();
 	let connection = pool.get().unwrap();
 
-    embedded_migrations::run_with_output(&connection, &mut std::io::stdout())
+	embedded_migrations::run_with_output(&connection, &mut std::io::stdout())
 		.expect("Migration failed");
 
 	let connection = pool.get().unwrap();

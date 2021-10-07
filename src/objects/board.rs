@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use http::Uri;
-use num_derive::FromPrimitive;    
+use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use diesel::types::Record;
 use diesel::prelude::*;

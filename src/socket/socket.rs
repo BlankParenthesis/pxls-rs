@@ -95,10 +95,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for BoardSocket {
 				ctx.close(None);
 				ctx.stop();
 			},
-            Ok(ws::Message::Close(reason)) => {
-                ctx.close(reason);
-                ctx.stop();
-            },
+			Ok(ws::Message::Close(reason)) => {
+				ctx.close(reason);
+				ctx.stop();
+			},
 			_ => (),
 		}
 	}
