@@ -6,13 +6,10 @@ use enum_map::EnumMap;
 
 use crate::socket::event::Event;
 use crate::socket::socket::Extension;
-use crate::objects::UserCount;
 
 #[derive(Default, Debug)]
 pub struct BoardServer {
-	// TODO: respect extensions specification
 	connections_by_extension: EnumMap<Extension, HashSet<Recipient<Arc<Event>>>>,
-	//connections_by_user_id: HashMap<Option<String>, HashSet<Recipient<Arc<Event>>>>,
 }
 
 impl Actor for BoardServer {
@@ -78,26 +75,6 @@ impl Handler<RunEvent> for BoardServer {
 		let connections = &self.connections_by_extension[event.as_ref().into()];
 		for connection in connections.iter() {
 			connection.do_send(event.clone()).unwrap();
-		}
-	}
-}
-
-#[derive(Message)]
-#[rtype(result = "UserCount")]
-pub struct RequestUserCount;
-
-impl Handler<RequestUserCount> for BoardServer {
-	type Result = UserCount;
-
-	fn handle(
-		&mut self, 
-		_: RequestUserCount,
-		_: &mut Self::Context,
-	) -> Self::Result {
-		UserCount {
-			active: self.connections_by_extension[Extension::Core].len(),
-			idle: 0,
-			idle_timeout: 5 * 60,
 		}
 	}
 }

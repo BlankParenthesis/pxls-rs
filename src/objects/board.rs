@@ -28,7 +28,7 @@ use crate::objects::{
 	SectorCacheAccess,
 	UserCount,
 };
-use crate::socket::server::{BoardServer, RequestUserCount, RunEvent};
+use crate::socket::server::{BoardServer, RunEvent};
 use crate::socket::socket::{BoardSocket, Extension};
 use crate::socket::event::{Event, BoardInfo as EventBoardInfo, BoardData, Change};
 
@@ -541,8 +541,43 @@ impl Board {
 		})
 	}
 
-	pub async fn user_count(&self) -> UserCount {
-		self.server.send(RequestUserCount {}).await.unwrap()
+	pub async fn user_count(
+		&self,
+		connection: &Connection,
+	) -> QueryResult<UserCount> {
+		// in seconds
+		let idle_timeout = 5 * 60;
+		let current_time = self.current_timestamp();
+		let threshold_time = i32::try_from(current_time.saturating_sub(idle_timeout)).unwrap();
+
+		#[derive(QueryableByName)]
+		struct Count {
+			#[sql_type = "diesel::sql_types::Int8"]
+			active: i64,
+		}
+
+		// TODO: this is possible in diesel's master branch but not available yet
+		/*
+		let active = schema::placement::table.select(
+				diesel::dsl::count_distinct(schema::placement::user_id)
+			).filter(schema::placement::board.eq(self.id)
+				.and(schema::placement::timestamp.gt(threshold_time)))
+			.get_result::<i64>(connection)? as usize;
+		*/
+		// so instead we have this ugliness 😭:
+
+		let count = diesel::sql_query("
+			SElECT COUNT(DISTINCT user_id) AS active
+			FROM placement
+			WHERE board = $1
+			AND timestamp > $2")
+			.bind::<diesel::sql_types::Int4, _>(self.id)
+			.bind::<diesel::sql_types::Int4, _>(threshold_time)
+			.get_result::<Count>(connection)?;
+		
+		let active = count.active as usize;
+
+		Ok(UserCount { idle_timeout, active })
 	}
 
 	pub fn new_socket(&self, extensions: HashSet<Extension>) -> BoardSocket {

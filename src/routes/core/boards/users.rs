@@ -6,11 +6,13 @@ guard!(BoardUsersAccess, BoardsUsers);
 pub async fn get(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
+	database_pool: Data<Pool>,
 	_access: BoardUsersAccess,
 ) -> Option<HttpResponse>  {
 	if let Some(board) = board!(boards[id]) {
 		let board = board.read().unwrap();
-		let user_count = board.user_count().await;
+		let connection = database_pool.get().unwrap();
+		let user_count = board.user_count(&connection).await.unwrap();
 		
 		Some(HttpResponse::Ok().json(user_count))
 	} else {
