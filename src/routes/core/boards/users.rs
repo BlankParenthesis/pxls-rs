@@ -12,7 +12,7 @@ pub async fn get(
 	if let Some(board) = board!(boards[id]) {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let user_count = board.user_count(&connection).await.unwrap();
+		let user_count = board.user_count(&connection).unwrap();
 		
 		Some(HttpResponse::Ok().json(user_count))
 	} else {

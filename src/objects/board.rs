@@ -62,12 +62,37 @@ pub struct Board {
 	server: Arc<Addr<BoardServer>>,
 }
 
+#[derive(Debug)]
 pub struct CooldownInfo {
 	pixels_available: usize,
 	next_available: Option<u32>,
 }
 
 impl CooldownInfo {
+	fn new(
+		cooldowns: &[u32],
+		current_timestamp: u32
+	) -> Self {
+		let pixels_available = cooldowns.iter()
+			.enumerate()
+			.take_while(|(_, cooldown)| **cooldown <= current_timestamp)
+			.last()
+			.map(|(i, _)| i + 1)
+			.unwrap_or(0);
+
+		Self::with_count(cooldowns, pixels_available)
+	}
+
+	fn with_count(
+		cooldowns: &[u32],
+		pixels_available: usize
+	) -> Self {
+		Self {
+			pixels_available,
+			next_available: cooldowns.get(pixels_available).copied(),
+		}
+	}
+
 	pub fn into_headers(self) -> Vec<(HeaderName, HeaderValue)> {
 		let mut headers = vec![
 			(
@@ -346,11 +371,6 @@ impl Board {
 			.unwrap_or(0))
 	}
 
-	pub fn cooldown(&self) -> u32 {
-		// TODO: proper cooldown
-		30
-	}
-
 	pub fn try_place(
 		&self,
 		user: &User,
@@ -534,24 +554,46 @@ impl Board {
 	// TODO: move to a field of info
 	const MAX_STACKED: usize = 6;
 
-	// TODO: replace with a better function (or set of functions)
-	fn cooldown_info(&self, time_elapsed: u32) -> CooldownInfo {
-		let cooldown = self.cooldown();
-		let pixels_available = ((time_elapsed / cooldown) as usize)
-			.min(Board::MAX_STACKED);
-		if pixels_available == Board::MAX_STACKED {
-			CooldownInfo {
-				pixels_available,
-				next_available: None,
-			}
-		} else {
-			let remaining = cooldown - (time_elapsed % cooldown);
+	fn pixel_density_at_time(
+		&self,
+		position: u64,
+		timestamp: u32,
+		connection: &Connection,
+	) -> QueryResult<usize> {
+		schema::placement::table.select(diesel::dsl::count_star())
+			.filter(schema::placement::position.eq(position as i64)
+				.and(schema::placement::timestamp.lt(timestamp as i32)))
+			.first(connection)
+			.map(|i: i64| usize::try_from(i).unwrap())
+	}
 
-			CooldownInfo {
-				pixels_available,
-				next_available: Some(self.current_timestamp() + remaining),
-			}
-		}
+	// TODO: This should REALLY be cached.
+	// It's very heavy for how often it should be used, but values should
+	// continue to be valid until the cooldown formula itself changes.
+	fn calculate_cooldowns(
+		&self,
+		placement: Option<&model::Placement>,
+		connection: &Connection,
+	) -> QueryResult<Vec<u32>> {
+		// this is pretty ugly
+		// TODO: generalize for more cooldown variables
+		let (activity, density) = if let Some(placement) = placement {
+			(
+				self.user_count_for_time(placement.timestamp as u32, connection)?.active,
+				self.pixel_density_at_time(placement.position as u64, placement.timestamp as u32, connection)?,
+			)
+		} else {
+			(0, 0)
+		};
+
+		// TODO: proper cooldown
+		Ok(std::iter::repeat(30)
+			.enumerate()
+			.map(|(i, c)| u32::try_from((i + 1) * c).unwrap())
+			.zip(std::iter::repeat(placement.map(|p| p.timestamp as u32).unwrap_or(0)))
+			.map(|(a, b)| a + b)
+			.take(Board::MAX_STACKED)
+			.collect())
 	}
 
 	pub fn user_cooldown_info(
@@ -561,81 +603,100 @@ impl Board {
 	) -> QueryResult<CooldownInfo> {
 		let current_time = self.current_timestamp();
 
-		let placements = std::iter::once(0)
-			.chain(schema::placement::table
-				.select(schema::placement::timestamp)
-				.filter(schema::placement::board.eq(self.id)
-					.and(schema::placement::user_id.eq(user.id.as_ref())))
-				.order((schema::placement::timestamp.desc(), schema::placement::id.desc()))
-				.limit(Board::MAX_STACKED as i64)
-				.get_results::<i32>(connection)?
-				.into_iter()
-				.rev())
-			.map(|i| i as u32)
+		let placements = schema::placement::table
+			.filter(schema::placement::board.eq(self.id)
+				.and(schema::placement::user_id.eq(user.id.as_ref())))
+			.order((schema::placement::timestamp.desc(), schema::placement::id.desc()))
+			.limit(Board::MAX_STACKED as i64)
+			.get_results::<model::Placement>(connection)?
+			.into_iter()
+			.rev()
 			.collect::<Vec<_>>();
 
-		match &*placements {
-			// no placements have occurred yet, the identity cooldown for this
-			// time is fine.
-			&[_zero] => Ok(self.cooldown_info(current_time)),
-			// determining cooldown is non-trivial
-			placements => {
-				let mut info = self.cooldown_info(
-					current_time.saturating_sub(*placements.last().unwrap()),
-				);
+		if placements.is_empty() {
+			Ok(CooldownInfo::new(
+				&self.calculate_cooldowns(None, connection)?,
+				current_time
+			))
+		} else {
+			let most_recent = placements.last().unwrap();
 
-				// If we would already have MAX_STACKED just from waiting, we
-				// don't need to check previous data since we can't possibly
-				// have more.
-				// Similarly, we know we needed to spend a pixel on the most
-				// recent placement so we can't have saved more than 
-				// `MAX_STACKED - 1` since then.
-				// TODO: actually, I think this generalizes and we only have to
-				// check the last `Board::MAX_STACKED - current_stacked` pixels.
-				if info.pixels_available < (Board::MAX_STACKED - 1) {
-					let mut pixels: usize = 0;
-			
-					// In order to place MAX_STACKED pixels, a user must either:
-					// - start with MAX_STACKED already stacked or
-					// - wait between each placement enough to gain the pixels.
-					// By looking at how many pixels a user would have gained
-					// between each placement we can determine a minimum number
-					// of pixels, and by assuming they start with MAX_STACKED we
-					// can  also infer a maximum.
-					// These bounds necessarily converge after looking at
-					// MAX_STACKED placements because of the two conditions
-					// outlined above.
+			let cooldowns = self.calculate_cooldowns(
+				Some(most_recent),
+				connection,
+			)?;
 
-					// NOTE: an important assumption here is that to stack N
-					// pixels it takes the same amount of time from the last
-					// placement __regardless__ of what the current stack is.
-		
+			let info = CooldownInfo::new(&cooldowns, current_time);
 
-					for pair in placements.windows(2) {
-						let delta = pair[1] - pair[0];
+			// If we would already have MAX_STACKED just from waiting, we
+			// don't need to check previous data since we can't possibly
+			// have more.
+			// Similarly, we know we needed to spend a pixel on the most
+			// recent placement so we can't have saved more than 
+			// `MAX_STACKED - 1` since then.
+			// TODO: actually, I think this generalizes and we only have to
+			// check the last `Board::MAX_STACKED - current_stacked` pixels.
+			if info.pixels_available < (Board::MAX_STACKED - 1) {
+				let mut pixels: usize = 0;
 		
-						let info = self.cooldown_info(delta);
-		
-						pixels = pixels.max(info.pixels_available)
-							.saturating_sub(1);
-					}
-		
-					info.pixels_available = info.pixels_available.max(pixels);
+				// In order to place MAX_STACKED pixels, a user must either:
+				// - start with MAX_STACKED already stacked or
+				// - wait between each placement enough to gain the pixels.
+				// By looking at how many pixels a user would have gained
+				// between each placement we can determine a minimum number
+				// of pixels, and by assuming they start with MAX_STACKED we
+				// can  also infer a maximum.
+				// These bounds necessarily converge after looking at
+				// MAX_STACKED placements because of the two conditions
+				// outlined above.
+
+				// NOTE: an important assumption here is that to stack N
+				// pixels it takes the same amount of time from the last
+				// placement __regardless__ of what the current stack is.
+	
+
+				for pair in placements.windows(2) {
+					let info = CooldownInfo::new(
+						&self.calculate_cooldowns(Some(&pair[0]), connection)?,
+						pair[1].timestamp as u32,
+					);
+	
+					pixels = pixels.max(info.pixels_available)
+						.saturating_sub(1);
 				}
 	
+				Ok(CooldownInfo::with_count(
+					&cooldowns,
+					info.pixels_available.max(pixels),
+				))
+			} else {
 				Ok(info)
-			},
+			}
+
 		}
 	}
 
-	pub async fn user_count(
+	fn user_count_for_time(
 		&self,
+		timestamp: u32,
 		connection: &Connection,
 	) -> QueryResult<UserCount> {
-		// in seconds
+		// TODO: make configurable
 		let idle_timeout = 5 * 60;
-		let current_time = self.current_timestamp();
-		let threshold_time = i32::try_from(current_time.saturating_sub(idle_timeout)).unwrap();
+		let max_time = i32::try_from(timestamp).unwrap();
+		let min_time = i32::try_from(
+			timestamp.saturating_sub(idle_timeout)
+		).unwrap();
+
+		// TODO: this is possible in diesel's master branch but not available yet
+		/*
+		let active = schema::placement::table.select(
+				diesel::dsl::count_distinct(schema::placement::user_id)
+			).filter(schema::placement::board.eq(self.id)
+				.and(schema::placement::timestamp.between(min_time, max_time)))
+			.get_result::<i64>(connection)? as usize;
+		*/
+		// so instead we have this ugliness 😭:
 
 		#[derive(QueryableByName)]
 		struct Count {
@@ -643,28 +704,26 @@ impl Board {
 			active: i64,
 		}
 
-		// TODO: this is possible in diesel's master branch but not available yet
-		/*
-		let active = schema::placement::table.select(
-				diesel::dsl::count_distinct(schema::placement::user_id)
-			).filter(schema::placement::board.eq(self.id)
-				.and(schema::placement::timestamp.gt(threshold_time)))
-			.get_result::<i64>(connection)? as usize;
-		*/
-		// so instead we have this ugliness 😭:
-
 		let count = diesel::sql_query("
 			SElECT COUNT(DISTINCT user_id) AS active
 			FROM placement
 			WHERE board = $1
-			AND timestamp > $2")
+			AND timestamp BETWEEN $2 AND $3")
 			.bind::<diesel::sql_types::Int4, _>(self.id)
-			.bind::<diesel::sql_types::Int4, _>(threshold_time)
+			.bind::<diesel::sql_types::Int4, _>(min_time)
+			.bind::<diesel::sql_types::Int4, _>(max_time)
 			.get_result::<Count>(connection)?;
 		
 		let active = count.active as usize;
 
 		Ok(UserCount { idle_timeout, active })
+	}
+
+	pub fn user_count(
+		&self,
+		connection: &Connection,
+	) -> QueryResult<UserCount> {
+		self.user_count_for_time(self.current_timestamp(), connection)
 	}
 
 	pub fn new_socket(&self, extensions: HashSet<Extension>) -> BoardSocket {
