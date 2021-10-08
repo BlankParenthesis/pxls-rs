@@ -64,15 +64,28 @@ pub struct Board {
 
 pub struct CooldownInfo {
 	pixels_available: usize,
-	next_available: u32,
+	next_available: Option<u32>,
 }
 
 impl CooldownInfo {
 	pub fn into_headers(self) -> Vec<(HeaderName, HeaderValue)> {
-		vec![
-			(HeaderName::from_static("pxls-pixels-available"), self.pixels_available.into()),
-			(HeaderName::from_static("pxls-next-available"), self.next_available.into()),
-		]
+		let mut headers = vec![
+			(
+				HeaderName::from_static("pxls-pixels-available"),
+				self.pixels_available.into()
+			),
+		];
+
+		if let Some(next_available) = self.next_available {
+			headers.push(
+				(
+					HeaderName::from_static("pxls-next-available"),
+					next_available.into()
+				)
+			);
+		}
+
+		headers
 	}
 }
 
@@ -372,14 +385,7 @@ impl Board {
 			.then(|| ())
 			.ok_or(PlaceError::NoOp)?;
 
-		let unix_time = SystemTime::now()
-			.duration_since(UNIX_EPOCH).unwrap()
-			.as_secs();
-		let timestamp = u32::try_from(unix_time
-			.saturating_sub(self.info.created_at)
-			.max(1))
-			.unwrap();
-
+		let timestamp = self.current_timestamp();
 		let cooldown_info = self.user_cooldown_info(user, connection).unwrap();
 		
 		if cooldown_info.pixels_available == 0 {
@@ -525,20 +531,101 @@ impl Board {
 			.unwrap()
 	}
 
+	// TODO: move to a field of info
+	const MAX_STACKED: usize = 6;
+
+	// TODO: replace with a better function (or set of functions)
+	fn cooldown_info(&self, time_elapsed: u32) -> CooldownInfo {
+		let cooldown = self.cooldown();
+		let pixels_available = ((time_elapsed / cooldown) as usize)
+			.min(Board::MAX_STACKED);
+		if pixels_available == Board::MAX_STACKED {
+			CooldownInfo {
+				pixels_available,
+				next_available: None,
+			}
+		} else {
+			let remaining = cooldown - (time_elapsed % cooldown);
+
+			CooldownInfo {
+				pixels_available,
+				next_available: Some(self.current_timestamp() + remaining),
+			}
+		}
+	}
+
 	pub fn user_cooldown_info(
 		&self,
 		user: &User,
 		connection: &Connection,
 	) -> QueryResult<CooldownInfo> {
-		let next_available = 
-			self.last_place_time(user, connection)? + self.cooldown();
-		let pixels_available = 
-			(self.current_timestamp() >= next_available).into();
+		let current_time = self.current_timestamp();
 
-		Ok(CooldownInfo {
-			pixels_available,
-			next_available,
-		})
+		let placements = std::iter::once(0)
+			.chain(schema::placement::table
+				.select(schema::placement::timestamp)
+				.filter(schema::placement::board.eq(self.id)
+					.and(schema::placement::user_id.eq(user.id.as_ref())))
+				.order((schema::placement::timestamp.desc(), schema::placement::id.desc()))
+				.limit(Board::MAX_STACKED as i64)
+				.get_results::<i32>(connection)?
+				.into_iter()
+				.rev())
+			.map(|i| i as u32)
+			.collect::<Vec<_>>();
+
+		match &*placements {
+			// no placements have occurred yet, the identity cooldown for this
+			// time is fine.
+			&[_zero] => Ok(self.cooldown_info(current_time)),
+			// determining cooldown is non-trivial
+			placements => {
+				let mut info = self.cooldown_info(
+					current_time.saturating_sub(*placements.last().unwrap()),
+				);
+
+				// If we would already have MAX_STACKED just from waiting, we
+				// don't need to check previous data since we can't possibly
+				// have more.
+				// Similarly, we know we needed to spend a pixel on the most
+				// recent placement so we can't have saved more than 
+				// `MAX_STACKED - 1` since then.
+				// TODO: actually, I think this generalizes and we only have to
+				// check the last `Board::MAX_STACKED - current_stacked` pixels.
+				if info.pixels_available < (Board::MAX_STACKED - 1) {
+					let mut pixels: usize = 0;
+			
+					// In order to place MAX_STACKED pixels, a user must either:
+					// - start with MAX_STACKED already stacked or
+					// - wait between each placement enough to gain the pixels.
+					// By looking at how many pixels a user would have gained
+					// between each placement we can determine a minimum number
+					// of pixels, and by assuming they start with MAX_STACKED we
+					// can  also infer a maximum.
+					// These bounds necessarily converge after looking at
+					// MAX_STACKED placements because of the two conditions
+					// outlined above.
+
+					// NOTE: an important assumption here is that to stack N
+					// pixels it takes the same amount of time from the last
+					// placement __regardless__ of what the current stack is.
+		
+
+					for pair in placements.windows(2) {
+						let delta = pair[1] - pair[0];
+		
+						let info = self.cooldown_info(delta);
+		
+						pixels = pixels.max(info.pixels_available)
+							.saturating_sub(1);
+					}
+		
+					info.pixels_available = info.pixels_available.max(pixels);
+				}
+	
+				Ok(info)
+			},
+		}
 	}
 
 	pub async fn user_count(
