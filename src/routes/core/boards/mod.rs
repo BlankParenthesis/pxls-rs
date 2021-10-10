@@ -26,6 +26,9 @@ guard!(BoardPatchAccess, BoardsPatch);
 guard!(BoardDeleteAccess, BoardsDelete);
 guard!(SocketAccess, SocketCore);
 
+// TODO: actix-web apparently deals very badly with diesel's blocking IO.
+// Database operations should be wrapped in web::block and awaited.
+
 #[get("/boards")]
 pub async fn list(
 	Query(options): Query<PaginationOptions<usize>>,
@@ -179,6 +182,7 @@ pub async fn socket(
 				.map(Extension::try_from)
 				.collect();
 
+			// TODO: check client has permissions for all extensions.
 			if let Ok(extensions) = extensions {
 				ws::start(board.new_socket(extensions), &request, stream)
 			} else {

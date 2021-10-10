@@ -20,6 +20,7 @@ pub struct BoardSector {
 	pub timestamps: BytesMut,
 	pub mask: BytesMut,
 	pub initial: BytesMut,
+	// TODO: maybe a density buffer for how many placements there have been
 }
 
 impl BoardSector {

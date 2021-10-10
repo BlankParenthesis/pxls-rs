@@ -329,6 +329,8 @@ impl Board {
 	}
 
 	pub fn delete(self, connection: &Connection) -> QueryResult<()> {
+		// FIXME: close socket server
+
 		connection.transaction(|| {
 			diesel::delete(schema::board_sector::table)
 				.filter(schema::board_sector::board.eq(self.id))

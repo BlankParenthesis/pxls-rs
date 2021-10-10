@@ -76,7 +76,7 @@ impl FromRequest for User {
 							permissions.insert(Permission::BoardsPixelsPost);
 							permissions.insert(Permission::BoardsGet);
 							response.json().await
-								.map(|user_info: UserInfo| User {
+								.map(|user_info: UserInfo| Self {
 									id: Some(user_info.sub),
 									permissions,
 								})
