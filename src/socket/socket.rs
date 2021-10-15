@@ -8,10 +8,11 @@ use std::fmt;
 use std::sync::Arc;
 use enum_map::Enum;
 
+use crate::objects::board::CooldownInfo;
 use crate::socket::server::{BoardServer, Connect, Disconnect};
 use crate::socket::event::Event;
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Enum)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Enum, Copy)]
 pub enum Extension {
 	Core,
 }
@@ -39,9 +40,15 @@ pub struct SocketOptions {
 	pub extensions: Option<HashSet<String>>,
 }
 
+pub struct BoardSocketInitInfo {
+	pub cooldown_info: CooldownInfo,
+}
+
 pub struct BoardSocket {
+	pub user_id: Option<String>,
 	pub extensions: HashSet<Extension>,
 	pub server: Arc<Addr<BoardServer>>,
+	pub init_info: Option<BoardSocketInitInfo>,
 }
 
 impl Handler<Arc<Event>> for BoardSocket {
@@ -60,10 +67,15 @@ impl Actor for BoardSocket {
 	type Context = ws::WebsocketContext<Self>;
 
 	fn started(&mut self, ctx: &mut Self::Context) {
+		let BoardSocketInitInfo { cooldown_info } = 
+			self.init_info.take().expect("Socket init data consumed twice");
+
 		self.server
 			.send(Connect {
-				handler: ctx.address().recipient(),
+				socket: ctx.address().recipient(),
+				user_id: self.user_id.clone(),
 				extensions: self.extensions.clone(),
+				cooldown_info,
 			})
 			.into_actor(self)
 			.then(|res, _act, ctx| {
@@ -77,7 +89,11 @@ impl Actor for BoardSocket {
 
 	fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
 		self.server
-			.do_send(Disconnect { handler: ctx.address().recipient() });
+			.do_send(Disconnect {
+				socket: ctx.address().recipient(),
+				user_id: self.user_id.clone(),
+				extensions: self.extensions.clone(),
+			});
 		Running::Stop
 	}
 }

@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use actix::prelude::*;
 use actix_web::web::BufMut;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Instant, Duration};
 use std::io::{Write, Seek, SeekFrom};
 use std::sync::Arc;
 use std::collections::HashSet;
@@ -28,8 +28,8 @@ use crate::objects::{
 	SectorCacheAccess,
 	UserCount,
 };
-use crate::socket::server::{BoardServer, RunEvent};
-use crate::socket::socket::{BoardSocket, Extension};
+use crate::socket::server::{BoardServer, Cooldown, RunEvent};
+use crate::socket::socket::{BoardSocket, Extension, BoardSocketInitInfo};
 use crate::socket::event::{Event, BoardInfo as EventBoardInfo, BoardData, Change};
 
 #[derive(Serialize, Debug)]
@@ -62,16 +62,16 @@ pub struct Board {
 	server: Arc<Addr<BoardServer>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CooldownInfo {
-	pixels_available: usize,
-	next_available: Option<u32>,
+	cooldowns: Vec<SystemTime>,
+	pub pixels_available: usize,
 }
 
 impl CooldownInfo {
 	fn new(
-		cooldowns: &[u32],
-		current_timestamp: u32
+		cooldowns: Vec<SystemTime>,
+		current_timestamp: SystemTime,
 	) -> Self {
 		let pixels_available = cooldowns.iter()
 			.enumerate()
@@ -80,16 +80,9 @@ impl CooldownInfo {
 			.map(|(i, _)| i + 1)
 			.unwrap_or(0);
 
-		Self::with_count(cooldowns, pixels_available)
-	}
-
-	fn with_count(
-		cooldowns: &[u32],
-		pixels_available: usize
-	) -> Self {
 		Self {
+			cooldowns,
 			pixels_available,
-			next_available: cooldowns.get(pixels_available).copied(),
 		}
 	}
 
@@ -101,16 +94,36 @@ impl CooldownInfo {
 			),
 		];
 
-		if let Some(next_available) = self.next_available {
+		if let Some(next_available) = self.cooldowns.get(self.pixels_available) {
 			headers.push(
 				(
 					HeaderName::from_static("pxls-next-available"),
-					next_available.into()
+					(*next_available)
+						.duration_since(UNIX_EPOCH)
+						.unwrap()
+						.as_secs()
+						.into()
 				)
 			);
 		}
 
 		headers
+	}
+
+	pub fn cooldown(&self) -> Option<SystemTime> {
+		self.cooldowns.get(self.pixels_available).map(SystemTime::clone)
+	}
+}
+
+impl Iterator for CooldownInfo {
+	type Item = SystemTime;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		let time = self.cooldown();
+		if time.is_some() {
+			self.pixels_available += 1;
+		}
+		time
 	}
 }
 
@@ -222,7 +235,7 @@ impl Board {
 			}),
 		};
 
-		self.server.do_send(RunEvent { event });
+		self.server.do_send(RunEvent { event, user_id: None });
 
 		Ok(())
 	}
@@ -254,7 +267,7 @@ impl Board {
 			}),
 		};
 
-		self.server.do_send(RunEvent { event });
+		self.server.do_send(RunEvent { event, user_id: None });
 
 		Ok(())
 	}
@@ -323,7 +336,7 @@ impl Board {
 			data: None,
 		};
 
-		self.server.do_send(RunEvent { event });
+		self.server.do_send(RunEvent { event, user_id: None });
 
 		Ok(())
 	}
@@ -447,7 +460,16 @@ impl Board {
 			}),
 		};
 
-		self.server.do_send(RunEvent { event });
+		self.server.do_send(RunEvent { event, user_id: None });
+
+		if let Some(user_id) = user.id.clone() {
+			let cooldown_info = self.user_cooldown_info(user, connection).unwrap();
+
+			self.server.do_send(Cooldown {
+				cooldown_info,
+				user_id,
+			});
+		}
 
 		Ok(new_placement)
 	}
@@ -576,7 +598,7 @@ impl Board {
 		&self,
 		placement: Option<&model::Placement>,
 		connection: &Connection,
-	) -> QueryResult<Vec<u32>> {
+	) -> QueryResult<Vec<SystemTime>> {
 		// this is pretty ugly
 		// TODO: generalize for more cooldown variables
 		let (activity, density) = if let Some(placement) = placement {
@@ -588,6 +610,8 @@ impl Board {
 			(0, 0)
 		};
 
+		let board_time = self.info.created_at;
+
 		// TODO: proper cooldown
 		Ok(std::iter::repeat(30)
 			.enumerate()
@@ -595,7 +619,27 @@ impl Board {
 			.zip(std::iter::repeat(placement.map(|p| p.timestamp as u32).unwrap_or(0)))
 			.map(|(a, b)| a + b)
 			.take(Board::MAX_STACKED)
+			.map(|offset| board_time + offset as u64)
+			.map(Duration::from_secs)
+			.map(|offset| UNIX_EPOCH + offset)
 			.collect())
+	}
+
+	fn recent_user_placements(
+		&self,
+		user: &User,
+		limit: usize,
+		connection: &Connection,
+	) -> QueryResult<Vec<model::Placement>> {
+		Ok(schema::placement::table
+			.filter(schema::placement::board.eq(self.id)
+				.and(schema::placement::user_id.eq(user.id.as_ref())))
+			.order((schema::placement::timestamp.desc(), schema::placement::id.desc()))
+			.limit(limit as i64)
+			.get_results::<model::Placement>(connection)?
+			.into_iter()
+			.rev()
+			.collect::<Vec<_>>())
 	}
 
 	pub fn user_cooldown_info(
@@ -603,79 +647,65 @@ impl Board {
 		user: &User,
 		connection: &Connection,
 	) -> QueryResult<CooldownInfo> {
-		let current_time = self.current_timestamp();
+		let placements = self.recent_user_placements(
+			user,
+			Board::MAX_STACKED,
+			connection,
+		)?;
 
-		let placements = schema::placement::table
-			.filter(schema::placement::board.eq(self.id)
-				.and(schema::placement::user_id.eq(user.id.as_ref())))
-			.order((schema::placement::timestamp.desc(), schema::placement::id.desc()))
-			.limit(Board::MAX_STACKED as i64)
-			.get_results::<model::Placement>(connection)?
-			.into_iter()
-			.rev()
-			.collect::<Vec<_>>();
+		let cooldowns = self.calculate_cooldowns(
+			placements.last(),
+			connection,
+		)?;
 
-		if placements.is_empty() {
-			Ok(CooldownInfo::new(
-				&self.calculate_cooldowns(None, connection)?,
-				current_time
-			))
-		} else {
-			let most_recent = placements.last().unwrap();
+		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
 
-			let cooldowns = self.calculate_cooldowns(
-				Some(most_recent),
-				connection,
-			)?;
+		// If we would already have MAX_STACKED just from waiting, we
+		// don't need to check previous data since we can't possibly
+		// have more.
+		// Similarly, we know we needed to spend a pixel on the most
+		// recent placement so we can't have saved more than 
+		// `MAX_STACKED - 1` since then.
+		// TODO: actually, I think this generalizes and we only have to
+		// check the last `Board::MAX_STACKED - current_stacked` pixels.
+		let incomplete_info_is_correct = 
+			info.pixels_available >= (Board::MAX_STACKED - 1);
 
-			let info = CooldownInfo::new(&cooldowns, current_time);
+		if !placements.is_empty() && !incomplete_info_is_correct {
+			// In order to place MAX_STACKED pixels, a user must either:
+			// - start with MAX_STACKED already stacked or
+			// - wait between each placement enough to gain the pixels.
+			// By looking at how many pixels a user would have gained
+			// between each placement we can determine a minimum number
+			// of pixels, and by assuming they start with MAX_STACKED we
+			// can  also infer a maximum.
+			// These bounds necessarily converge after looking at
+			// MAX_STACKED placements because of the two conditions
+			// outlined above.
 
-			// If we would already have MAX_STACKED just from waiting, we
-			// don't need to check previous data since we can't possibly
-			// have more.
-			// Similarly, we know we needed to spend a pixel on the most
-			// recent placement so we can't have saved more than 
-			// `MAX_STACKED - 1` since then.
-			// TODO: actually, I think this generalizes and we only have to
-			// check the last `Board::MAX_STACKED - current_stacked` pixels.
-			if info.pixels_available < (Board::MAX_STACKED - 1) {
-				let mut pixels: usize = 0;
-		
-				// In order to place MAX_STACKED pixels, a user must either:
-				// - start with MAX_STACKED already stacked or
-				// - wait between each placement enough to gain the pixels.
-				// By looking at how many pixels a user would have gained
-				// between each placement we can determine a minimum number
-				// of pixels, and by assuming they start with MAX_STACKED we
-				// can  also infer a maximum.
-				// These bounds necessarily converge after looking at
-				// MAX_STACKED placements because of the two conditions
-				// outlined above.
+			// NOTE: an important assumption here is that to stack N
+			// pixels it takes the same amount of time from the last
+			// placement __regardless__ of what the current stack is.
 
-				// NOTE: an important assumption here is that to stack N
-				// pixels it takes the same amount of time from the last
-				// placement __regardless__ of what the current stack is.
-	
+			let mut pixels: usize = 0;
 
-				for pair in placements.windows(2) {
-					let info = CooldownInfo::new(
-						&self.calculate_cooldowns(Some(&pair[0]), connection)?,
-						pair[1].timestamp as u32,
-					);
-	
-					pixels = pixels.max(info.pixels_available)
-						.saturating_sub(1);
-				}
-	
-				Ok(CooldownInfo::with_count(
-					&cooldowns,
-					info.pixels_available.max(pixels),
-				))
-			} else {
-				Ok(info)
+			for pair in placements.windows(2) {
+				let info = CooldownInfo::new(
+					self.calculate_cooldowns(Some(&pair[0]), connection)?,
+					UNIX_EPOCH + Duration::from_secs(
+						u64::from(pair[1].timestamp as u32)
+							+ self.info.created_at,
+					),
+				);
+
+				pixels = pixels.max(info.pixels_available)
+					.saturating_sub(1);
 			}
 
+			info.pixels_available = info.pixels_available.max(pixels);
 		}
+
+		Ok(info)
 	}
 
 	fn user_count_for_time(
@@ -728,11 +758,31 @@ impl Board {
 		self.user_count_for_time(self.current_timestamp(), connection)
 	}
 
-	pub fn new_socket(&self, extensions: HashSet<Extension>) -> BoardSocket {
-		BoardSocket {
+	pub fn new_socket(
+		&self,
+		extensions: HashSet<Extension>,
+		user: Option<User>,
+		connection: &Connection,
+	) -> QueryResult<BoardSocket> {
+		let cooldown_info = if let Some(ref user) = user {
+			self.user_cooldown_info(user, connection)?
+		} else {
+			CooldownInfo::new(
+				self.calculate_cooldowns(None, connection)?,
+				SystemTime::now(),
+			)
+		};
+
+		let user_id = user.and_then(|user| user.id);
+
+		let init_info = Some(BoardSocketInitInfo { cooldown_info });
+
+		Ok(BoardSocket {
 			extensions,
-			server: self.server.clone()
-		}
+			server: self.server.clone(),
+			user_id,
+			init_info,
+		})
 	}
 }
 

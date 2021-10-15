@@ -9,6 +9,7 @@ use http::StatusCode;
 
 use crate::access::permissions::Permission;
 
+#[derive(Debug)]
 pub struct User {
 	pub id: Option<String>,
 	pub permissions: HashSet<Permission>,
@@ -75,6 +76,7 @@ impl FromRequest for User {
 							// TODO: user permissions
 							permissions.insert(Permission::BoardsPixelsPost);
 							permissions.insert(Permission::BoardsGet);
+							permissions.insert(Permission::SocketCore);
 							response.json().await
 								.map(|user_info: UserInfo| Self {
 									id: Some(user_info.sub),

@@ -6,10 +6,10 @@ Note: that specification is evolving as this is worked on, so both are likely to
 
 Important missing features:
 - Websocket authorization isn't compatible with the browser API specification.
-- No cooldown notifications.
+- ~~No cooldown notifications.~~
 - No permissions management.
 - Basically no extensions are implemented.
-  This is intentionaal in the case of some (like chat) but the intent is definitely to implement others in future.
+  This is intentional in the case of some (like chat) but the intent is definitely to implement others in future.
 
 Notable other issues:
 - Startup could be way too slow currently (boards are reconstructed from database placements).

@@ -39,7 +39,6 @@ pub enum Event {
 		info: Option<BoardInfo>,
 		data: Option<BoardData>,
 	},
-	// TODO: send this
 	PixelsAvailable {
 		count: u32,
 		next: Option<u64>,

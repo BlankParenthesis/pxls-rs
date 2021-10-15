@@ -165,17 +165,22 @@ pub async fn delete(
 }
 
 #[get("/boards/{id}/socket")]
+#[allow(clippy::too_many_arguments)] // humans don't call this function.
 pub async fn socket(
 	Path(id): Path<usize>, 
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
 	stream: Payload,
+	user: Option<User>,
 	boards: BoardDataMap,
+	database_pool: Data<Pool>,
 	_access: SocketAccess,
 ) -> Option<Result<HttpResponse, Error>> {
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 		if let Some(extensions) = &options.extensions {
+			let connection = database_pool.get().unwrap();
+
 			let extensions: Result<HashSet<Extension>, _> = extensions
 				.clone()
 				.into_iter()
@@ -184,7 +189,9 @@ pub async fn socket(
 
 			// TODO: check client has permissions for all extensions.
 			if let Ok(extensions) = extensions {
-				ws::start(board.new_socket(extensions), &request, stream)
+				let socket = board.new_socket(extensions, user, &connection).unwrap();
+
+				ws::start(socket, &request, stream)
 			} else {
 				Err(error::ErrorUnprocessableEntity(
 					"Requested extensions not supported"
