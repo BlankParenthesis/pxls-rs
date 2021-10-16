@@ -32,7 +32,8 @@ lazy_static! {
 guard!(InfoAccess, Info);
 
 #[get("/info")]
-pub async fn get(user: Option<User>) -> HttpResponse {
+pub async fn get(user: AuthedUser) -> HttpResponse {
+	let user = Option::<User>::from(user);
 	if user.unwrap_or_default().permissions.contains(&Permission::Info) {
 		HttpResponse::Ok().json(&*SERVER_INFO)
 	} else {

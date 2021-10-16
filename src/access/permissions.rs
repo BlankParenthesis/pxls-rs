@@ -57,10 +57,12 @@ macro_rules! guard {
 					required_permissions.insert(crate::access::permissions::Permission::$permission);
 				)*
 
-				let user = crate::objects::User::from_request(request, payload);
+				let user = crate::objects::AuthedUser::from_request(request, payload);
 
 				Box::pin(async move {
-					if user.await.unwrap_or_default().permissions.is_superset(&required_permissions) {
+					let user = Option::<crate::objects::User>::from(user.await?);
+
+					if user.unwrap_or_default().permissions.is_superset(&required_permissions) {
 						Ok($guard_name {})
 					} else {
 						Err(actix_web::error::ErrorForbidden("Missing Permissions"))

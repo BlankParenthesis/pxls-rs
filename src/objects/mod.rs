@@ -18,7 +18,7 @@ pub use color::{Color, Palette};
 pub use user_count::UserCount;
 pub use reference::Reference;
 pub use ranges::{RangeHeader, HttpRange};
-pub use user::User;
+pub use user::{User, AuthedUser};
 pub use patch::BinaryPatch;
 pub use board_sector::{BoardSector, SectorBuffer};
 pub use shape::{Shape, VecShape};

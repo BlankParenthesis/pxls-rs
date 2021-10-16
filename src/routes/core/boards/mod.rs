@@ -108,7 +108,7 @@ pub async fn get_default(
 pub async fn get(
 	Path(id): Path<usize>,
 	boards: BoardDataMap,
-	user: Option<User>,
+	user: AuthedUser,
 	database_pool: Data<Pool>,
 	_access: BoardGetAccess,
 ) -> Option<HttpResponse> {
@@ -117,7 +117,7 @@ pub async fn get(
 		let connection = &database_pool.get().unwrap();
 		let mut response = HttpResponse::Ok();
 		
-		if let Some(user) = user {
+		if let AuthedUser::Authed(user) = user {
 			let cooldown_info = board.user_cooldown_info(&user, connection)
 				.unwrap();
 	
@@ -171,7 +171,7 @@ pub async fn socket(
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
 	stream: Payload,
-	user: Option<User>,
+	user: AuthedUser,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
 	_access: SocketAccess,
@@ -189,7 +189,7 @@ pub async fn socket(
 
 			// TODO: check client has permissions for all extensions.
 			if let Ok(extensions) = extensions {
-				let socket = board.new_socket(extensions, user, &connection).unwrap();
+				let socket = board.new_socket(extensions, user.into(), &connection).unwrap();
 
 				ws::start(socket, &request, stream)
 			} else {

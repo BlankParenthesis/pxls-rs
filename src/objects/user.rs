@@ -38,21 +38,39 @@ impl Default for User {
 	}
 }
 
+pub enum AuthedUser {
+	Authed(User),
+	None,
+}
+
+impl From<AuthedUser> for Option<User> {
+    fn from(authed: AuthedUser) -> Self {
+        match authed {
+			AuthedUser::Authed(user) => Some(user),
+			AuthedUser::None => None,
+		}
+    }
+}
+
 #[derive(Deserialize)]
 struct UserInfo {
 	sub: String,
 }
 
-impl FromRequest for User {
+// TODO use request extensions in middleware to cache this for the request
+impl FromRequest for AuthedUser {
 	type Error = actix_web::Error;
 	type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
 	type Config = ();
 	
 	fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-		let auth = BearerAuth::from_request(req, payload).into_inner();
+		let auth = req.headers().contains_key("Authorization")
+			.then(|| BearerAuth::from_request(req, payload).into_inner());
 		Box::pin(async {
 			match auth {
-				Ok(auth) => {
+				None => Ok(Self::None),
+				Some(Err(e)) => Err(e.into()),
+				Some(Ok(auth)) => {
 					let client = actix_web::client::Client::new();
 
 					let config = crate::config::CONFIG.read().unwrap();
@@ -78,10 +96,10 @@ impl FromRequest for User {
 							permissions.insert(Permission::BoardsGet);
 							permissions.insert(Permission::SocketCore);
 							response.json().await
-								.map(|user_info: UserInfo| Self {
+								.map(|user_info: UserInfo| Self::Authed(User {
 									id: Some(user_info.sub),
 									permissions,
-								})
+								}))
 								.map_err(actix_web::error::ErrorBadGateway)
 						},
 						StatusCode::UNAUTHORIZED => {
@@ -95,7 +113,6 @@ impl FromRequest for User {
 						)
 					}
 				},
-				Err(e) => Err(e.into()),
 			}
 		})
 	}

@@ -83,14 +83,18 @@ pub async fn post(
 	Json(placement): Json<PlacementRequest>,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
-	user: User,
+	user: AuthedUser,
 	_access: BoardsPixelsPostAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
+
+		let user = Option::from(user)
+			.expect("Default user shouldn't have place permisisons");
 		
 		let place_attempt = board.try_place(
+			// TODO: maybe accept option but make sure not to allow undos etc for anon users
 			&user,
 			position,
 			placement.color,
