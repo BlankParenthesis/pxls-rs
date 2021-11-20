@@ -1,15 +1,11 @@
 use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
 use actix_web::{FromRequest, HttpRequest, dev::Payload};
-use actix_web_httpauth::extractors::{AuthenticationError, bearer::BearerAuth};
-use actix_web_httpauth::headers::www_authenticate::bearer::Bearer;
+use futures_util::future::{Ready, ok};
 use serde::Deserialize;
-use http::StatusCode;
 
 use crate::access::permissions::Permission;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct User {
 	pub id: Option<String>,
 	pub permissions: HashSet<Permission>,
@@ -52,68 +48,26 @@ impl From<AuthedUser> for Option<User> {
     }
 }
 
+impl From<Option<User>> for AuthedUser {
+    fn from(user: Option<User>) -> Self {
+        match user {
+			Some(user) => AuthedUser::Authed(user),
+			None => AuthedUser::None,
+		}
+    }
+}
+
 #[derive(Deserialize)]
 struct UserInfo {
 	sub: String,
 }
 
-// TODO use request extensions in middleware to cache this for the request
 impl FromRequest for AuthedUser {
 	type Error = actix_web::Error;
-	type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
+	type Future = Ready<Result<Self, Self::Error>>;
 	type Config = ();
 	
-	fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-		let auth = req.headers().contains_key("Authorization")
-			.then(|| BearerAuth::from_request(req, payload).into_inner());
-		Box::pin(async {
-			match auth {
-				None => Ok(Self::None),
-				Some(Err(e)) => Err(e.into()),
-				Some(Ok(auth)) => {
-					let client = actix_web::client::Client::new();
-
-					let config = crate::config::CONFIG.read().unwrap();
-					let userinfo_endpoint = 
-						config.oidc_configration(&client).await?
-						.userinfo_endpoint.ok_or_else(|| 
-							actix_web::error::ErrorBadGateway(
-								"Identity provider lacks userinfo endpoint"
-							)
-						)?;
-
-					let mut response = client
-						.get(userinfo_endpoint)
-						.header("Authorization", format!("Bearer {}", auth.token()))
-						.send().await
-						.map_err(actix_web::error::ErrorBadGateway)?;
-
-					match response.status() {
-						StatusCode::OK => {
-							let mut permissions = HashSet::new();
-							// TODO: user permissions
-							permissions.insert(Permission::BoardsPixelsPost);
-							permissions.insert(Permission::BoardsGet);
-							permissions.insert(Permission::SocketCore);
-							response.json().await
-								.map(|user_info: UserInfo| Self::Authed(User {
-									id: Some(user_info.sub),
-									permissions,
-								}))
-								.map_err(actix_web::error::ErrorBadGateway)
-						},
-						StatusCode::UNAUTHORIZED => {
-							Err(Self::Error::from(AuthenticationError::new(
-								Bearer::build()
-									.finish()
-							)))
-						},
-						code => Err(actix_web::error::ErrorBadGateway(
-							format!("Got unexpected response from identity provider: {}", code))
-						)
-					}
-				},
-			}
-		})
+	fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
+		ok(req.extensions().get::<User>().cloned().into())
 	}
 }

@@ -29,3 +29,5 @@ diesel_migrations = "1.4.0"
 mime = "0.3.16"
 parking_lot = "0.11.2"
 enum-map = "1.1.1"
+jsonwebtoken = "7.2.0"
+jsonwebkey = { version = "0.3.4", features = ["jwt-convert"] }

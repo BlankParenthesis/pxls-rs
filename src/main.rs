@@ -8,11 +8,13 @@ mod routes;
 mod socket;
 mod objects;
 mod config;
+mod authentication;
 
 use std::collections::HashMap;
 use std::sync::RwLock;
 use actix_web::{App, HttpServer, web::Data};
 use actix_web::middleware::{NormalizePath, normalize::TrailingSlash, Compress};
+use authentication::bearer::{BearerAuth, validator};
 
 use crate::objects::Board;
 
@@ -42,6 +44,7 @@ async fn main() -> std::io::Result<()> {
 	HttpServer::new(move || App::new()
 		.data(pool.clone())
 		.app_data(boards.clone())
+		.wrap(BearerAuth::new(validator))
 		.wrap(actix_cors::Cors::default()
 			.allow_any_origin()
 			.allow_any_header()
