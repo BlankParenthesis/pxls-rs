@@ -11,14 +11,22 @@ mod config;
 mod authentication;
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use actix_web::{App, HttpServer, web::Data};
 use actix_web::middleware::{NormalizePath, normalize::TrailingSlash, Compress};
 use authentication::bearer::{BearerAuth, validator};
 
 use crate::objects::Board;
 
-pub type BoardDataMap = Data<RwLock<HashMap<usize, RwLock<Board>>>>;
+// NOTE: This can go back to being RwLock<Board> if we can get nice ownership
+// between the Board, BoardServer, and BoardServerSocket. Actix makes this
+// impossible.
+// The reason for this is that if BoardServer is owned by Board, Board *must*
+// outlive it. This means that we can add a lifetime parameter to it and give it
+// a board reference directly, rather than resorting to reference counted
+// maybe-there, maybe-not solutions (like below).
+type BoardRef = Arc<RwLock<Option<Board>>>;
+pub type BoardDataMap = Data<RwLock<HashMap<usize, BoardRef>>>;
 
 embed_migrations!();
 
@@ -37,7 +45,7 @@ async fn main() -> std::io::Result<()> {
 	let boards = database::queries::load_boards(&connection)
 		.expect("Failed to load boards")
 		.into_iter()
-		.map(|board| (board.id as usize, RwLock::new(board)))
+		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))
 		.collect::<HashMap<_, _>>();
 	let boards: BoardDataMap = Data::new(RwLock::new(boards));
 

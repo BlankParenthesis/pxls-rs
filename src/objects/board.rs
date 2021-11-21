@@ -1,10 +1,9 @@
 use serde::{Serialize, Deserialize};
 use actix::prelude::*;
 use actix_web::web::BufMut;
-use std::time::{SystemTime, UNIX_EPOCH, Instant, Duration};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::io::{Write, Seek, SeekFrom};
 use std::sync::Arc;
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use http::Uri;
 use num_derive::FromPrimitive;
@@ -29,7 +28,6 @@ use crate::objects::{
 	UserCount,
 };
 use crate::socket::server::{BoardServer, Cooldown, RunEvent};
-use crate::socket::socket::{BoardSocket, Extension, BoardSocketInitInfo};
 use crate::socket::event::{Event, BoardInfo as EventBoardInfo, BoardData, Change};
 
 #[derive(Serialize, Debug)]
@@ -758,31 +756,8 @@ impl Board {
 		self.user_count_for_time(self.current_timestamp(), connection)
 	}
 
-	pub fn new_socket(
-		&self,
-		extensions: HashSet<Extension>,
-		user: Option<User>,
-		connection: &Connection,
-	) -> QueryResult<BoardSocket> {
-		let cooldown_info = if let Some(ref user) = user {
-			self.user_cooldown_info(user, connection)?
-		} else {
-			CooldownInfo::new(
-				self.calculate_cooldowns(None, connection)?,
-				SystemTime::now(),
-			)
-		};
-
-		let user_id = user.and_then(|user| user.id);
-
-		let init_info = Some(BoardSocketInitInfo { cooldown_info });
-
-		Ok(BoardSocket {
-			extensions,
-			server: self.server.clone(),
-			user_id,
-			init_info,
-		})
+	pub fn server(&self) -> Arc<Addr<BoardServer>> {
+		Arc::clone(&self.server)
 	}
 }
 

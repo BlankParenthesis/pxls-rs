@@ -15,7 +15,7 @@ pub async fn get_colors(
 		// TODO: content disposition
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut colors_data = board.read(
+		let mut colors_data = board.as_ref().unwrap().read(
 			SectorBuffer::Colors,
 			&connection,
 		);
@@ -35,7 +35,7 @@ pub async fn get_timestamps(
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut timestamp_data = board.read(
+		let mut timestamp_data = board.as_ref().unwrap().read(
 			SectorBuffer::Timestamps,
 			&connection,
 		);
@@ -55,7 +55,7 @@ pub async fn get_mask(
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut mask_data = board.read(
+		let mut mask_data = board.as_ref().unwrap().read(
 			SectorBuffer::Mask,
 			&connection,
 		);
@@ -75,7 +75,7 @@ pub async fn get_initial(
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 		let connection = database_pool.get().unwrap();
-		let mut initial_data = board.read(
+		let mut initial_data = board.as_ref().unwrap().read(
 			SectorBuffer::Initial,
 			&connection,
 		);
@@ -95,7 +95,8 @@ pub async fn patch_initial(
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 
-		board.try_patch_initial(&patch_info, &database_pool.get().unwrap())
+		board.as_ref().unwrap()
+			.try_patch_initial(&patch_info, &database_pool.get().unwrap())
 			.map(|_| HttpResponse::NoContent().finish())
 			.unwrap_or_else(|e| error::ErrorConflict(e).into())
 	})
@@ -112,7 +113,7 @@ pub async fn patch_mask(
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
 
-		board.try_patch_mask(&patch_info, &database_pool.get().unwrap())
+		board.as_ref().unwrap().try_patch_mask(&patch_info, &database_pool.get().unwrap())
 			.map(|_| HttpResponse::NoContent().finish())
 			.unwrap_or_else(|e| error::ErrorConflict(e).into())
 	})

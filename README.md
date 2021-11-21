@@ -5,7 +5,7 @@ An unfinished server implementation of [PxlsNetworking](https://github.com/Blank
 Note: that specification is evolving as this is worked on, so both are likely to change significantly.
 
 Important missing features:
-- Websocket authorization isn't compatible with the browser API specification.
+- ~~Websocket authorization isn't compatible with the browser API specification.~~
 - ~~No cooldown notifications.~~
 - No permissions management.
 - Basically no extensions are implemented.

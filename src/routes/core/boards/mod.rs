@@ -4,9 +4,9 @@ use web::{Path, Query, Data, Payload, Json};
 use actix_web_actors::ws;
 use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use crate::socket::socket::{Extension, SocketOptions};
+use crate::socket::socket::{BoardSocket, BoardSocketInitInfo, Extension, SocketOptions};
 use crate::BoardDataMap;
 
 macro_rules! board {
@@ -43,7 +43,7 @@ pub async fn list(
 		.map(|(id, board)| (id, board.read().unwrap()))
 		.collect::<Vec<_>>();
 	let board_infos = boards.iter()
-		.map(|(_id, board)| Reference::from(&**board))
+		.map(|(_id, board)| Reference::from(board.as_ref().unwrap()))
 		.collect::<Vec<_>>();
 	let mut chunks = board_infos.chunks(limit);
 	
@@ -82,13 +82,13 @@ pub async fn post(
 	let id = board.id as usize;
 
 	let mut boards = boards.write().unwrap();
-	boards.insert(id, RwLock::new(board));
+	boards.insert(id, Arc::new(RwLock::new(Some(board))));
 
 	let board = boards.get(&id).unwrap().read().unwrap();
 
 	Ok(HttpResponse::build(StatusCode::CREATED)
-		.header("Location", http::Uri::from(&*board).to_string())
-		.json(Reference::from(&*board)))
+		.header("Location", http::Uri::from(board.as_ref().unwrap()).to_string())
+		.json(Reference::from(board.as_ref().unwrap())))
 }
 
 #[get("/boards/default{rest:(/.*$)?}")]
@@ -114,6 +114,7 @@ pub async fn get(
 ) -> Option<HttpResponse> {
 	board!(boards[id]).map(|board| {
 		let board = board.read().unwrap();
+		let board = board.as_ref().unwrap();
 		let connection = &database_pool.get().unwrap();
 		let mut response = HttpResponse::Ok();
 		
@@ -140,12 +141,18 @@ pub async fn patch(
 	_access: BoardPatchAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).map(|board| {
-		board.write().unwrap().update_info(
-			data, 
-			&database_pool.get().unwrap(),
-		).unwrap();
+		board.write().unwrap()
+			.as_mut().unwrap()
+			.update_info(
+				data, 
+				&database_pool.get().unwrap(),
+			)
+			.unwrap();
 
-		HttpResponse::Ok().json(&board.read().unwrap().info)
+		HttpResponse::Ok().json(
+			&board.read().unwrap()
+				.as_ref().unwrap().info
+		)
 	})
 }
 
@@ -157,7 +164,8 @@ pub async fn delete(
 	_access: BoardDeleteAccess,
 ) -> Option<HttpResponse> {
 	boards.write().unwrap().remove(&id).map(|board| {
-		board.into_inner().unwrap()
+		board.write().unwrap()
+			.take().unwrap()
 			.delete(&database_pool.get().unwrap()).unwrap();
 
 		HttpResponse::new(StatusCode::NO_CONTENT)
@@ -171,13 +179,13 @@ pub async fn socket(
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
 	stream: Payload,
-	user: AuthedUser,
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
 	_access: SocketAccess,
 ) -> Option<Result<HttpResponse, Error>> {
 	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
+		let board_read = board.read().unwrap();
+		let board_read = board_read.as_ref().unwrap();
 		if let Some(extensions) = &options.extensions {
 			let connection = database_pool.get().unwrap();
 
@@ -189,7 +197,16 @@ pub async fn socket(
 
 			// TODO: check client has permissions for all extensions.
 			if let Ok(extensions) = extensions {
-				let socket = board.new_socket(extensions, user.into(), &connection).unwrap();
+				// self.user_cooldown_info(user, connection)?
+
+				let socket = BoardSocket::new(
+					extensions,
+					Arc::clone(&board_read.server()),
+					BoardSocketInitInfo {
+						database_connection: connection,
+						board: Arc::clone(&board),
+					}
+				);
 
 				ws::start(socket, &request, stream)
 			} else {

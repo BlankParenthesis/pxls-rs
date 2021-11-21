@@ -75,22 +75,13 @@ impl Discovery {
 
 #[derive(Deserialize)]
 pub struct Identity {
-	sub: String,
+	pub sub: String,
+	pub exp: usize,
 }
 
 impl From<Identity> for User {
     fn from(identity: Identity) -> Self {
-		let mut permissions = HashSet::new();
-
-		// TODO: permissions properly
-		permissions.insert(Permission::BoardsPixelsPost);
-		permissions.insert(Permission::BoardsGet);
-		permissions.insert(Permission::SocketCore);
-
-		User {
-			id: Some(identity.sub),
-			permissions,
-		}
+		Self::from_id(identity.sub)
     }
 }
 

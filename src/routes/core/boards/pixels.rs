@@ -17,6 +17,7 @@ pub async fn list(
 		let limit = options.limit.unwrap_or(10).clamp(1, 100);
 
 		let board = board.read().unwrap();
+		let board = board.as_ref().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 		let previous_placements = board
 			.list_placements(page.timestamp, page.id, limit, true, connection)
@@ -72,7 +73,8 @@ pub async fn get(
 		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 
-		board.lookup(position, connection).unwrap()
+		board.as_ref().unwrap()
+			.lookup(position, connection).unwrap()
 			.map(|placement| HttpResponse::Ok().json(placement))
 	})
 }
@@ -93,13 +95,14 @@ pub async fn post(
 		let user = Option::from(user)
 			.expect("Default user shouldn't have place permisisons");
 		
-		let place_attempt = board.try_place(
-			// TODO: maybe accept option but make sure not to allow undos etc for anon users
-			&user,
-			position,
-			placement.color,
-			connection,
-		);
+		let place_attempt = board.as_ref().unwrap()
+			.try_place(
+				// TODO: maybe accept option but make sure not to allow undos etc for anon users
+				&user,
+				position,
+				placement.color,
+				connection,
+			);
 
 		let mut response = match place_attempt {
 			Ok(placement) => {
@@ -111,7 +114,9 @@ pub async fn post(
 
 		let headers = response.headers_mut();
 
-		let cooldown_info = board.user_cooldown_info(&user, connection)
+		let cooldown_info = board
+			.as_ref().unwrap()
+			.user_cooldown_info(&user, connection)
 			.unwrap();
 
 		for (key, value) in cooldown_info.into_headers() {

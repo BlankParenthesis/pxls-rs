@@ -65,7 +65,8 @@ pub struct Connect {
 	pub user_id: Option<String>,
 	pub socket: Recipient<Arc<Event>>,
 	pub extensions: HashSet<Extension>,
-	pub cooldown_info: CooldownInfo,
+	// TODO, maybe an Option(user_id, cooldown_info) since they're linked
+	pub cooldown_info: Option<CooldownInfo>,
 }
 
 #[derive(Message)]
@@ -103,8 +104,11 @@ impl Handler<Connect> for BoardServer {
 		}
 
 		if let Some(id) = user_id {
-			let handle = BoardServer::timer(ctx.address(), id.clone(), cooldown_info)
-				.into_actor(self);
+			let handle = BoardServer::timer(
+				ctx.address(),
+				id.clone(),
+				cooldown_info.expect("Missing user cooldown info")
+			).into_actor(self);
 
 			let socket_group = self.connections_by_user.entry(id)
 				.or_insert_with(|| UserSockets {

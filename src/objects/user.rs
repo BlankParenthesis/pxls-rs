@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use actix_web::{FromRequest, HttpRequest, dev::Payload};
 use futures_util::future::{Ready, ok};
-use serde::Deserialize;
 
 use crate::access::permissions::Permission;
 
@@ -9,6 +8,19 @@ use crate::access::permissions::Permission;
 pub struct User {
 	pub id: Option<String>,
 	pub permissions: HashSet<Permission>,
+}
+
+impl User {
+	pub fn from_id(id: String) -> Self {
+		let mut permissions = HashSet::new();
+
+		// TODO: permissions
+		permissions.insert(Permission::BoardsPixelsPost);
+		permissions.insert(Permission::BoardsGet);
+		permissions.insert(Permission::SocketCore);
+		
+		Self { id: Some(id), permissions }
+	}
 }
 
 impl Default for User {
@@ -55,11 +67,6 @@ impl From<Option<User>> for AuthedUser {
 			None => AuthedUser::None,
 		}
     }
-}
-
-#[derive(Deserialize)]
-struct UserInfo {
-	sub: String,
 }
 
 impl FromRequest for AuthedUser {
