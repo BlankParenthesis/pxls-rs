@@ -125,38 +125,42 @@ impl BoardSocket {
 	) {
 		let BoardSocketInitInfo { board, database_connection } =
 			self.init_info.take().expect("Missing init data for socket (maybe already consumed)");
-			
-		self.user_id = user_id;
+			self.user_id = user_id;
 
 		let board = board.read().unwrap();
-		let board = board.as_ref()
-			// FIXME: expecting here is a bug, this should be handled gracefully
-			.expect("Board closed while waiting for authentication");
+		match board.as_ref() {
+			Some(board) => {
+				let cooldown_info = self.user_id.as_ref()
+					.map(|user_id| User::from_id(user_id.clone()))
+					.map(|user| board.user_cooldown_info(
+						&user,
+						&database_connection,
+					).expect("Database failure when fetching cooldown"));
 
-		let cooldown_info = self.user_id.as_ref()
-			.map(|user_id| User::from_id(user_id.clone()))
-			.map(|user| board.user_cooldown_info(
-				&user,
-				&database_connection,
-			).expect("Database failure when fetching cooldown"));
+				// TODO: check client has permissions for all extensions.
 
-		// TODO: check client has permissions for all extensions.
-
-		self.server
-			.send(Connect {
-				socket: ctx.address(),
-				user_id: self.user_id.clone(),
-				extensions: self.extensions.clone(),
-				cooldown_info,
-			})
-			.into_actor(self)
-			.then(|res, _act, ctx| {
-				if res.is_err() {
-					ctx.stop();
-				}
-				fut::ready(())
-			})
-			.wait(ctx)
+				self.server
+					.send(Connect {
+						socket: ctx.address(),
+						user_id: self.user_id.clone(),
+						extensions: self.extensions.clone(),
+						cooldown_info,
+					})
+					.into_actor(self)
+					.then(|res, _act, ctx| {
+						if res.is_err() {
+							ctx.stop();
+						}
+						fut::ready(())
+					})
+					.wait(ctx);
+			},
+			None => {
+				// the board was deleted before this auth occurred
+				ctx.close(None);
+				ctx.stop();
+			},
+		}
 	}
 }
 
@@ -215,12 +219,14 @@ impl Actor for BoardSocket {
 	}
 
 	fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
-		self.server
-			.do_send(Disconnect {
-				socket: ctx.address(),
-				user_id: self.user_id.clone(),
-				extensions: self.extensions.clone(),
-			});
+		if self.authenticated() {
+			self.server
+				.do_send(Disconnect {
+					socket: ctx.address(),
+					user_id: self.user_id.clone(),
+					extensions: self.extensions.clone(),
+				});
+		}
 		Running::Stop
 	}
 }
