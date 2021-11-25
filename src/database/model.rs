@@ -10,6 +10,7 @@ pub struct Board {
 	pub name: String,
 	pub created_at: i64,
 	pub shape: serde_json::Value,
+	pub max_stacked: i32, 
 }
 
 #[derive(Insertable)]
@@ -18,6 +19,7 @@ pub struct NewBoard {
 	pub name: String,
 	pub created_at: i64,
 	pub shape: serde_json::Value,
+	pub max_stacked: i32, 
 }
 
 #[derive(Queryable, Insertable, Identifiable, Associations)]

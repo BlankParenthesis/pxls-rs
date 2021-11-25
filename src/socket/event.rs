@@ -18,6 +18,8 @@ pub struct BoardInfo {
 	pub shape: Option<VecShape>,
 	#[serde(skip_serializing_if="Option::is_none")]
 	pub palette: Option<Palette>,
+	#[serde(skip_serializing_if="Option::is_none")]
+	pub max_stacked: Option<u32>,
 }
 
 #[derive(Serialize, Debug, Clone)]

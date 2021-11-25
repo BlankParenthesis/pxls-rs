@@ -171,6 +171,8 @@ impl Handler<RunEvent> for BoardServer {
 				connection.do_send(event.clone()).unwrap();
 			}
 		}
+
+		// FIXME: handle case where max_stacked changed
 	}
 }
 

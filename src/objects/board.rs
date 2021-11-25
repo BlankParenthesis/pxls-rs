@@ -32,25 +32,36 @@ use crate::socket::event::{Event, BoardInfo as EventBoardInfo, BoardData, Change
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
-	pub name: String,
-	pub created_at: u64,
-	pub shape: VecShape,
-	pub palette: Palette,
+	name: String,
+	created_at: u64,
+	shape: VecShape,
+	palette: Palette,
+	max_stacked: u32,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPost {
-	pub name: String,
-	pub shape: VecShape,
-	pub palette: Palette,
+	name: String,
+	shape: VecShape,
+	palette: Palette,
+	max_stacked: u32,
 }
 
 
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPatch {
-	pub name: Option<String>,
-	pub shape: Option<VecShape>,
-	pub palette: Option<Palette>,
+	name: Option<String>,
+	shape: Option<VecShape>,
+	palette: Option<Palette>,
+	max_stacked: Option<u32>,
+}
+
+impl From<BoardInfoPatch> for EventBoardInfo {
+	fn from(
+		BoardInfoPatch { name, shape, palette, max_stacked }: BoardInfoPatch
+	) -> Self {
+		Self { name, shape, palette, max_stacked }
+	}
 }
 
 pub struct Board {
@@ -184,6 +195,7 @@ impl Board {
 				name: info.name,
 				created_at: now as i64,
 				shape: info.shape.into(),
+				max_stacked: info.max_stacked as i32,
 			})
 			.get_result::<model::Board>(connection)?;
 
@@ -270,26 +282,33 @@ impl Board {
 		Ok(())
 	}
 
+	// TODO: find some way to exhaustively match info so that the compiler knows
+	// when new fields are added and can notify that this function needs updates.
 	pub fn update_info(
 		&mut self, 
 		info: BoardInfoPatch, 
 		connection: &Connection,
 	) -> QueryResult<()> {
-		assert!(info.name.is_some() || info.palette.is_some() || info.shape.is_some());
+		assert!(
+			info.name.is_some()
+			|| info.palette.is_some()
+			|| info.shape.is_some()
+			|| info.max_stacked.is_some()
+		);
 
 		connection.transaction::<_, diesel::result::Error, _>(|| {
-			if let Some(name) = &info.name {
+			if let Some(ref name) = info.name {
 				diesel::update(schema::board::table)
 					.set(schema::board::name.eq(name))
 					.filter(schema::board::id.eq(self.id))
 					.execute(connection)?;
 			}
 
-			if let Some(palette) = &info.palette {
+			if let Some(ref palette) = info.palette {
 				crate::objects::color::replace_palette(palette, self.id, connection)?;
 			}
 
-			if let Some(shape) = &info.shape {
+			if let Some(ref shape) = info.shape {
 				// TODO: try and preserve data.
 
 				diesel::update(schema::board::table)
@@ -301,6 +320,13 @@ impl Board {
 
 				diesel::delete(schema::board_sector::table)
 					.filter(schema::board_sector::board.eq(self.id))
+					.execute(connection)?;
+			}
+
+			if let Some(max_stacked) = info.max_stacked {
+				diesel::update(schema::board::table)
+					.set(schema::board::max_stacked.eq(max_stacked as i32))
+					.filter(schema::board::id.eq(self.id))
 					.execute(connection)?;
 			}
 
@@ -325,12 +351,12 @@ impl Board {
 			)
 		}
 
+		if let Some(max_stacked) = info.max_stacked {
+			self.info.max_stacked = max_stacked;
+		}
+
 		let event = Event::BoardUpdate {
-			info: Some(EventBoardInfo {
-				name: info.name,
-				palette: info.palette,
-				shape: info.shape,
-			}),
+			info: Some(info.into()),
 			data: None,
 		};
 
@@ -549,6 +575,7 @@ impl Board {
 			created_at: board.created_at as u64,
 			shape: serde_json::from_value(board.shape).unwrap(),
 			palette,
+			max_stacked: board.max_stacked as u32,
 		};
 
 		let sectors = SectorCache::new(
@@ -572,9 +599,6 @@ impl Board {
 			.max(1))
 			.unwrap()
 	}
-
-	// TODO: move to a field of info
-	const MAX_STACKED: usize = 6;
 
 	fn pixel_density_at_time(
 		&self,
@@ -616,7 +640,7 @@ impl Board {
 			.map(|(i, c)| u32::try_from((i + 1) * c).unwrap())
 			.zip(std::iter::repeat(placement.map(|p| p.timestamp as u32).unwrap_or(0)))
 			.map(|(a, b)| a + b)
-			.take(Board::MAX_STACKED)
+			.take(usize::try_from(self.info.max_stacked).unwrap())
 			.map(|offset| board_time + offset as u64)
 			.map(Duration::from_secs)
 			.map(|offset| UNIX_EPOCH + offset)
@@ -647,7 +671,7 @@ impl Board {
 	) -> QueryResult<CooldownInfo> {
 		let placements = self.recent_user_placements(
 			user,
-			Board::MAX_STACKED,
+			usize::try_from(self.info.max_stacked).unwrap(),
 			connection,
 		)?;
 
@@ -667,7 +691,7 @@ impl Board {
 		// TODO: actually, I think this generalizes and we only have to
 		// check the last `Board::MAX_STACKED - current_stacked` pixels.
 		let incomplete_info_is_correct = 
-			info.pixels_available >= (Board::MAX_STACKED - 1);
+			info.pixels_available >= (usize::try_from(self.info.max_stacked.saturating_sub(1)).unwrap());
 
 		if !placements.is_empty() && !incomplete_info_is_correct {
 			// In order to place MAX_STACKED pixels, a user must either:

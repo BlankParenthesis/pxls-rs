@@ -4,6 +4,7 @@ table! {
         name -> Text,
         created_at -> Int8,
         shape -> Jsonb,
+        max_stacked -> Int4,
     }
 }
 
