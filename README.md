@@ -12,7 +12,8 @@ Important missing features:
   This is intentional in the case of some (like chat) but the intent is definitely to implement others in future.
 
 Notable other issues:
-- Startup could be way too slow currently (boards are reconstructed from database placements).
+- ~~Startup could be way too slow currently (boards are reconstructed from database placements).~~
+  *Reconstruction cost can be mitigated with board sectors/chunking.*
 - A bunch of things require cleanup.
 - Some features are only half implemented.
 - There's probably a bunch of internal caching to do.
