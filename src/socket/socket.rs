@@ -16,6 +16,8 @@ use crate::socket::event::Event;
 use crate::authentication::openid::{Identity, validate_token};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::socket::server::Close;
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Enum, Copy)]
 pub enum Extension {
 	Core,
@@ -142,7 +144,7 @@ impl BoardSocket {
 
 		self.server
 			.send(Connect {
-				socket: ctx.address().recipient(),
+				socket: ctx.address(),
 				user_id: self.user_id.clone(),
 				extensions: self.extensions.clone(),
 				cooldown_info,
@@ -155,6 +157,21 @@ impl BoardSocket {
 				fut::ready(())
 			})
 			.wait(ctx)
+	}
+}
+
+impl Handler<Close> for BoardSocket {
+	type Result = ();
+
+	fn handle(
+		&mut self, 
+		_: Close,
+		ctx: &mut Self::Context,
+	) -> Self::Result {
+		// TODO: maybe tell the client something about why we're closing the connection.
+		// i.e, the board is being deleted, etc
+		ctx.close(None);
+		ctx.stop();
 	}
 }
 
@@ -200,7 +217,7 @@ impl Actor for BoardSocket {
 	fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
 		self.server
 			.do_send(Disconnect {
-				socket: ctx.address().recipient(),
+				socket: ctx.address(),
 				user_id: self.user_id.clone(),
 				extensions: self.extensions.clone(),
 			});

@@ -11,15 +11,16 @@ use crate::socket::event::Event;
 use crate::socket::socket::Extension;
 use crate::objects::board::CooldownInfo;
 
-#[derive(Debug)]
+use crate::socket::socket::BoardSocket;
+
 struct UserSockets {
-	sockets: HashSet<Recipient<Arc<Event>>>,
+	sockets: HashSet<Addr<BoardSocket>>,
 	cooldown_timer: SpawnHandle,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct BoardServer {
-	connections_by_extension: EnumMap<Extension, HashSet<Recipient<Arc<Event>>>>,
+	connections_by_extension: EnumMap<Extension, HashSet<Addr<BoardSocket>>>,
 	connections_by_user: HashMap<String, UserSockets>,
 }
 
@@ -53,6 +54,16 @@ impl BoardServer {
 			});
 		}
 	}
+
+	fn all_connections(&self) -> HashSet<Addr<BoardSocket>> {
+		let mut connections = HashSet::new();
+
+		for socket in self.connections_by_extension.values() {
+			connections.extend(socket.iter().cloned());
+		}
+
+		connections
+	}
 }
 
 impl Actor for BoardServer {
@@ -63,7 +74,7 @@ impl Actor for BoardServer {
 #[rtype(result = "()")]
 pub struct Connect {
 	pub user_id: Option<String>,
-	pub socket: Recipient<Arc<Event>>,
+	pub socket: Addr<BoardSocket>,
 	pub extensions: HashSet<Extension>,
 	// TODO, maybe an Option(user_id, cooldown_info) since they're linked
 	pub cooldown_info: Option<CooldownInfo>,
@@ -73,7 +84,7 @@ pub struct Connect {
 #[rtype(result = "()")]
 pub struct Disconnect {
 	pub user_id: Option<String>,
-	pub socket: Recipient<Arc<Event>>,
+	pub socket: Addr<BoardSocket>,
 	pub extensions: HashSet<Extension>,
 }
 
@@ -91,6 +102,10 @@ pub struct RunEvent {
 	pub event: Event,
 }
 
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Close {}
+
 impl Handler<Connect> for BoardServer {
 	type Result = ();
 
@@ -103,7 +118,7 @@ impl Handler<Connect> for BoardServer {
 			self.connections_by_extension[extension].insert(socket.clone());
 		}
 
-		socket.do_send(Arc::new(Event::Ready)).unwrap();
+		socket.do_send(Arc::new(Event::Ready));
 
 		if let Some(id) = user_id {
 			let handle = BoardServer::timer(
@@ -146,6 +161,22 @@ impl Handler<Disconnect> for BoardServer {
 	}
 }
 
+impl Handler<Close> for BoardServer {
+	type Result = ();
+
+	fn handle(
+		&mut self, 
+		_: Close,
+		ctx: &mut Self::Context,
+	) -> Self::Result {
+		for connection in self.all_connections() {
+			connection.do_send(Close {});
+		}
+
+		ctx.stop();
+	}
+}
+
 impl Handler<RunEvent> for BoardServer {
 	type Result = ();
 
@@ -162,13 +193,13 @@ impl Handler<RunEvent> for BoardServer {
 			if let Some(group) = self.connections_by_user.get(&user_id) {
 				for connection in connections.iter() {
 					if group.sockets.contains(connection) {
-						connection.do_send(event.clone()).unwrap();
+						connection.do_send(event.clone());
 					}
 				}
 			}
 		} else {
 			for connection in connections.iter() {
-				connection.do_send(event.clone()).unwrap();
+				connection.do_send(event.clone());
 			}
 		}
 

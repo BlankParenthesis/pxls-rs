@@ -27,7 +27,7 @@ use crate::objects::{
 	SectorCacheAccess,
 	UserCount,
 };
-use crate::socket::server::{BoardServer, Cooldown, RunEvent};
+use crate::socket::server::{BoardServer, Close, Cooldown, RunEvent};
 use crate::socket::event::{Event, BoardInfo as EventBoardInfo, BoardData, Change};
 
 #[derive(Serialize, Debug)]
@@ -366,7 +366,7 @@ impl Board {
 	}
 
 	pub fn delete(self, connection: &Connection) -> QueryResult<()> {
-		// FIXME: close socket server
+		self.server.do_send(Close {});
 
 		connection.transaction(|| {
 			diesel::delete(schema::board_sector::table)
