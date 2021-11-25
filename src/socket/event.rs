@@ -45,6 +45,7 @@ pub enum Event {
 		count: u32,
 		next: Option<u64>,
 	},
+	Ready,
 }
 
 impl From<&Event> for Extension {
@@ -52,6 +53,7 @@ impl From<&Event> for Extension {
 		match event {
 			Event::BoardUpdate { info, data } => Extension::Core,
 			Event::PixelsAvailable { count, next } => Extension::Core,
+			Event::Ready => Extension::Core,
 		}
 	}
 }
@@ -78,6 +80,11 @@ impl Serialize for Event {
 				map.serialize_entry("next", next)?;
 				map.end()
 			},
+			Event::Ready => {
+				let mut map = serializer.serialize_map(Some(1))?;
+				map.serialize_entry("type", "ready")?;
+				map.end()
+			}
 		}
 	}
 }
