@@ -103,6 +103,8 @@ impl Handler<Connect> for BoardServer {
 			self.connections_by_extension[extension].insert(socket.clone());
 		}
 
+		// TODO: send a message indicating that the client is now receiving events.
+
 		if let Some(id) = user_id {
 			let handle = BoardServer::timer(
 				ctx.address(),

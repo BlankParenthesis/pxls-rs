@@ -8,6 +8,7 @@ use actix_web::{FromRequest, HttpRequest, dev::Payload, error, HttpResponse};
 use actix_web::http::header;
 use futures_util::future::{Ready, ready};
 use http::StatusCode;
+use rand::{self, Rng};
 
 #[derive(Debug)]
 pub enum RangeParseError {
@@ -122,85 +123,138 @@ pub enum RangeHeader {
 	None,
 }
 
+struct DataRange {
+	data: Vec<u8>,
+	range: Range<usize>,
+}
+
+fn data_ranges<D>(
+	data: &mut D,
+	unit: &str,
+	ranges: &[HttpRange],
+) -> Result<Vec<DataRange>, error::Error>
+where
+	D: Read + Seek + crate::objects::sector_cache::Len,
+{
+	if !unit.eq("bytes") {
+		return Err(RangeIndexError::UnknownUnit(data.len()).into());
+	}
+
+	let mut ranges = ranges.iter()
+		.map(|http_range| http_range.with_length(data.len()))
+		.collect::<Result<Vec<_>, _>>()
+		.map_err(error::Error::from)?;
+
+	ranges.sort_by_key(|range| range.start);
+
+	// gaps smaller than this will be collapsed
+	let inbetween_threshold = 32;
+	let mut iter = ranges.into_iter();
+	// TODO: if ranges are collapsed to a single range,
+	// it would be nice to not bother with a multipart response.
+	// Clients may not like that though
+	let mut efficient_ranges = vec![iter.next().unwrap()];
+
+	for range in iter {
+		let mut current_range = efficient_ranges.last_mut().unwrap();
+
+		if (range.start.saturating_sub(current_range.end)) < inbetween_threshold {
+			// extend last range
+			current_range.end = range.end;
+		} else {
+			// start a new range
+			efficient_ranges.push(range);
+		}
+	}
+
+	Ok(efficient_ranges.into_iter().map(|range| {
+		let length = range.end - range.start;
+		let mut subdata: Vec<u8> = std::iter::repeat(0).take(length).collect();
+
+		data.seek(std::io::SeekFrom::Start(
+			u64::try_from(range.start).unwrap()
+		)).unwrap();
+		data.read_exact(&mut subdata).unwrap();
+
+		DataRange {
+			data: subdata,
+			range,
+		}
+	}).collect())
+}
+
+fn choose_boundary(
+	datas: &[DataRange],
+) -> String {
+	fn random_boundary_string() -> String {
+		format!("--{}", rand::thread_rng()
+			.sample_iter::<char, _>(rand::distributions::Standard)
+			.take(8)
+			.collect::<String>())
+	}
+
+	let mut boundary = random_boundary_string();
+
+	// generate new strings until we get one that doesn't exist in the data
+	while datas.iter()
+		.any(|DataRange { data, range: _ }| {
+			data.windows(boundary.len())
+				.any(|d| d == boundary.as_bytes())
+		})
+	{
+		boundary = random_boundary_string();
+	}
+
+	boundary
+}
+
+fn merge_ranges(
+	datas: &[DataRange],
+	boundary: &str,
+) -> Vec<u8> {
+	let mut joined = Vec::new();
+	
+	for DataRange { data, range } in datas {
+		joined.extend_from_slice(format!(
+			"{}\r\n\
+			content-type: application/octet-stream\r\n\
+			content-range: bytes {}-{}/{}\r\n\
+			\r\n",
+			boundary,
+			range.start,
+			range.end,
+			data.len(),
+		).as_bytes());
+
+		joined.extend_from_slice(data);
+	}
+
+	joined.extend_from_slice(boundary.as_bytes());
+
+	joined
+}
+
 impl RangeHeader {
-	pub fn respond_with<D>(&self, data: &mut D) -> HttpResponse
-	where D: Read + Seek + crate::objects::sector_cache::Len {
+	pub fn respond_with<D>(
+		&self,
+		data: &mut D,
+	) -> HttpResponse
+	where
+		D: Read + Seek + crate::objects::sector_cache::Len
+	{
 		match self {
 			Self::Multi { unit, ranges } => {
-				let result = ranges.iter()
-					.map(|http_range| http_range.with_length(data.len()))
-					.collect::<Result<Vec<_>, _>>()
-					.map(|mut ranges| {
-						ranges.sort_by_key(|range| range.start);
-
-						// gaps smaller than this will be collapsed
-						let inbetween_threshold = 128;
-						let mut iter = ranges.into_iter();
-						// TODO: if ranges are collapsed to a single range,
-						// it would be nice to not bother with a multipart response.
-						let mut efficient_ranges = vec![iter.next().unwrap()];
-
-						for range in iter {
-							let mut current_range = efficient_ranges.last_mut().unwrap();
-
-							if (range.start.saturating_sub(current_range.end)) < inbetween_threshold {
-								current_range.end = range.end;
-							} else {
-								efficient_ranges.push(range);
-							}
-						}
-
-						// TODO: compute capacity
-						let mut joined = Vec::new();
+				match data_ranges(data, unit, ranges) {
+					Ok(datas) => {
+						let boundary = choose_boundary(&datas);
+						let merged = merge_ranges(&datas, &boundary);
 						
-						// TODO: select a valid boundary (and also use it later in the multipart content type)
-						let boundary = "--hey, red";
-
-						for range in efficient_ranges {
-							joined.extend_from_slice(boundary.as_bytes());
-							joined.extend_from_slice(b"\r\n");
-							joined.extend_from_slice(b"content-type: application/octet-stream");
-							joined.extend_from_slice(b"\r\n");
-							joined.extend_from_slice(format!(
-								"content-range: bytes {}-{}/{}",
-								range.start,
-								range.end,
-								data.len()
-							).as_bytes());
-							joined.extend_from_slice(b"\r\n");
-							joined.extend_from_slice(b"\r\n");
-
-							let length = range.end - range.start;
-
-							let start = joined.len();
-							joined.extend(std::iter::repeat(0).take(length));
-
-							data.seek(std::io::SeekFrom::Start(
-								u64::try_from(range.start).unwrap()
-							)).unwrap();
-							data.read_exact(&mut joined[start..]).unwrap();
-						}
-						joined.extend_from_slice(boundary.as_bytes());
-						
-						joined
-					})
-					.map_err(error::Error::from)
-					.and_then(|ranges| {
-						// TODO: might be nicer to check this first
-						if unit.eq("bytes") {
-							Ok(ranges)
-						} else {
-							Err(RangeIndexError::UnknownUnit(data.len()).into())
-						}
-					});
-
-				match result {
-					Ok(data) => {
-						let boundary = "hey, red";
-
 						HttpResponse::build(StatusCode::PARTIAL_CONTENT)
-							.content_type(format!("multipart/byteranges; boundary={}", boundary))
-							.body(data)
+							.content_type(format!(
+								"multipart/byteranges; boundary={}",
+								boundary
+							))
+							.body(merged)
 					},
 					Err(error) => error.into(),
 				}
