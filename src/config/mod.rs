@@ -1,6 +1,7 @@
+use std::sync::RwLock;
+
 use serde::Deserialize;
 use url::Url;
-use std::sync::RwLock;
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -13,13 +14,13 @@ pub struct Config {
 
 impl Config {
 	pub fn discovery_url(&self) -> Url {
-		self.oidc_issuer.join(".well-known/openid-configuration").unwrap()
+		self.oidc_issuer
+			.join(".well-known/openid-configuration")
+			.unwrap()
 	}
 }
 
-
 lazy_static! {
-	pub static ref CONFIG: RwLock<Config> = 
-		RwLock::new(envy::from_env::<Config>()
-			.expect("Incomplete config setup"));
+	pub static ref CONFIG: RwLock<Config> =
+		RwLock::new(envy::from_env::<Config>().expect("Incomplete config setup"));
 }

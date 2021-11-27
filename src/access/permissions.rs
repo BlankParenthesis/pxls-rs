@@ -18,8 +18,13 @@ pub enum Permission {
 }
 
 impl Serialize for Permission {
-	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-	where S: Serializer {
+	fn serialize<S>(
+		&self,
+		serializer: S,
+	) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
 		match self {
 			Permission::Info => serializer.serialize_str("info"),
 			Permission::BoardsList => serializer.serialize_str("boards.list"),
@@ -38,7 +43,8 @@ impl Serialize for Permission {
 	}
 }
 
-// creates a named guard which succeeds if the client has all specified permissions
+// creates a named guard which succeeds if the client has all specified
+// permissions
 macro_rules! guard {
 	( $guard_name:ident, $( $permission:ident ),* ) => {
 		pub struct $guard_name {}

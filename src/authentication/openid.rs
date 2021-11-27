@@ -1,19 +1,13 @@
 use std::collections::HashSet;
 
+use actix_web::{client::Client, error::Error};
 use http::StatusCode;
-use url::Url;
-use serde::Deserialize;
-
-use actix_web::client::Client;
-use actix_web::error::Error;
-
 use jsonwebkey::JsonWebKey;
+use jsonwebtoken::{decode, decode_header, errors::Error as JWTError, TokenData, Validation};
+use serde::Deserialize;
+use url::Url;
 
-use jsonwebtoken::{decode, decode_header, Validation, TokenData};
-use jsonwebtoken::errors::{Error as JWTError};
-
-use crate::access::permissions::Permission;
-use crate::objects::User;
+use crate::{access::permissions::Permission, objects::User};
 
 #[derive(Deserialize)]
 pub struct Discovery {
@@ -29,18 +23,23 @@ impl Discovery {
 	) -> Result<Self, Error> {
 		let mut response = client
 			.get(discovery_url.to_string())
-			.send().await?;
-		
+			.send()
+			.await?;
+
 		match response.status() {
 			StatusCode::OK => {
-				response.json().await
-					.map_err(|_| actix_web::error::ErrorBadGateway(
-						"identity provider gave invalid Open ID configuration"
-					))
+				response.json().await.map_err(|_| {
+					actix_web::error::ErrorBadGateway(
+						"identity provider gave invalid Open ID configuration",
+					)
+				})
 			},
-			code => Err(actix_web::error::ErrorBadGateway(
-				format!("Got unexpected response from identity provider: {}", code))
-			)
+			code => {
+				Err(actix_web::error::ErrorBadGateway(format!(
+					"Got unexpected response from identity provider: {}",
+					code
+				)))
+			},
 		}
 	}
 
@@ -51,7 +50,8 @@ impl Discovery {
 	) -> Result<Vec<JsonWebKey>, Error> {
 		let mut response = client
 			.get(self.jwks_uri.to_string())
-			.send().await?;
+			.send()
+			.await?;
 
 		match response.status() {
 			StatusCode::OK => {
@@ -60,15 +60,22 @@ impl Discovery {
 					keys: Vec<JsonWebKey>,
 				}
 
-				response.json::<Keys>().await
+				response
+					.json::<Keys>()
+					.await
 					.map(|json| json.keys)
-					.map_err(|_| actix_web::error::ErrorBadGateway(
-						"identity provider gave invalid Open ID configuration"
-					))
+					.map_err(|_| {
+						actix_web::error::ErrorBadGateway(
+							"identity provider gave invalid Open ID configuration",
+						)
+					})
 			},
-			code => Err(actix_web::error::ErrorBadGateway(
-				format!("Got unexpected response from identity provider: {}", code))
-			)
+			code => {
+				Err(actix_web::error::ErrorBadGateway(format!(
+					"Got unexpected response from identity provider: {}",
+					code
+				)))
+			},
 		}
 	}
 }
@@ -80,11 +87,10 @@ pub struct Identity {
 }
 
 impl From<Identity> for User {
-    fn from(identity: Identity) -> Self {
+	fn from(identity: Identity) -> Self {
 		Self::from_id(identity.sub)
-    }
+	}
 }
-
 
 #[derive(Debug)]
 pub enum ValidationError {
@@ -107,11 +113,14 @@ impl From<Error> for ValidationError {
 
 pub async fn validate_token(token: &str) -> Result<TokenData<Identity>, ValidationError> {
 	let client = Client::new();
-	let discovery_url = crate::config::CONFIG.read().unwrap().discovery_url();
-	
+	let discovery_url = crate::config::CONFIG
+		.read()
+		.unwrap()
+		.discovery_url();
+
 	let discovery = Discovery::load(discovery_url, &client).await?;
 	let keys = discovery.jwks_keys(&client).await?;
-	
+
 	let header = decode_header(token)?;
 
 	let matching_key = if header.kid.is_some() {
@@ -128,8 +137,9 @@ pub async fn validate_token(token: &str) -> Result<TokenData<Identity>, Validati
 		decode::<Identity>(
 			token,
 			&key.key.to_decoding_key(),
-			&Validation::new(key.algorithm.unwrap().into())
-		).map_err(ValidationError::from)
+			&Validation::new(key.algorithm.unwrap().into()),
+		)
+		.map_err(ValidationError::from)
 	} else {
 		Err(ValidationError::NoValidKeys)
 	}

@@ -1,8 +1,10 @@
 use actix::Message;
-use serde::{Serialize, Serializer, ser::SerializeMap};
+use serde::{ser::SerializeMap, Serialize, Serializer};
 
-use crate::objects::{VecShape, Palette};
-use crate::socket::socket::Extension;
+use crate::{
+	objects::{Palette, VecShape},
+	socket::socket::Extension,
+};
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Change<T> {
@@ -12,25 +14,25 @@ pub struct Change<T> {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct BoardInfo {
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub shape: Option<VecShape>,
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub palette: Option<Palette>,
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_stacked: Option<u32>,
 }
 
 #[derive(Serialize, Debug, Clone)]
 pub struct BoardData {
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub colors: Option<Vec<Change<u8>>>,
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub timestamps: Option<Vec<Change<u32>>>,
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub initial: Option<Vec<Change<u8>>>,
-	#[serde(skip_serializing_if="Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub mask: Option<Vec<Change<u8>>>,
 }
 
@@ -59,8 +61,13 @@ impl From<&Event> for Extension {
 }
 
 impl Serialize for Event {
-	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> 
-	where S: Serializer {
+	fn serialize<S>(
+		&self,
+		serializer: S,
+	) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
 		match self {
 			Event::BoardUpdate { info, data } => {
 				let mut map = serializer.serialize_map(Some(2))?;
@@ -84,7 +91,7 @@ impl Serialize for Event {
 				let mut map = serializer.serialize_map(Some(1))?;
 				map.serialize_entry("type", "ready")?;
 				map.end()
-			}
+			},
 		}
 	}
 }

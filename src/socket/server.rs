@@ -1,17 +1,20 @@
-use actix::prelude::*;
-use std::collections::{HashSet, HashMap};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::convert::TryFrom;
-use actix::clock::Instant;
+use std::{
+	collections::{HashMap, HashSet},
+	convert::TryFrom,
+	sync::Arc,
+	time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use std::sync::Arc;
+use actix::{clock::Instant, prelude::*};
 use enum_map::EnumMap;
 
-use crate::socket::event::Event;
-use crate::socket::socket::Extension;
-use crate::objects::board::CooldownInfo;
-
-use crate::socket::socket::BoardSocket;
+use crate::{
+	objects::board::CooldownInfo,
+	socket::{
+		event::Event,
+		socket::{BoardSocket, Extension},
+	},
+};
 
 struct UserSockets {
 	sockets: HashSet<Addr<BoardSocket>>,
@@ -32,26 +35,27 @@ impl BoardServer {
 	) {
 		let mut next = cooldown_info.next();
 		while let Some(time) = next {
-			let instant = Instant::now() +
-				time.duration_since(SystemTime::now())
+			let instant = Instant::now()
+				+ time
+					.duration_since(SystemTime::now())
 					.unwrap_or(Duration::ZERO);
 			let count = cooldown_info.pixels_available;
 			actix::clock::delay_until(instant).await;
-			
+
 			next = cooldown_info.next();
 
 			let event = Event::PixelsAvailable {
 				count: u32::try_from(count).unwrap(),
-				next: next.map(|time| time.duration_since(UNIX_EPOCH).unwrap()
-					.as_secs()),
+				next: next.map(|time| {
+					time.duration_since(UNIX_EPOCH)
+						.unwrap()
+						.as_secs()
+				}),
 			};
 
 			let user_id = Some(user_id.clone());
 
-			address.do_send(RunEvent {
-				event,
-				user_id
-			});
+			address.do_send(RunEvent { event, user_id });
 		}
 	}
 
@@ -110,8 +114,13 @@ impl Handler<Connect> for BoardServer {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
-		Connect { extensions, user_id, socket, cooldown_info }: Connect,
+		&mut self,
+		Connect {
+			extensions,
+			user_id,
+			socket,
+			cooldown_info,
+		}: Connect,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
 		for extension in extensions {
@@ -124,13 +133,18 @@ impl Handler<Connect> for BoardServer {
 			let handle = BoardServer::timer(
 				ctx.address(),
 				id.clone(),
-				cooldown_info.expect("Missing user cooldown info")
-			).into_actor(self);
+				cooldown_info.expect("Missing user cooldown info"),
+			)
+			.into_actor(self);
 
-			let socket_group = self.connections_by_user.entry(id)
-				.or_insert_with(|| UserSockets {
-					sockets: Default::default(),
-					cooldown_timer: ctx.spawn(handle),
+			let socket_group = self
+				.connections_by_user
+				.entry(id)
+				.or_insert_with(|| {
+					UserSockets {
+						sockets: Default::default(),
+						cooldown_timer: ctx.spawn(handle),
+					}
 				});
 			socket_group.sockets.insert(socket);
 		}
@@ -141,8 +155,12 @@ impl Handler<Disconnect> for BoardServer {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
-		Disconnect { extensions, user_id, socket }: Disconnect,
+		&mut self,
+		Disconnect {
+			extensions,
+			user_id,
+			socket,
+		}: Disconnect,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
 		for extension in extensions {
@@ -165,7 +183,7 @@ impl Handler<Close> for BoardServer {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
+		&mut self,
 		_: Close,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
@@ -181,8 +199,8 @@ impl Handler<RunEvent> for BoardServer {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
-		RunEvent{ event, user_id }: RunEvent,
+		&mut self,
+		RunEvent { event, user_id }: RunEvent,
 		_: &mut Self::Context,
 	) -> Self::Result {
 		let event = Arc::new(event);
@@ -215,31 +233,36 @@ impl Handler<Cooldown> for BoardServer {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
-		Cooldown { mut cooldown_info, user_id }: Cooldown,
+		&mut self,
+		Cooldown {
+			mut cooldown_info,
+			user_id,
+		}: Cooldown,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
 		let future = BoardServer::timer(ctx.address(), user_id.clone(), cooldown_info.clone())
 			.into_actor(self);
 
-		if let Some(socket_group) = self.connections_by_user.get_mut(&user_id) {
+		if let Some(socket_group) = self
+			.connections_by_user
+			.get_mut(&user_id)
+		{
 			ctx.cancel_future(socket_group.cooldown_timer);
 
 			socket_group.cooldown_timer = ctx.spawn(future);
 
-
 			let event = Event::PixelsAvailable {
 				count: u32::try_from(cooldown_info.pixels_available).unwrap(),
-				next: cooldown_info.next().map(|time| time.duration_since(UNIX_EPOCH).unwrap()
-					.as_secs()),
+				next: cooldown_info.next().map(|time| {
+					time.duration_since(UNIX_EPOCH)
+						.unwrap()
+						.as_secs()
+				}),
 			};
 
 			let user_id = Some(user_id.clone());
 
-			self.handle(RunEvent {
-				event,
-				user_id
-			}, ctx);
+			self.handle(RunEvent { event, user_id }, ctx);
 		}
 	}
 }

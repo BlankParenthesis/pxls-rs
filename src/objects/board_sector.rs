@@ -1,9 +1,10 @@
-use diesel::QueryResult;
-use diesel::prelude::*;
-use actix_web::web::{BytesMut, BufMut};
+use actix_web::web::{BufMut, BytesMut};
+use diesel::{prelude::*, QueryResult};
 
-use crate::database::{model, schema, Connection};
-use crate::objects::MaskValue;
+use crate::{
+	database::{model, schema, Connection},
+	objects::MaskValue,
+};
 
 #[derive(PartialEq)]
 pub enum SectorBuffer {
@@ -77,16 +78,22 @@ impl BoardSector {
 			Some(SectorBuffer::Initial) => {
 				diesel::update(schema::board_sector::table)
 					.set(schema::board_sector::initial.eq(&*self.initial))
-					.filter(schema::board_sector::index.eq(self.index)
-						.and(schema::board_sector::board.eq(self.board)))
+					.filter(
+						schema::board_sector::index
+							.eq(self.index)
+							.and(schema::board_sector::board.eq(self.board)),
+					)
 					.execute(connection)
 					.map(|_| ())
 			},
 			Some(SectorBuffer::Mask) => {
 				diesel::update(schema::board_sector::table)
 					.set(schema::board_sector::mask.eq(&*self.mask))
-					.filter(schema::board_sector::index.eq(self.index)
-						.and(schema::board_sector::board.eq(self.board)))
+					.filter(
+						schema::board_sector::index
+							.eq(self.index)
+							.and(schema::board_sector::board.eq(self.board)),
+					)
 					.execute(connection)
 					.map(|_| ())
 			},
@@ -96,14 +103,16 @@ impl BoardSector {
 						schema::board_sector::initial.eq(&*self.initial),
 						schema::board_sector::mask.eq(&*self.mask),
 					))
-					.filter(schema::board_sector::index.eq(self.index)
-						.and(schema::board_sector::board.eq(self.board)))
+					.filter(
+						schema::board_sector::index
+							.eq(self.index)
+							.and(schema::board_sector::board.eq(self.board)),
+					)
 					.execute(connection)
 					.map(|_| ())
 			},
 		}
 	}
-
 
 	fn from_model(
 		sector: model::BoardSector,
@@ -123,17 +132,19 @@ impl BoardSector {
 
 		// TODO: maybe this will be possible in qsl one day…
 		// until then, maybe there's a non-nested way to do this.
-		let placements = diesel::sql_query("
+		let placements = diesel::sql_query(
+			"
 			SElECT DISTINCT ON (position) * FROM (
 				SELECT * FROM placement
 				WHERE board = $1
 				AND position BETWEEN $2 AND $3
 				ORDER BY timestamp DESC, id DESC
-			) AS ordered")
-			.bind::<diesel::sql_types::Int4, _>(sector.board)
-			.bind::<diesel::sql_types::Int8, _>(start_position)
-			.bind::<diesel::sql_types::Int8, _>(end_position)
-			.load::<model::Placement>(connection)?;
+			) AS ordered",
+		)
+		.bind::<diesel::sql_types::Int4, _>(sector.board)
+		.bind::<diesel::sql_types::Int8, _>(start_position)
+		.bind::<diesel::sql_types::Int8, _>(end_position)
+		.load::<model::Placement>(connection)?;
 
 		for placement in placements {
 			let index = placement.position as usize;
@@ -142,6 +153,13 @@ impl BoardSector {
 			timestamp_slice.put_u32_le(placement.timestamp as u32);
 		}
 
-		Ok(Self { board, index, initial, mask, colors, timestamps })
+		Ok(Self {
+			board,
+			index,
+			initial,
+			mask,
+			colors,
+			timestamps,
+		})
 	}
 }

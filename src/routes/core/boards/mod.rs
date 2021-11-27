@@ -1,18 +1,22 @@
-use super::*;
+use std::{
+	collections::HashSet,
+	convert::TryFrom,
+	sync::{Arc, RwLock},
+};
 
-use web::{Path, Query, Data, Payload, Json};
 use actix_web_actors::ws;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::sync::{Arc, RwLock};
+use web::{Data, Json, Path, Payload, Query};
 
-use crate::socket::socket::{BoardSocket, BoardSocketInitInfo, Extension, SocketOptions};
-use crate::BoardDataMap;
+use super::*;
+use crate::{
+	socket::socket::{BoardSocket, BoardSocketInitInfo, Extension, SocketOptions},
+	BoardDataMap,
+};
 
 macro_rules! board {
 	( $boards:ident[$id:ident] ) => {
 		$boards.read().unwrap().get(&$id)
-	}
+	};
 }
 
 pub mod data;
@@ -36,38 +40,43 @@ pub async fn list(
 	_access: BoardListAccess,
 ) -> HttpResponse {
 	let page = options.page.unwrap_or(0);
-	let limit = options.limit.unwrap_or(10).clamp(1, 100);
+	let limit = options
+		.limit
+		.unwrap_or(10)
+		.clamp(1, 100);
 
 	let boards = boards.read().unwrap();
-	let boards = boards.iter()
+	let boards = boards
+		.iter()
 		.map(|(id, board)| (id, board.read().unwrap()))
 		.collect::<Vec<_>>();
-	let board_infos = boards.iter()
+	let board_infos = boards
+		.iter()
 		.map(|(_id, board)| Reference::from(board.as_ref().unwrap()))
 		.collect::<Vec<_>>();
 	let mut chunks = board_infos.chunks(limit);
-	
-	fn page_uri(page: usize, limit: usize) -> String {
+
+	fn page_uri(
+		page: usize,
+		limit: usize,
+	) -> String {
 		format!("/boards?page={}&limit={}", page, limit)
 	}
 
 	// TODO: standardize this
-	HttpResponse::Ok()
-		.json(Page {
-			previous: page.checked_sub(1).and_then(
-				|page| chunks
-					.nth(page)
-					.map(|_| page_uri(page, limit)),
-			),
-			items: chunks
+	HttpResponse::Ok().json(Page {
+		previous: page.checked_sub(1).and_then(|page| {
+			chunks
+				.nth(page)
+				.map(|_| page_uri(page, limit))
+		}),
+		items: chunks.next().unwrap_or_default(),
+		next: page.checked_add(1).and_then(|page| {
+			chunks
 				.next()
-				.unwrap_or_default(),
-			next: page.checked_add(1).and_then(
-				|page| chunks
-					.next()
-					.map(|_| page_uri(page, limit)),
-			),
-		})
+				.map(|_| page_uri(page, limit))
+		}),
+	})
 }
 
 #[post("/boards")]
@@ -87,7 +96,10 @@ pub async fn post(
 	let board = boards.get(&id).unwrap().read().unwrap();
 
 	Ok(HttpResponse::build(StatusCode::CREATED)
-		.header("Location", http::Uri::from(board.as_ref().unwrap()).to_string())
+		.header(
+			"Location",
+			http::Uri::from(board.as_ref().unwrap()).to_string(),
+		)
 		.json(Reference::from(board.as_ref().unwrap())))
 }
 
@@ -96,12 +108,17 @@ pub async fn get_default(
 	Path(rest): Path<String>,
 	boards: BoardDataMap,
 	_access: BoardGetAccess,
-) -> Option<HttpResponse>  {
-	boards.read().unwrap().keys().last().map(|id| {
-		HttpResponse::TemporaryRedirect()
-			.header("Location", format!("/boards/{}{}", id, rest))
-			.finish()
-	})
+) -> Option<HttpResponse> {
+	boards
+		.read()
+		.unwrap()
+		.keys()
+		.last()
+		.map(|id| {
+			HttpResponse::TemporaryRedirect()
+				.header("Location", format!("/boards/{}{}", id, rest))
+				.finish()
+		})
 }
 
 #[get("/boards/{id}")]
@@ -117,11 +134,12 @@ pub async fn get(
 		let board = board.as_ref().unwrap();
 		let connection = &database_pool.get().unwrap();
 		let mut response = HttpResponse::Ok();
-		
+
 		if let AuthedUser::Authed(user) = user {
-			let cooldown_info = board.user_cooldown_info(&user, connection)
+			let cooldown_info = board
+				.user_cooldown_info(&user, connection)
 				.unwrap();
-	
+
 			for (key, value) in cooldown_info.into_headers() {
 				response.header(key, value);
 			}
@@ -141,17 +159,21 @@ pub async fn patch(
 	_access: BoardPatchAccess,
 ) -> Option<HttpResponse> {
 	board!(boards[id]).map(|board| {
-		board.write().unwrap()
-			.as_mut().unwrap()
-			.update_info(
-				data, 
-				&database_pool.get().unwrap(),
-			)
+		board
+			.write()
+			.unwrap()
+			.as_mut()
+			.unwrap()
+			.update_info(data, &database_pool.get().unwrap())
 			.unwrap();
 
 		HttpResponse::Ok().json(
-			&board.read().unwrap()
-				.as_ref().unwrap().info
+			&board
+				.read()
+				.unwrap()
+				.as_ref()
+				.unwrap()
+				.info,
 		)
 	})
 }
@@ -163,19 +185,27 @@ pub async fn delete(
 	database_pool: Data<Pool>,
 	_access: BoardDeleteAccess,
 ) -> Option<HttpResponse> {
-	boards.write().unwrap().remove(&id).map(|board| {
-		board.write().unwrap()
-			.take().unwrap()
-			.delete(&database_pool.get().unwrap()).unwrap();
+	boards
+		.write()
+		.unwrap()
+		.remove(&id)
+		.map(|board| {
+			board
+				.write()
+				.unwrap()
+				.take()
+				.unwrap()
+				.delete(&database_pool.get().unwrap())
+				.unwrap();
 
-		HttpResponse::new(StatusCode::NO_CONTENT)
-	})
+			HttpResponse::new(StatusCode::NO_CONTENT)
+		})
 }
 
 #[get("/boards/{id}/socket")]
 #[allow(clippy::too_many_arguments)] // humans don't call this function.
 pub async fn socket(
-	Path(id): Path<usize>, 
+	Path(id): Path<usize>,
 	options: QsQuery<SocketOptions>,
 	request: HttpRequest,
 	stream: Payload,
@@ -205,19 +235,17 @@ pub async fn socket(
 					BoardSocketInitInfo {
 						database_connection: connection,
 						board: Arc::clone(&board),
-					}
+					},
 				);
 
 				ws::start(socket, &request, stream)
 			} else {
 				Err(error::ErrorUnprocessableEntity(
-					"Requested extensions not supported"
+					"Requested extensions not supported",
 				))
 			}
 		} else {
-			Err(error::ErrorUnprocessableEntity(
-				"No extensions specified"
-			))
+			Err(error::ErrorUnprocessableEntity("No extensions specified"))
 		}
 	})
 }

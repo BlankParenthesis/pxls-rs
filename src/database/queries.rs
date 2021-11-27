@@ -1,9 +1,7 @@
 use diesel::prelude::*;
 
-use crate::objects::Board;
-use crate::database::schema;
-
 use super::Connection;
+use crate::{database::schema, objects::Board};
 
 pub fn load_boards(connection: &Connection) -> QueryResult<Vec<Board>> {
 	schema::board::table

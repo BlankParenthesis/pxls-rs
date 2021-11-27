@@ -1,9 +1,9 @@
-use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use diesel::prelude::*;
-use diesel::Connection as DConnection;
 
-use crate::database::{Connection, model, schema};
+use diesel::{prelude::*, Connection as DConnection};
+use serde::{Deserialize, Serialize};
+
+use crate::database::{model, schema, Connection};
 
 pub type Palette = HashMap<u32, Color>;
 
@@ -15,7 +15,7 @@ pub struct Color {
 
 impl From<model::Color> for Color {
 	fn from(color: model::Color) -> Self {
-		Color { 
+		Color {
 			name: color.name,
 			value: color.value as u32,
 		}
@@ -23,7 +23,7 @@ impl From<model::Color> for Color {
 }
 
 pub fn replace_palette(
-	palette: &Palette, 
+	palette: &Palette,
 	board_id: i32,
 	connection: &Connection,
 ) -> QueryResult<()> {
@@ -32,7 +32,7 @@ pub fn replace_palette(
 			.filter(schema::color::board.eq(board_id))
 			.execute(connection)?;
 
-		for (index, Color{ name, value }) in palette {
+		for (index, Color { name, value }) in palette {
 			diesel::insert_into(schema::color::table)
 				.values(model::Color {
 					board: board_id,

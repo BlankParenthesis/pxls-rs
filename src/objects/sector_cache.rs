@@ -1,10 +1,12 @@
-use parking_lot::*;
-use std::io::*;
-use std::convert::*;
-use diesel::{QueryResult, Connection as _};
+use std::{convert::*, io::*};
 
-use crate::objects::{BoardSector, SectorBuffer};
-use crate::database::Connection;
+use diesel::{Connection as _, QueryResult};
+use parking_lot::*;
+
+use crate::{
+	database::Connection,
+	objects::{BoardSector, SectorBuffer},
+};
 
 pub struct SectorCache {
 	// TODO: evict based on size
@@ -34,24 +36,24 @@ impl SectorCache {
 		sector_index: usize,
 		connection: &Connection,
 	) -> QueryResult<RwLockWriteGuard<Option<BoardSector>>> {
-		let mut option = self.sectors
-			.get(sector_index).unwrap()
+		let mut option = self
+			.sectors
+			.get(sector_index)
+			.unwrap()
 			.write();
 
-		let load = BoardSector::load(
-			self.board_id,
-			sector_index as i32,
-			connection,
-		)?;
-		
+		let load = BoardSector::load(self.board_id, sector_index as i32, connection)?;
+
 		let sector = match load {
 			Some(sector) => sector,
-			None => BoardSector::new(
-				self.board_id,
-				sector_index as i32,
-				self.sector_size,
-				connection,
-			)?,
+			None => {
+				BoardSector::new(
+					self.board_id,
+					sector_index as i32,
+					self.sector_size,
+					connection,
+				)?
+			},
 		};
 
 		option.replace(sector);
@@ -63,10 +65,12 @@ impl SectorCache {
 		&self,
 		sector_index: usize,
 	) -> Option<BoardSector> {
-		let mut option = self.sectors
-			.get(sector_index).unwrap()
+		let mut option = self
+			.sectors
+			.get(sector_index)
+			.unwrap()
 			.write();
-		
+
 		option.take()
 	}
 
@@ -82,12 +86,14 @@ impl SectorCache {
 			} else {
 				drop(option);
 
-				let sector = self.fill_sector(sector_index, connection).unwrap();
+				let sector = self
+					.fill_sector(sector_index, connection)
+					.unwrap();
 
 				Some(RwLockReadGuard::map(
 					RwLockWriteGuard::downgrade(sector),
-					|o| o.as_ref().unwrap())
-				)
+					|o| o.as_ref().unwrap(),
+				))
 			}
 		} else {
 			None
@@ -106,12 +112,11 @@ impl SectorCache {
 			} else {
 				drop(option);
 
-				let sector = self.fill_sector(sector_index, connection).unwrap();
+				let sector = self
+					.fill_sector(sector_index, connection)
+					.unwrap();
 
-				Some(RwLockWriteGuard::map(
-					sector,
-					|o| o.as_mut().unwrap())
-				)
+				Some(RwLockWriteGuard::map(sector, |o| o.as_mut().unwrap()))
 			}
 		} else {
 			None
@@ -128,10 +133,9 @@ impl SectorCache {
 			buffer,
 			sectors: self,
 			connection,
-		}	
+		}
 	}
 }
-
 
 pub trait Len {
 	fn len(&self) -> usize;
@@ -150,17 +154,17 @@ pub struct SectorCacheAccess<'l> {
 
 impl<'l> SectorCacheAccess<'l> {
 	fn sector_size(&self) -> usize {
-		self.sectors.sector_size * match self.buffer {
-			SectorBuffer::Colors => 1,
-			SectorBuffer::Timestamps => 4,
-			SectorBuffer::Initial => 1,
-			SectorBuffer::Mask => 1,
-		}
+		self.sectors.sector_size
+			* match self.buffer {
+				SectorBuffer::Colors => 1,
+				SectorBuffer::Timestamps => 4,
+				SectorBuffer::Initial => 1,
+				SectorBuffer::Mask => 1,
+			}
 	}
 }
 
-impl<'l> Len for SectorCacheAccess<'l> 
-{
+impl<'l> Len for SectorCacheAccess<'l> {
 	fn len(&self) -> usize {
 		self.sectors.sectors.len() * self.sector_size()
 	}
@@ -169,17 +173,26 @@ impl<'l> Len for SectorCacheAccess<'l>
 impl<'l> Seek for SectorCacheAccess<'l> {
 	fn seek(
 		&mut self,
-		seek: SeekFrom
+		seek: SeekFrom,
 	) -> std::result::Result<u64, std::io::Error> {
 		let new_cursor = match seek {
-			SeekFrom::Current(value) => i64::try_from(self.cursor)
-				.map(|cursor| cursor.checked_add(value)
-					.expect("overflow/underflow on seek"))
-				.and_then(u64::try_from),
-			SeekFrom::End(value) => i64::try_from(self.len())
-				.map(|end| end.checked_sub(value)
-					.expect("overflow/underflow on seek"))
-				.and_then(u64::try_from),
+			SeekFrom::Current(value) => {
+				i64::try_from(self.cursor)
+					.map(|cursor| {
+						cursor
+							.checked_add(value)
+							.expect("overflow/underflow on seek")
+					})
+					.and_then(u64::try_from)
+			},
+			SeekFrom::End(value) => {
+				i64::try_from(self.len())
+					.map(|end| {
+						end.checked_sub(value)
+							.expect("overflow/underflow on seek")
+					})
+					.and_then(u64::try_from)
+			},
 			SeekFrom::Start(value) => Ok(value),
 		};
 
@@ -205,8 +218,10 @@ impl<'l> Read for SectorCacheAccess<'l> {
 
 			let offset = self.cursor % sector_size;
 
-			let sector = self.sectors
-				.read_sector(sector_index, self.connection).unwrap();
+			let sector = self
+				.sectors
+				.read_sector(sector_index, self.connection)
+				.unwrap();
 
 			let mut buf = &match self.buffer {
 				SectorBuffer::Colors => &sector.colors,
@@ -216,7 +231,7 @@ impl<'l> Read for SectorCacheAccess<'l> {
 			}[offset..];
 
 			let write_len = buf.read(output)?;
-			
+
 			if write_len == 0 {
 				break;
 			}
@@ -233,50 +248,55 @@ impl<'l> Read for SectorCacheAccess<'l> {
 impl<'l> Write for SectorCacheAccess<'l> {
 	fn write(
 		&mut self,
-		mut input: &[u8]
+		mut input: &[u8],
 	) -> std::result::Result<usize, std::io::Error> {
 		let total_size = self.len();
 		let sector_size = self.sector_size();
 
 		let input = &mut input;
 
-		Ok(self.connection.transaction::<usize, diesel::result::Error, _>(|| {
-			let mut written = 0;
+		Ok(self
+			.connection
+			.transaction::<usize, diesel::result::Error, _>(|| {
+				let mut written = 0;
 
-			while !input.is_empty() && (0..total_size).contains(&self.cursor) {
-				let sector_index = self.cursor / sector_size;
+				while !input.is_empty() && (0..total_size).contains(&self.cursor) {
+					let sector_index = self.cursor / sector_size;
 
-				let offset = self.cursor % sector_size;
+					let offset = self.cursor % sector_size;
 
-				let mut sector = self.sectors
-					.write_sector(sector_index, self.connection).unwrap();
+					let mut sector = self
+						.sectors
+						.write_sector(sector_index, self.connection)
+						.unwrap();
 
-				let buf = &mut match self.buffer {
-					SectorBuffer::Colors => &mut sector.colors,
-					SectorBuffer::Timestamps => &mut sector.timestamps,
-					SectorBuffer::Initial => &mut sector.initial,
-					SectorBuffer::Mask => &mut sector.mask,
-				}[offset..];
+					let buf = &mut match self.buffer {
+						SectorBuffer::Colors => &mut sector.colors,
+						SectorBuffer::Timestamps => &mut sector.timestamps,
+						SectorBuffer::Initial => &mut sector.initial,
+						SectorBuffer::Mask => &mut sector.mask,
+					}[offset..];
 
-				let write_len: usize = input.read(buf).unwrap();
-				
-				if write_len == 0 {
-					break;
+					let write_len: usize = input.read(buf).unwrap();
+
+					if write_len == 0 {
+						break;
+					}
+
+					written = write_len;
+					self.cursor += write_len;
+
+					sector.save(self.connection, Some(&self.buffer))?;
+
+					if self.buffer == SectorBuffer::Initial {
+						drop(sector);
+						self.sectors.evict_sector(sector_index);
+					}
 				}
 
-				written = write_len;
-				self.cursor += write_len;
-				
-				sector.save(self.connection, Some(&self.buffer))?;
-
-				if self.buffer == SectorBuffer::Initial {
-					drop(sector);
-					self.sectors.evict_sector(sector_index);
-				}
-			}
-
-			Ok(written)
-		}).unwrap())
+				Ok(written)
+			})
+			.unwrap())
 	}
 
 	fn flush(&mut self) -> std::result::Result<(), std::io::Error> {

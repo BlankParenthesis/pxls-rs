@@ -1,5 +1,5 @@
-use serde::Serialize;
 use actix::MessageResponse;
+use serde::Serialize;
 
 #[derive(Serialize, Debug, MessageResponse)]
 pub struct UserCount {

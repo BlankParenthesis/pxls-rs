@@ -1,12 +1,10 @@
+use ::http::StatusCode;
 use actix_web::*;
 use serde::Serialize;
 use serde_qs::actix::QsQuery;
-use ::http::StatusCode;
 use url::Url;
 
-use crate::objects::*;
-use crate::access::permissions::Permission;
-use crate::database::Pool;
+use crate::{access::permissions::Permission, database::Pool, objects::*};
 
-pub mod core;
 pub mod auth;
+pub mod core;

@@ -11,10 +11,13 @@ pub async fn list(
 	boards: BoardDataMap,
 	database_pool: Data<Pool>,
 	_access: BoardsPixelsListAccess,
-) -> Option<HttpResponse>  {
+) -> Option<HttpResponse> {
 	board!(boards[board_id]).map(|board| {
 		let page = options.page.unwrap_or_default();
-		let limit = options.limit.unwrap_or(10).clamp(1, 100);
+		let limit = options
+			.limit
+			.unwrap_or(10)
+			.clamp(1, 100);
 
 		let board = board.read().unwrap();
 		let board = board.as_ref().unwrap();
@@ -27,9 +30,9 @@ pub async fn list(
 			// This is required for paging.
 			.list_placements(page.timestamp, page.id, limit + 1, false, connection)
 			.unwrap();
-		
+
 		fn page_uri(
-			board_id:usize,
+			board_id: usize,
 			timestamp: u32,
 			placement_id: i64,
 			limit: usize,
@@ -40,25 +43,19 @@ pub async fn list(
 			)
 		}
 
-		HttpResponse::Ok()
-			.json(Page {
-				previous: previous_placements.get(0)
-					.map(|placement| page_uri(
-						board_id,
-						placement.timestamp as u32,
-						placement.id,
-						limit,
-					)),
-				items: &placements[..placements.len().clamp(0, limit)],
-				next: (placements.len() > limit)
-					.then(|| placements.iter().last().unwrap())
-					.map(|placement| page_uri(
-						board_id,
-						placement.timestamp as u32,
-						placement.id,
-						limit,
-					)),
-			})
+		HttpResponse::Ok().json(Page {
+			previous: previous_placements
+				.get(0)
+				.map(|placement| {
+					page_uri(board_id, placement.timestamp as u32, placement.id, limit)
+				}),
+			items: &placements[..placements.len().clamp(0, limit)],
+			next: (placements.len() > limit)
+				.then(|| placements.iter().last().unwrap())
+				.map(|placement| {
+					page_uri(board_id, placement.timestamp as u32, placement.id, limit)
+				}),
+		})
 	})
 }
 
@@ -73,8 +70,11 @@ pub async fn get(
 		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 
-		board.as_ref().unwrap()
-			.lookup(position, connection).unwrap()
+		board
+			.as_ref()
+			.unwrap()
+			.lookup(position, connection)
+			.unwrap()
 			.map(|placement| HttpResponse::Ok().json(placement))
 	})
 }
@@ -92,30 +92,26 @@ pub async fn post(
 		let board = board.read().unwrap();
 		let connection = &mut database_pool.get().unwrap();
 
-		let user = Option::from(user)
-			.expect("Default user shouldn't have place permisisons");
-		
-		let place_attempt = board.as_ref().unwrap()
-			.try_place(
-				// TODO: maybe accept option but make sure not to allow undos etc for anon users
-				&user,
-				position,
-				placement.color,
-				connection,
-			);
+		let user = Option::from(user).expect("Default user shouldn't have place permisisons");
+
+		let place_attempt = board.as_ref().unwrap().try_place(
+			// TODO: maybe accept option but make sure not to allow undos etc for anon users
+			&user,
+			position,
+			placement.color,
+			connection,
+		);
 
 		let mut response = match place_attempt {
-			Ok(placement) => {
-				HttpResponse::build(StatusCode::CREATED)
-					.json(placement)
-			},
+			Ok(placement) => HttpResponse::build(StatusCode::CREATED).json(placement),
 			Err(e) => actix_web::Error::from(e).into(),
 		};
 
 		let headers = response.headers_mut();
 
 		let cooldown_info = board
-			.as_ref().unwrap()
+			.as_ref()
+			.unwrap()
 			.user_cooldown_info(&user, connection)
 			.unwrap();
 
@@ -126,4 +122,3 @@ pub async fn post(
 		response
 	})
 }
-

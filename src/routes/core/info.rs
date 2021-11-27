@@ -34,7 +34,11 @@ guard!(InfoAccess, Info);
 #[get("/info")]
 pub async fn get(user: AuthedUser) -> HttpResponse {
 	let user = Option::<User>::from(user);
-	if user.unwrap_or_default().permissions.contains(&Permission::Info) {
+	if user
+		.unwrap_or_default()
+		.permissions
+		.contains(&Permission::Info)
+	{
 		HttpResponse::Ok().json(&*SERVER_INFO)
 	} else {
 		actix_web::error::ErrorForbidden("Missing Permissions").into()

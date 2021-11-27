@@ -1,22 +1,26 @@
-use actix::prelude::*;
-use actix::{StreamHandler, Actor, AsyncContext, Handler, Addr};
+use std::{
+	collections::HashSet,
+	convert::TryFrom,
+	fmt,
+	sync::{Arc, RwLock},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use actix::{prelude::*, Actor, Addr, AsyncContext, Handler, StreamHandler};
 use actix_web_actors::ws;
+use enum_map::Enum;
 use jsonwebtoken::TokenData;
 use serde::Deserialize;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::fmt;
-use std::sync::{Arc, RwLock};
-use enum_map::Enum;
 
-use crate::database::Connection;
-use crate::objects::{Board, User};
-use crate::socket::server::{BoardServer, Connect, Disconnect};
-use crate::socket::event::Event;
-use crate::authentication::openid::{Identity, validate_token};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-use crate::socket::server::Close;
+use crate::{
+	authentication::openid::{validate_token, Identity},
+	database::Connection,
+	objects::{Board, User},
+	socket::{
+		event::Event,
+		server::{BoardServer, Close, Connect, Disconnect},
+	},
+};
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Enum, Copy)]
 pub enum Extension {
@@ -26,13 +30,17 @@ pub enum Extension {
 #[derive(Default, Debug)]
 pub struct InvalidExtensionError;
 impl fmt::Display for InvalidExtensionError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+	fn fmt(
+		&self,
+		f: &mut fmt::Formatter<'_>,
+	) -> fmt::Result {
 		write!(f, "InvalidExtensionError")
 	}
 }
 
 impl TryFrom<String> for Extension {
 	type Error = InvalidExtensionError;
+
 	fn try_from(string: String) -> Result<Self, Self::Error> {
 		match string.as_str() {
 			"core" => Ok(Extension::Core),
@@ -91,12 +99,12 @@ impl BoardSocket {
 		&mut self,
 		token_data: Option<TokenData<Identity>>,
 		ctx: &mut <Self as Actor>::Context,
-	) -> Result<(), ()>{ 
+	) -> Result<(), ()> {
 		if let Some(identity) = token_data {
 			let expiry = Duration::from_secs(u64::try_from(identity.claims.exp).unwrap());
-			
+
 			self.token_expiry = Some(UNIX_EPOCH + expiry);
-			
+
 			if self.authenticated() {
 				if self.user_id.as_deref() == Some(identity.claims.sub).as_deref() {
 					Ok(())
@@ -123,19 +131,27 @@ impl BoardSocket {
 		user_id: Option<String>,
 		ctx: &mut <Self as Actor>::Context,
 	) {
-		let BoardSocketInitInfo { board, database_connection } =
-			self.init_info.take().expect("Missing init data for socket (maybe already consumed)");
-			self.user_id = user_id;
+		let BoardSocketInitInfo {
+			board,
+			database_connection,
+		} = self
+			.init_info
+			.take()
+			.expect("Missing init data for socket (maybe already consumed)");
+		self.user_id = user_id;
 
 		let board = board.read().unwrap();
 		match board.as_ref() {
 			Some(board) => {
-				let cooldown_info = self.user_id.as_ref()
+				let cooldown_info = self
+					.user_id
+					.as_ref()
 					.map(|user_id| User::from_id(user_id.clone()))
-					.map(|user| board.user_cooldown_info(
-						&user,
-						&database_connection,
-					).expect("Database failure when fetching cooldown"));
+					.map(|user| {
+						board
+							.user_cooldown_info(&user, &database_connection)
+							.expect("Database failure when fetching cooldown")
+					});
 
 				// TODO: check client has permissions for all extensions.
 
@@ -168,7 +184,7 @@ impl Handler<Close> for BoardSocket {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
+		&mut self,
 		_: Close,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
@@ -183,7 +199,7 @@ impl Handler<Arc<Event>> for BoardSocket {
 	type Result = ();
 
 	fn handle(
-		&mut self, 
+		&mut self,
 		msg: Arc<Event>,
 		ctx: &mut Self::Context,
 	) -> Self::Result {
@@ -201,31 +217,39 @@ impl Handler<Arc<Event>> for BoardSocket {
 impl Actor for BoardSocket {
 	type Context = ws::WebsocketContext<Self>;
 
-	fn started(&mut self, ctx: &mut Self::Context) {
+	fn started(
+		&mut self,
+		ctx: &mut Self::Context,
+	) {
 		// NOTE: 5 seconds may be a bit aggressive, maybe increase to 30
 		let require_auth_by = Instant::now() + Duration::from_secs(5);
 
 		async move {
 			actix::clock::delay_until(require_auth_by.into()).await;
-		}.into_actor(self).then(|_, socket, ctx| {
+		}
+		.into_actor(self)
+		.then(|_, socket, ctx| {
 			if !socket.authenticated() {
 				// ло раззрогт, ло елтяу
 				ctx.close(None);
 				ctx.stop();
 			}
-			
+
 			fut::ready(())
-		}).spawn(ctx);
+		})
+		.spawn(ctx);
 	}
 
-	fn stopping(&mut self, ctx: &mut Self::Context) -> Running {
+	fn stopping(
+		&mut self,
+		ctx: &mut Self::Context,
+	) -> Running {
 		if self.authenticated() {
-			self.server
-				.do_send(Disconnect {
-					socket: ctx.address(),
-					user_id: self.user_id.clone(),
-					extensions: self.extensions.clone(),
-				});
+			self.server.do_send(Disconnect {
+				socket: ctx.address(),
+				user_id: self.user_id.clone(),
+				extensions: self.extensions.clone(),
+			});
 		}
 		Running::Stop
 	}
@@ -237,7 +261,7 @@ struct AuthMessage {
 	token: Option<String>,
 }
 
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for BoardSocket {	
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for BoardSocket {
 	fn handle(
 		&mut self,
 		msg: Result<ws::Message, ws::ProtocolError>,
@@ -258,7 +282,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for BoardSocket {
 							.then(|result, socket, ctx| {
 								match result {
 									Ok(identity) => {
-										if socket.auth(Some(identity), ctx).is_err() {
+										if socket
+											.auth(Some(identity), ctx)
+											.is_err()
+										{
 											ctx.close(None);
 											ctx.stop();
 										}
@@ -266,7 +293,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for BoardSocket {
 									Err(_) => {
 										ctx.close(None);
 										ctx.stop();
-									}
+									},
 								}
 								fut::ready(())
 							})

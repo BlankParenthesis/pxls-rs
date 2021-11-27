@@ -1,10 +1,6 @@
-use actix_web::web::Bytes;
-use actix_web::{FromRequest, HttpMessage, error};
-use actix_web::http::header;
+use std::{convert::TryFrom, future::Future, pin::Pin};
 
-use std::pin::Pin;
-use std::future::Future;
-use std::convert::TryFrom;
+use actix_web::{error, http::header, web::Bytes, FromRequest, HttpMessage};
 
 #[derive(Debug)]
 pub enum InvalidPatch {
@@ -16,13 +12,26 @@ pub enum InvalidPatch {
 }
 
 impl std::fmt::Display for InvalidPatch {
-	fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+	fn fmt(
+		&self,
+		formatter: &mut std::fmt::Formatter,
+	) -> std::fmt::Result {
 		match self {
-			InvalidPatch::EmptyPatch => write!(formatter, "Empty Patch"),
-			InvalidPatch::LengthMismatch => write!(formatter, "Length Mismatch"),
-			InvalidPatch::RangeMisordered => write!(formatter, "Range Misordered"),
-			InvalidPatch::BoundsExceeded => write!(formatter, "Patch exceeds object bounds"),
-			InvalidPatch::UnexpectedSize => write!(formatter, "Expected length mismatch"),
+			InvalidPatch::EmptyPatch => {
+				write!(formatter, "Empty Patch")
+			},
+			InvalidPatch::LengthMismatch => {
+				write!(formatter, "Length Mismatch")
+			},
+			InvalidPatch::RangeMisordered => {
+				write!(formatter, "Range Misordered")
+			},
+			InvalidPatch::BoundsExceeded => {
+				write!(formatter, "Patch exceeds object bounds")
+			},
+			InvalidPatch::UnexpectedSize => {
+				write!(formatter, "Expected length mismatch")
+			},
 		}
 	}
 }
@@ -63,7 +72,9 @@ impl BinaryPatch {
 			}
 		}
 
-		let start = range.map(|(start, _end)| start).unwrap_or(0);
+		let start = range
+			.map(|(start, _end)| start)
+			.unwrap_or(0);
 
 		Ok(Self {
 			start,
@@ -104,8 +115,7 @@ impl FromRequest for BinaryPatch {
 					instance_length,
 				})) => {
 					bytes_future.await.and_then(|data| {
-						BinaryPatch::new(range, data, instance_length)
-							.map_err(|e| e.into())
+						BinaryPatch::new(range, data, instance_length).map_err(|e| e.into())
 					})
 				},
 				None => Err(error::ErrorBadRequest("Missing content-range header")),

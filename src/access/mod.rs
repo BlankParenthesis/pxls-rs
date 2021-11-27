@@ -1,1 +1,2 @@
-#[macro_use] pub mod permissions;
+#[macro_use]
+pub mod permissions;

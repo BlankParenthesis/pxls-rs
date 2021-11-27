@@ -1,6 +1,7 @@
 use std::collections::HashSet;
-use actix_web::{FromRequest, HttpRequest, dev::Payload};
-use futures_util::future::{Ready, ok};
+
+use actix_web::{dev::Payload, FromRequest, HttpRequest};
+use futures_util::future::{ok, Ready};
 
 use crate::access::permissions::Permission;
 
@@ -18,8 +19,11 @@ impl User {
 		permissions.insert(Permission::BoardsPixelsPost);
 		permissions.insert(Permission::BoardsGet);
 		permissions.insert(Permission::SocketCore);
-		
-		Self { id: Some(id), permissions }
+
+		Self {
+			id: Some(id),
+			permissions,
+		}
 	}
 }
 
@@ -38,7 +42,7 @@ impl Default for User {
 		permissions.insert(Permission::BoardsPixelsList);
 		permissions.insert(Permission::BoardsPixelsGet);
 		permissions.insert(Permission::SocketCore);
-		
+
 		Self {
 			id: None,
 			permissions,
@@ -52,29 +56,36 @@ pub enum AuthedUser {
 }
 
 impl From<AuthedUser> for Option<User> {
-    fn from(authed: AuthedUser) -> Self {
-        match authed {
+	fn from(authed: AuthedUser) -> Self {
+		match authed {
 			AuthedUser::Authed(user) => Some(user),
 			AuthedUser::None => None,
 		}
-    }
+	}
 }
 
 impl From<Option<User>> for AuthedUser {
-    fn from(user: Option<User>) -> Self {
-        match user {
+	fn from(user: Option<User>) -> Self {
+		match user {
 			Some(user) => AuthedUser::Authed(user),
 			None => AuthedUser::None,
 		}
-    }
+	}
 }
 
 impl FromRequest for AuthedUser {
+	type Config = ();
 	type Error = actix_web::Error;
 	type Future = Ready<Result<Self, Self::Error>>;
-	type Config = ();
-	
-	fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-		ok(req.extensions().get::<User>().cloned().into())
+
+	fn from_request(
+		req: &HttpRequest,
+		_payload: &mut Payload,
+	) -> Self::Future {
+		ok(req
+			.extensions()
+			.get::<User>()
+			.cloned()
+			.into())
 	}
 }

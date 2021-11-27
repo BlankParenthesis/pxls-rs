@@ -1,20 +1,31 @@
-#[macro_use] extern crate lazy_static;
-#[macro_use] extern crate diesel;
-#[macro_use] extern crate diesel_migrations;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate diesel;
+#[macro_use]
+extern crate diesel_migrations;
 
-#[macro_use] mod access;
-#[macro_use] mod database;
+#[macro_use]
+mod access;
+#[macro_use]
+mod database;
+mod authentication;
+mod config;
+mod objects;
 mod routes;
 mod socket;
-mod objects;
-mod config;
-mod authentication;
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use actix_web::{App, HttpServer, web::Data};
-use actix_web::middleware::{NormalizePath, normalize::TrailingSlash, Compress};
-use authentication::bearer::{BearerAuth, validator};
+use std::{
+	collections::HashMap,
+	sync::{Arc, RwLock},
+};
+
+use actix_web::{
+	middleware::{normalize::TrailingSlash, Compress, NormalizePath},
+	web::Data,
+	App, HttpServer,
+};
+use authentication::bearer::{validator, BearerAuth};
 
 use crate::objects::Board;
 
@@ -49,37 +60,41 @@ async fn main() -> std::io::Result<()> {
 		.collect::<HashMap<_, _>>();
 	let boards: BoardDataMap = Data::new(RwLock::new(boards));
 
-	HttpServer::new(move || App::new()
-		.data(pool.clone())
-		.app_data(boards.clone())
-		.wrap(BearerAuth::new(validator))
-		.wrap(actix_cors::Cors::default()
-			.allow_any_origin()
-			.allow_any_header()
-			.allow_any_method())
-		.wrap(NormalizePath::new(TrailingSlash::Trim))
-		.wrap(Compress::default())
-		.service(routes::core::info::get)
-		.service(routes::core::access::get)
-		.service(routes::core::boards::list)
-		.service(routes::core::boards::get)
-		.service(routes::core::boards::get_default)
-		.service(routes::core::boards::post)
-		.service(routes::core::boards::patch)
-		.service(routes::core::boards::delete)
-		.service(routes::core::boards::socket)
-		.service(routes::core::boards::data::get_colors)
-		.service(routes::core::boards::data::get_timestamps)
-		.service(routes::core::boards::data::get_mask)
-		.service(routes::core::boards::data::get_initial)
-		.service(routes::core::boards::data::patch_initial)
-		.service(routes::core::boards::data::patch_mask)
-		.service(routes::core::boards::users::get)
-		.service(routes::core::boards::pixels::list)
-		.service(routes::core::boards::pixels::get)
-		.service(routes::core::boards::pixels::post)
-		.service(routes::auth::auth::get)
-	).bind(format!("{}:{}", config.host, config.port))?
-		.run()
-		.await
+	HttpServer::new(move || {
+		App::new()
+			.data(pool.clone())
+			.app_data(boards.clone())
+			.wrap(BearerAuth::new(validator))
+			.wrap(
+				actix_cors::Cors::default()
+					.allow_any_origin()
+					.allow_any_header()
+					.allow_any_method(),
+			)
+			.wrap(NormalizePath::new(TrailingSlash::Trim))
+			.wrap(Compress::default())
+			.service(routes::core::info::get)
+			.service(routes::core::access::get)
+			.service(routes::core::boards::list)
+			.service(routes::core::boards::get)
+			.service(routes::core::boards::get_default)
+			.service(routes::core::boards::post)
+			.service(routes::core::boards::patch)
+			.service(routes::core::boards::delete)
+			.service(routes::core::boards::socket)
+			.service(routes::core::boards::data::get_colors)
+			.service(routes::core::boards::data::get_timestamps)
+			.service(routes::core::boards::data::get_mask)
+			.service(routes::core::boards::data::get_initial)
+			.service(routes::core::boards::data::patch_initial)
+			.service(routes::core::boards::data::patch_mask)
+			.service(routes::core::boards::users::get)
+			.service(routes::core::boards::pixels::list)
+			.service(routes::core::boards::pixels::get)
+			.service(routes::core::boards::pixels::post)
+			.service(routes::auth::auth::get)
+	})
+	.bind(format!("{}:{}", config.host, config.port))?
+	.run()
+	.await
 }
