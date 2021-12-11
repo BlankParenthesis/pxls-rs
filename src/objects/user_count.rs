@@ -1,7 +1,6 @@
-use actix::MessageResponse;
 use serde::Serialize;
 
-#[derive(Serialize, Debug, MessageResponse)]
+#[derive(Serialize, Debug)]
 pub struct UserCount {
 	pub active: usize,
 	pub idle_timeout: u32,

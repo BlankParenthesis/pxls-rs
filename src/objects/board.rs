@@ -1,31 +1,30 @@
 use std::{
 	convert::TryFrom,
 	io::{Seek, SeekFrom, Write},
-	sync::Arc,
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use actix::prelude::*;
-use actix_web::{
-	http::{HeaderName, HeaderValue},
-	web::BufMut,
-};
+use crate::filters::body::patch::BinaryPatch;
+
+use http::{header::{HeaderName, HeaderValue}, StatusCode};
+use bytes::BufMut;
 use diesel::{prelude::*, types::Record, Connection as DConnection};
 use http::Uri;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
+use warp::{reply::Response, reject::Reject, Reply};
 
 use crate::{
 	database::{model, schema, Connection},
 	objects::{
-		BinaryPatch, Color, Palette, Reference, SectorBuffer, SectorCache, SectorCacheAccess,
+		Color, Palette, Reference, SectorBuffer, SectorCache, SectorCacheAccess,
 		Shape, User, UserCount, VecShape,
 	},
-	socket::{
-		event::{BoardData, BoardInfo as EventBoardInfo, Change, Event},
-		server::{BoardServer, Close, Cooldown, RunEvent},
-	},
+	//socket::{
+	//	event::{BoardData, BoardInfo as EventBoardInfo, Change, Event},
+	//	server::{BoardServer, Close, Cooldown, RunEvent},
+	//},
 };
 
 #[derive(Serialize, Debug)]
@@ -53,29 +52,29 @@ pub struct BoardInfoPatch {
 	max_stacked: Option<u32>,
 }
 
-impl From<BoardInfoPatch> for EventBoardInfo {
-	fn from(
-		BoardInfoPatch {
-			name,
-			shape,
-			palette,
-			max_stacked,
-		}: BoardInfoPatch
-	) -> Self {
-		Self {
-			name,
-			shape,
-			palette,
-			max_stacked,
-		}
-	}
-}
+//impl From<BoardInfoPatch> for EventBoardInfo {
+//	fn from(
+//		BoardInfoPatch {
+//			name,
+//			shape,
+//			palette,
+//			max_stacked,
+//		}: BoardInfoPatch
+//	) -> Self {
+//		Self {
+//			name,
+//			shape,
+//			palette,
+//			max_stacked,
+//		}
+//	}
+//}
 
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
 	sectors: SectorCache,
-	server: Arc<Addr<BoardServer>>,
+	//server: Arc<Addr<BoardServer>>,
 }
 
 #[derive(Clone, Debug)]
@@ -162,46 +161,19 @@ pub enum PlaceError {
 	OutOfBounds,
 }
 
-impl std::error::Error for PlaceError {}
+impl Reject for PlaceError {}
 
-impl std::fmt::Display for PlaceError {
-	fn fmt(
-		&self,
-		formatter: &mut std::fmt::Formatter,
-	) -> std::fmt::Result {
+impl Reply for PlaceError {
+	fn into_response(self) -> Response {
 		match self {
-			PlaceError::UnknownMaskValue => {
-				write!(formatter, "Unknown mask value")
-			},
-			PlaceError::Unplacable => {
-				write!(formatter, "Position is unplacable")
-			},
-			PlaceError::InvalidColor => {
-				write!(formatter, "No such color on palette")
-			},
-			PlaceError::NoOp => {
-				write!(formatter, "Placement would have no effect")
-			},
-			PlaceError::Cooldown => {
-				write!(formatter, "No placements available")
-			},
-			PlaceError::OutOfBounds => {
-				write!(formatter, "Position is out of bounds")
-			},
+			Self::UnknownMaskValue => StatusCode::INTERNAL_SERVER_ERROR,
+			Self::Unplacable => StatusCode::FORBIDDEN,
+			Self::InvalidColor => StatusCode::UNPROCESSABLE_ENTITY,
+			Self::NoOp => StatusCode::CONFLICT,
+			Self::Cooldown => StatusCode::TOO_MANY_REQUESTS,
+			Self::OutOfBounds => StatusCode::NOT_FOUND,
 		}
-	}
-}
-
-impl From<PlaceError> for actix_web::Error {
-	fn from(place_error: PlaceError) -> Self {
-		match place_error {
-			PlaceError::UnknownMaskValue => actix_web::error::ErrorInternalServerError(place_error),
-			PlaceError::Unplacable => actix_web::error::ErrorForbidden(place_error),
-			PlaceError::InvalidColor => actix_web::error::ErrorUnprocessableEntity(place_error),
-			PlaceError::NoOp => actix_web::error::ErrorConflict(place_error),
-			PlaceError::Cooldown => actix_web::error::ErrorTooManyRequests(place_error),
-			PlaceError::OutOfBounds => actix_web::error::ErrorNotFound(place_error),
-		}
+		.into_response()
 	}
 }
 
@@ -249,30 +221,30 @@ impl Board {
 			.access(SectorBuffer::Initial, connection);
 
 		sector_data
-			.seek(SeekFrom::Start(patch.start))
+			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
 			.map_err(|_| "invalid start position")?;
 
 		sector_data
 			.write(&*patch.data)
 			.map_err(|_| "write error")?;
 
-		let event = Event::BoardUpdate {
-			info: None,
-			data: Some(BoardData {
-				colors: None,
-				timestamps: None,
-				initial: Some(vec![Change {
-					position: patch.start,
-					values: Vec::from(&*patch.data),
-				}]),
-				mask: None,
-			}),
-		};
+		//let event = Event::BoardUpdate {
+		//	info: None,
+		//	data: Some(BoardData {
+		//		colors: None,
+		//		timestamps: None,
+		//		initial: Some(vec![Change {
+		//			position: patch.start,
+		//			values: Vec::from(&*patch.data),
+		//		}]),
+		//		mask: None,
+		//	}),
+		//};
 
-		self.server.do_send(RunEvent {
-			event,
-			user_id: None,
-		});
+		//self.server.do_send(RunEvent {
+		//	event,
+		//	user_id: None,
+		//});
 
 		Ok(())
 	}
@@ -287,30 +259,30 @@ impl Board {
 			.access(SectorBuffer::Mask, connection);
 
 		sector_data
-			.seek(SeekFrom::Start(patch.start))
+			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
 			.map_err(|_| "invalid start position")?;
 
 		sector_data
 			.write(&*patch.data)
 			.map_err(|_| "write error")?;
 
-		let event = Event::BoardUpdate {
-			info: None,
-			data: Some(BoardData {
-				colors: None,
-				timestamps: None,
-				initial: None,
-				mask: Some(vec![Change {
-					position: patch.start,
-					values: Vec::from(&*patch.data),
-				}]),
-			}),
-		};
+		//let event = Event::BoardUpdate {
+		//	info: None,
+		//	data: Some(BoardData {
+		//		colors: None,
+		//		timestamps: None,
+		//		initial: None,
+		//		mask: Some(vec![Change {
+		//			position: patch.start,
+		//			values: Vec::from(&*patch.data),
+		//		}]),
+		//	}),
+		//};
 
-		self.server.do_send(RunEvent {
-			event,
-			user_id: None,
-		});
+		//self.server.do_send(RunEvent {
+		//	event,
+		//	user_id: None,
+		//});
 
 		Ok(())
 	}
@@ -386,15 +358,15 @@ impl Board {
 			self.info.max_stacked = max_stacked;
 		}
 
-		let event = Event::BoardUpdate {
-			info: Some(info.into()),
-			data: None,
-		};
+		//let event = Event::BoardUpdate {
+		//	info: Some(info.into()),
+		//	data: None,
+		//};
 
-		self.server.do_send(RunEvent {
-			event,
-			user_id: None,
-		});
+		//self.server.do_send(RunEvent {
+		//	event,
+		//	user_id: None,
+		//});
 
 		Ok(())
 	}
@@ -403,7 +375,7 @@ impl Board {
 		self,
 		connection: &Connection,
 	) -> QueryResult<()> {
-		self.server.do_send(Close {});
+		//self.server.do_send(Close {});
 
 		connection.transaction(|| {
 			diesel::delete(schema::board_sector::table)
@@ -516,37 +488,37 @@ impl Board {
 			.as_mut()
 			.put_u32_le(timestamp);
 
-		let event = Event::BoardUpdate {
-			info: None,
-			data: Some(BoardData {
-				colors: Some(vec![Change {
-					position,
-					values: vec![color as u8],
-				}]),
-				timestamps: Some(vec![Change {
-					position,
-					values: vec![timestamp],
-				}]),
-				initial: None,
-				mask: None,
-			}),
-		};
+		//let event = Event::BoardUpdate {
+		//	info: None,
+		//	data: Some(BoardData {
+		//		colors: Some(vec![Change {
+		//			position,
+		//			values: vec![color as u8],
+		//		}]),
+		//		timestamps: Some(vec![Change {
+		//			position,
+		//			values: vec![timestamp],
+		//		}]),
+		//		initial: None,
+		//		mask: None,
+		//	}),
+		//};
 
-		self.server.do_send(RunEvent {
-			event,
-			user_id: None,
-		});
+		//self.server.do_send(RunEvent {
+		//	event,
+		//	user_id: None,
+		//});
 
-		if let Some(user_id) = user.id.clone() {
-			let cooldown_info = self
-				.user_cooldown_info(user, connection)
-				.unwrap();
+		//if let Some(user_id) = user.id.clone() {
+		//	let cooldown_info = self
+		//		.user_cooldown_info(user, connection)
+		//		.unwrap();
 
-			self.server.do_send(Cooldown {
-				cooldown_info,
-				user_id,
-			});
-		}
+		//	self.server.do_send(Cooldown {
+		//		cooldown_info,
+		//		user_id,
+		//	});
+		//}
 
 		Ok(new_placement)
 	}
@@ -640,13 +612,13 @@ impl Board {
 			info.shape.sector_size(),
 		);
 
-		let server = Arc::new(BoardServer::default().start());
+		//let server = Arc::new(BoardServer::default().start());
 
 		Ok(Board {
 			id,
 			info,
 			sectors,
-			server,
+			//server,
 		})
 	}
 
@@ -864,9 +836,9 @@ impl Board {
 		self.user_count_for_time(self.current_timestamp(), connection)
 	}
 
-	pub fn server(&self) -> Arc<Addr<BoardServer>> {
-		Arc::clone(&self.server)
-	}
+	//pub fn server(&self) -> Arc<Addr<BoardServer>> {
+	//	Arc::clone(&self.server)
+	//}
 }
 
 impl From<&Board> for Uri {

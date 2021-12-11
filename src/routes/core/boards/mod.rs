@@ -1,251 +1,237 @@
-use std::{
-	collections::HashSet,
-	convert::TryFrom,
-	sync::{Arc, RwLock},
-};
+use std::sync::RwLock;
+use std::sync::Arc;
 
-use actix_web_actors::ws;
-use web::{Data, Json, Path, Payload, Query};
+use http::header;
+
+use warp::path::Tail;
 
 use super::*;
-use crate::{
-	socket::socket::{BoardSocket, BoardSocketInitInfo, Extension, SocketOptions},
-	BoardDataMap,
-};
+use crate::filters::resource::board::PassableBoard;
+use crate::filters::resource::board::PendingDelete;
+use crate::{BoardDataMap};
 
-macro_rules! board {
-	( $boards:ident[$id:ident] ) => {
-		$boards.read().unwrap().get(&$id)
-	};
-}
+use fragile::Fragile;
 
 pub mod data;
 pub mod pixels;
 pub mod users;
 
-guard!(BoardListAccess, BoardsList);
-guard!(BoardGetAccess, BoardsGet);
-guard!(BoardPostAccess, BoardsPost);
-guard!(BoardPatchAccess, BoardsPatch);
-guard!(BoardDeleteAccess, BoardsDelete);
-guard!(SocketAccess, SocketCore);
+pub fn list(boards: BoardDataMap) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsList)))
+		.and(warp::query())
+		.map(move |_user, pagination: PaginationOptions<usize>| {
+			let page = pagination.page.unwrap_or(0);
+			let limit = pagination
+				.limit
+				.unwrap_or(10)
+				.clamp(1, 100);
 
-// TODO: actix-web apparently deals very badly with diesel's blocking IO.
-// Database operations should be wrapped in web::block and awaited.
+			let boards = Arc::clone(&boards);
+			let boards = boards.read().unwrap();
+			let boards = boards
+				.iter()
+				.map(|(id, board)| (id, board.read().unwrap()))
+				.collect::<Vec<_>>();
+			let board_infos = boards
+				.iter()
+				.map(|(_id, board)| Reference::from(board.as_ref().unwrap()))
+				.collect::<Vec<_>>();
+			let mut chunks = board_infos.chunks(limit);
 
-#[get("/boards")]
-pub async fn list(
-	Query(options): Query<PaginationOptions<usize>>,
-	boards: BoardDataMap,
-	_access: BoardListAccess,
-) -> HttpResponse {
-	let page = options.page.unwrap_or(0);
-	let limit = options
-		.limit
-		.unwrap_or(10)
-		.clamp(1, 100);
+			fn page_uri(
+				page: usize,
+				limit: usize,
+			) -> String {
+				format!("/boards?page={}&limit={}", page, limit)
+			}
 
-	let boards = boards.read().unwrap();
-	let boards = boards
-		.iter()
-		.map(|(id, board)| (id, board.read().unwrap()))
-		.collect::<Vec<_>>();
-	let board_infos = boards
-		.iter()
-		.map(|(_id, board)| Reference::from(board.as_ref().unwrap()))
-		.collect::<Vec<_>>();
-	let mut chunks = board_infos.chunks(limit);
+			// TODO: standardize generation of this
+			let response = Page {
+				previous: page.checked_sub(1).and_then(|page| {
+					chunks
+						.nth(page)
+						.map(|_| page_uri(page, limit))
+				}),
+				items: chunks.next().unwrap_or_default(),
+				next: page.checked_add(1).and_then(|page| {
+					chunks
+						.next()
+						.map(|_| page_uri(page, limit))
+				}),
+			};
 
-	fn page_uri(
-		page: usize,
-		limit: usize,
-	) -> String {
-		format!("/boards?page={}&limit={}", page, limit)
-	}
-
-	// TODO: standardize this
-	HttpResponse::Ok().json(Page {
-		previous: page.checked_sub(1).and_then(|page| {
-			chunks
-				.nth(page)
-				.map(|_| page_uri(page, limit))
-		}),
-		items: chunks.next().unwrap_or_default(),
-		next: page.checked_add(1).and_then(|page| {
-			chunks
-				.next()
-				.map(|_| page_uri(page, limit))
-		}),
-	})
-}
-
-#[post("/boards")]
-pub async fn post(
-	Json(data): Json<BoardInfoPost>,
-	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	_access: BoardPostAccess,
-) -> Result<HttpResponse, Error> {
-	let connection = &database_pool.get().unwrap();
-	let board = Board::create(data, connection).unwrap();
-	let id = board.id as usize;
-
-	let mut boards = boards.write().unwrap();
-	boards.insert(id, Arc::new(RwLock::new(Some(board))));
-
-	let board = boards.get(&id).unwrap().read().unwrap();
-
-	Ok(HttpResponse::build(StatusCode::CREATED)
-		.header(
-			"Location",
-			http::Uri::from(board.as_ref().unwrap()).to_string(),
-		)
-		.json(Reference::from(board.as_ref().unwrap())))
-}
-
-#[get("/boards/default{rest:(/.*$)?}")]
-pub async fn get_default(
-	Path(rest): Path<String>,
-	boards: BoardDataMap,
-	_access: BoardGetAccess,
-) -> Option<HttpResponse> {
-	boards
-		.read()
-		.unwrap()
-		.keys()
-		.last()
-		.map(|id| {
-			HttpResponse::TemporaryRedirect()
-				.header("Location", format!("/boards/{}{}", id, rest))
-				.finish()
+			json(&response).into_response()
 		})
 }
 
-#[get("/boards/{id}")]
-pub async fn get(
-	Path(id): Path<usize>,
-	boards: BoardDataMap,
-	user: AuthedUser,
-	database_pool: Data<Pool>,
-	_access: BoardGetAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
-		let board = board.as_ref().unwrap();
-		let connection = &database_pool.get().unwrap();
-		let mut response = HttpResponse::Ok();
+pub fn default() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(warp::path("default"))
+		.and(warp::path::tail())
+		.map(|path_tail: Tail| {
+			// TODO: determine which board to use as default.
+			let id = 1;
 
-		if let AuthedUser::Authed(user) = user {
-			let cooldown_info = board
-				.user_cooldown_info(&user, connection)
-				.unwrap();
-
-			for (key, value) in cooldown_info.into_headers() {
-				response.header(key, value);
-			}
-		}
-
-		response.json(&board.info)
-	})
-}
-
-#[patch("/boards/{id}")]
-pub async fn patch(
-	// TODO: require application/merge-patch+json type?
-	Json(data): Json<BoardInfoPatch>,
-	Path(id): Path<usize>,
-	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	_access: BoardPatchAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		board
-			.write()
-			.unwrap()
-			.as_mut()
-			.unwrap()
-			.update_info(data, &database_pool.get().unwrap())
-			.unwrap();
-
-		HttpResponse::Ok().json(
-			&board
-				.read()
+			Response::builder()
+				.status(StatusCode::SEE_OTHER)
+				.header(header::LOCATION, format!("/boards/{}/{}", id, path_tail.as_str()))
+				.body("")
 				.unwrap()
-				.as_ref()
-				.unwrap()
-				.info,
-		)
-	})
-}
-
-#[delete("/boards/{id}")]
-pub async fn delete(
-	Path(id): Path<usize>,
-	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	_access: BoardDeleteAccess,
-) -> Option<HttpResponse> {
-	boards
-		.write()
-		.unwrap()
-		.remove(&id)
-		.map(|board| {
-			board
-				.write()
-				.unwrap()
-				.take()
-				.unwrap()
-				.delete(&database_pool.get().unwrap())
-				.unwrap();
-
-			HttpResponse::new(StatusCode::NO_CONTENT)
 		})
 }
 
-#[get("/boards/{id}/socket")]
-#[allow(clippy::too_many_arguments)] // humans don't call this function.
-pub async fn socket(
-	Path(id): Path<usize>,
-	options: QsQuery<SocketOptions>,
-	request: HttpRequest,
-	stream: Payload,
+pub fn get(
 	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	_access: SocketAccess,
-) -> Option<Result<HttpResponse, Error>> {
-	board!(boards[id]).map(|board| {
-		let board_read = board.read().unwrap();
-		let board_read = board_read.as_ref().unwrap();
-		if let Some(extensions) = &options.extensions {
-			let connection = database_pool.get().unwrap();
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, user, connection| {
+			let board = board.into_inner();
+			let board = board.read().unwrap();
+			let board = board.as_ref().unwrap();
+			let mut response = json(&board.info).into_response();
 
-			let extensions: Result<HashSet<Extension>, _> = extensions
-				.clone()
-				.into_iter()
-				.map(Extension::try_from)
-				.collect();
+			if let AuthedUser::Authed(user) = user {
+				let cooldown_info = board
+					.user_cooldown_info(&user, &connection)
+					.unwrap();
 
-			// TODO: check client has permissions for all extensions.
-			if let Ok(extensions) = extensions {
-				// self.user_cooldown_info(user, connection)?
-
-				let socket = BoardSocket::new(
-					extensions,
-					Arc::clone(&board_read.server()),
-					BoardSocketInitInfo {
-						database_connection: connection,
-						board: Arc::clone(&board),
-					},
-				);
-
-				ws::start(socket, &request, stream)
-			} else {
-				Err(error::ErrorUnprocessableEntity(
-					"Requested extensions not supported",
-				))
+				for (key, value) in cooldown_info.into_headers() {
+					response = reply::with_header(response, key, value)
+						.into_response();
+				}
 			}
-		} else {
-			Err(error::ErrorUnprocessableEntity("No extensions specified"))
-		}
-	})
+
+			response
+		})
 }
+
+pub fn post(
+	boards: BoardDataMap,
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(warp::path::end())
+		.and(warp::post())
+		.and(warp::body::json())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPost)))
+		.and(database::connection(database_pool))
+		.map(move |data: BoardInfoPost, _user, connection| {
+			let board = Board::create(data, &connection).unwrap();
+			let id = board.id as usize;
+
+			let boards = Arc::clone(&boards);
+			let mut boards = boards.write().unwrap();
+			boards.insert(id, Arc::new(RwLock::new(Some(board))));
+
+			let board = boards.get(&id).unwrap().read().unwrap();
+			let board = board.as_ref().unwrap();
+
+			let mut response = json(&Reference::from(board)).into_response();
+			response = reply::with_status(response, StatusCode::CREATED).into_response();
+			response = reply::with_header(response, header::LOCATION, http::Uri::from(board).to_string()).into_response();
+			response
+		})
+}
+
+pub fn patch(
+	boards: BoardDataMap,
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path::end())
+		.and(warp::patch())
+		// TODO: require application/merge-patch+json type?
+		.and(warp::body::json())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, patch: BoardInfoPatch, _user, connection| {
+			let board = board.into_inner();
+			let mut board = board.write().unwrap();
+			let board = board.as_mut().unwrap();
+
+			board.update_info(patch, &connection).unwrap();
+
+			let mut response = json(&Reference::from(&*board)).into_response();
+			response = reply::with_status(response, StatusCode::CREATED).into_response();
+			response = reply::with_header(response, header::LOCATION, http::Uri::from(&*board).to_string()).into_response();
+			response
+		})
+}
+
+pub fn delete(
+	boards: BoardDataMap,
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(board::path::prepare_delete(&boards))
+		.and(warp::path::end())
+		.and(warp::delete())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
+		.and(database::connection(database_pool))
+		.map(move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection| {
+			let mut deletion = deletion.into_inner();
+			let board = deletion.perform();
+			let mut board = board.write().unwrap();
+			let board = board.take().unwrap();
+			board.delete(&connection).unwrap();
+			StatusCode::NO_CONTENT.into_response()
+		})
+}
+
+//#[get("/boards/{id}/socket")]
+//#[allow(clippy::too_many_arguments)] // humans don't call this function.
+//pub async fn socket(
+//	Path(id): Path<usize>,
+//	options: QsQuery<SocketOptions>,
+//	request: HttpRequest,
+//	stream: Payload,
+//	boards: BoardDataMap,
+//	database_pool: Data<Pool>,
+//	_access: SocketAccess,
+//) -> Option<Result<HttpResponse, Error>> {
+//	board!(boards[id]).map(|board| {
+//		let board_read = board.read().unwrap();
+//		let board_read = board_read.as_ref().unwrap();
+//		if let Some(extensions) = &options.extensions {
+//			let connection = database_pool.get().unwrap();
+
+//			let extensions: Result<HashSet<Extension>, _> = extensions
+//				.clone()
+//				.into_iter()
+//				.map(Extension::try_from)
+//				.collect();
+
+//			// TODO: check client has permissions for all extensions.
+//			if let Ok(extensions) = extensions {
+//				// self.user_cooldown_info(user, connection)?
+
+//				let socket = BoardSocket::new(
+//					extensions,
+//					Arc::clone(&board_read.server()),
+//					BoardSocketInitInfo {
+//						database_connection: connection,
+//						board: Arc::clone(&board),
+//					},
+//				);
+
+//				ws::start(socket, &request, stream)
+//			} else {
+//				Err(error::ErrorUnprocessableEntity(
+//					"Requested extensions not supported",
+//				))
+//			}
+//		} else {
+//			Err(error::ErrorUnprocessableEntity("No extensions specified"))
+//		}
+//	})
+//}

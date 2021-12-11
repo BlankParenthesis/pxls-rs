@@ -1,125 +1,171 @@
+use crate::filters::body::patch::BinaryPatch;
+
 use super::*;
 
-guard!(BoardsDataGetAccess, BoardsDataGet);
-guard!(BoardsDataPatchAccess, BoardsDataPatch);
-
-#[get("/boards/{id}/data/colors")]
-pub async fn get_colors(
-	Path(id): Path<usize>,
+pub fn get_colors(
 	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	range: RangeHeader,
-	_access: BoardsDataGetAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		// TODO: content disposition
-		let board = board.read().unwrap();
-		let connection = database_pool.get().unwrap();
-		let mut colors_data = board
-			.as_ref()
-			.unwrap()
-			.read(SectorBuffer::Colors, &connection);
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
 
-		range.respond_with(&mut colors_data)
-	})
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("data"))
+		.and(warp::path("colors"))
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(warp::any().and(range::range()).or(range::default()).unify())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+			// TODO: content disposition
+			let board = board.into_inner();
+			let board = board.read().unwrap();
+			let mut colors_data = board
+				.as_ref()
+				.unwrap()
+				.read(SectorBuffer::Colors, &connection);
+	
+			range.respond_with(&mut colors_data)
+		})
 }
 
-#[get("/boards/{id}/data/timestamps")]
-pub async fn get_timestamps(
-	Path(id): Path<usize>,
+pub fn get_timestamps(
 	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	range: RangeHeader,
-	_access: BoardsDataGetAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
-		let connection = database_pool.get().unwrap();
-		let mut timestamp_data = board
-			.as_ref()
-			.unwrap()
-			.read(SectorBuffer::Timestamps, &connection);
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
 
-		range.respond_with(&mut timestamp_data)
-	})
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("data"))
+		.and(warp::path("timestamps"))
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(warp::any().and(range::range()).or(range::default()).unify())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+			// TODO: content disposition
+			let board = board.into_inner();
+			let board = board.read().unwrap();
+			let mut timestamp_data = board
+				.as_ref()
+				.unwrap()
+				.read(SectorBuffer::Timestamps, &connection);
+	
+			range.respond_with(&mut timestamp_data)
+		})
 }
 
-#[get("/boards/{id}/data/mask")]
-pub async fn get_mask(
-	Path(id): Path<usize>,
+pub fn get_mask(
 	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	range: RangeHeader,
-	_access: BoardsDataGetAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
-		let connection = database_pool.get().unwrap();
-		let mut mask_data = board
-			.as_ref()
-			.unwrap()
-			.read(SectorBuffer::Mask, &connection);
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
 
-		range.respond_with(&mut mask_data)
-	})
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("data"))
+		.and(warp::path("mask"))
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(warp::any().and(range::range()).or(range::default()).unify())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+			// TODO: content disposition
+			let board = board.into_inner();
+			let board = board.read().unwrap();
+			let mut mask_data = board
+				.as_ref()
+				.unwrap()
+				.read(SectorBuffer::Mask, &connection);
+	
+			range.respond_with(&mut mask_data)
+		})
 }
 
-#[get("/boards/{id}/data/initial")]
-pub async fn get_initial(
-	Path(id): Path<usize>,
+pub fn get_initial(
 	boards: BoardDataMap,
-	database_pool: Data<Pool>,
-	range: RangeHeader,
-	_access: BoardsDataGetAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
-		let connection = database_pool.get().unwrap();
-		let mut initial_data = board
-			.as_ref()
-			.unwrap()
-			.read(SectorBuffer::Initial, &connection);
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
 
-		range.respond_with(&mut initial_data)
-	})
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("data"))
+		.and(warp::path("initial"))
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(warp::any().and(range::range()).or(range::default()).unify())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+			// TODO: content disposition
+			let board = board.into_inner();
+			let board = board.read().unwrap();
+			let mut initial_data = board
+				.as_ref()
+				.unwrap()
+				.read(SectorBuffer::Initial, &connection);
+	
+			range.respond_with(&mut initial_data)
+		})
 }
 
-#[patch("/boards/{id}/data/initial")]
-pub async fn patch_initial(
-	Path(id): Path<usize>,
-	patch_info: BinaryPatch,
-	database_pool: Data<Pool>,
+pub fn patch_initial(
 	boards: BoardDataMap,
-	_access: BoardsDataPatchAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
 
-		board
-			.as_ref()
-			.unwrap()
-			.try_patch_initial(&patch_info, &database_pool.get().unwrap())
-			.map(|_| HttpResponse::NoContent().finish())
-			.unwrap_or_else(|e| error::ErrorConflict(e).into())
-	})
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("data"))
+		.and(warp::path("initial"))
+		.and(warp::path::end())
+		.and(warp::patch())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
+		.and(patch::bytes())
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, _user, patch: BinaryPatch, connection| {
+			// TODO: content disposition
+			let board = board.into_inner();
+			let board = board.write().unwrap();
+			let patch_result = board
+				.as_ref()
+				.unwrap()
+				.try_patch_initial(&patch, &connection);
+
+			match patch_result {
+				Ok(_) => StatusCode::NO_CONTENT.into_response(),
+				Err(e) => reply::with_status(e, StatusCode::CONFLICT).into_response(),
+			}
+		})
 }
 
-#[patch("/boards/{id}/data/mask")]
-pub async fn patch_mask(
-	Path(id): Path<usize>,
-	patch_info: BinaryPatch,
-	database_pool: Data<Pool>,
+pub fn patch_mask(
 	boards: BoardDataMap,
-	_access: BoardsDataPatchAccess,
-) -> Option<HttpResponse> {
-	board!(boards[id]).map(|board| {
-		let board = board.read().unwrap();
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
 
-		board
-			.as_ref()
-			.unwrap()
-			.try_patch_mask(&patch_info, &database_pool.get().unwrap())
-			.map(|_| HttpResponse::NoContent().finish())
-			.unwrap_or_else(|e| error::ErrorConflict(e).into())
-	})
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("data"))
+		.and(warp::path("mask"))
+		.and(warp::path::end())
+		.and(warp::patch())
+		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
+		.and(patch::bytes())
+		.and(database::connection(database_pool))
+		.map(|board: Fragile<PassableBoard>, _user, patch: BinaryPatch, connection| {
+			// TODO: content disposition
+			let board = board.into_inner();
+			let board = board.write().unwrap();
+			let patch_result = board
+				.as_ref()
+				.unwrap()
+				.try_patch_mask(&patch, &connection);
+
+			match patch_result {
+				Ok(_) => StatusCode::NO_CONTENT.into_response(),
+				Err(e) => reply::with_status(e, StatusCode::CONFLICT).into_response(),
+			}
+		})
 }

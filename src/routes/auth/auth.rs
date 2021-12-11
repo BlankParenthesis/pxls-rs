@@ -18,9 +18,12 @@ lazy_static! {
 	};
 }
 
-guard!(InfoAccess, Info);
-
-#[get("/auth")]
-pub async fn get() -> HttpResponse {
-	HttpResponse::Ok().json(&*AUTH_INFO)
+pub fn get() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("auth")
+		.and(warp::path::end())
+		.and(warp::get())
+		.map(|| {
+			warp::reply::with_status(json(&*AUTH_INFO), StatusCode::OK)
+				.into_response()
+		})
 }

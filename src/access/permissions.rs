@@ -1,6 +1,10 @@
 use serde::{Serialize, Serializer};
+use warp::{reject::Reject, Rejection};
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+use crate::objects::{AuthedUser, User};
+use futures_util::future;
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Permission {
 	Info,
 	BoardsList,
@@ -43,38 +47,26 @@ impl Serialize for Permission {
 	}
 }
 
-// creates a named guard which succeeds if the client has all specified
-// permissions
-macro_rules! guard {
-	( $guard_name:ident, $( $permission:ident ),* ) => {
-		pub struct $guard_name {}
+#[derive(Debug)]
+pub enum PermissionsError {
+	MissingPermission(Permission),
+}
 
-		impl actix_web::FromRequest for $guard_name {
-			type Config = ();
-			type Error = actix_web::error::Error;
-			type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self, Self::Error>>>>;
+impl Reject for PermissionsError {}
 
-			fn from_request(
-				request: &actix_web::HttpRequest,
-				payload: &mut actix_web::dev::Payload,
-			) -> Self::Future {
-				let mut required_permissions = std::collections::HashSet::new();
-				$(
-					required_permissions.insert(crate::access::permissions::Permission::$permission);
-				)*
+pub fn with_permission(
+	permission: Permission,
+) -> (impl Fn(AuthedUser) -> future::Ready<Result<AuthedUser, Rejection>> + Clone) {
+	move |authed| {
+		let has_perm = match Option::<&User>::from(&authed) {
+			Some(user) => user.permissions.contains(&permission),
+			None => User::default().permissions.contains(&permission),
+		};
 
-				let user = crate::objects::AuthedUser::from_request(request, payload);
-
-				Box::pin(async move {
-					let user = Option::<crate::objects::User>::from(user.await?);
-
-					if user.unwrap_or_default().permissions.is_superset(&required_permissions) {
-						Ok($guard_name {})
-					} else {
-						Err(actix_web::error::ErrorForbidden("Missing Permissions"))
-					}
-				})
-			}
+		if has_perm {
+			future::ok(authed)
+		} else {
+			future::err(warp::reject::custom(PermissionsError::MissingPermission(permission)))
 		}
 	}
 }

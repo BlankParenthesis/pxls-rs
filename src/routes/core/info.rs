@@ -29,18 +29,10 @@ lazy_static! {
 	};
 }
 
-guard!(InfoAccess, Info);
-
-#[get("/info")]
-pub async fn get(user: AuthedUser) -> HttpResponse {
-	let user = Option::<User>::from(user);
-	if user
-		.unwrap_or_default()
-		.permissions
-		.contains(&Permission::Info)
-	{
-		HttpResponse::Ok().json(&*SERVER_INFO)
-	} else {
-		actix_web::error::ErrorForbidden("Missing Permissions").into()
-	}
+pub fn get() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("info")
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(authorization::bearer().and_then(with_permission(Permission::Info)))
+		.map(|_user| warp::reply::with_status(json(&*SERVER_INFO), StatusCode::OK).into_response())
 }

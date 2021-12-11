@@ -1,4 +1,4 @@
-use actix_web::web::{BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use diesel::{prelude::*, QueryResult};
 
 use crate::{
@@ -6,7 +6,7 @@ use crate::{
 	objects::MaskValue,
 };
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum SectorBuffer {
 	Colors,
 	Timestamps,

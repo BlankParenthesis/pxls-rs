@@ -13,22 +13,24 @@ mod authentication;
 mod config;
 mod objects;
 mod routes;
-mod socket;
+mod filters;
+//mod socket;
 
-use std::{
-	collections::HashMap,
-	sync::{Arc, RwLock},
-};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use actix_web::{
-	middleware::{normalize::TrailingSlash, Compress, NormalizePath},
-	web::Data,
-	App, HttpServer,
-};
-use authentication::bearer::{validator, BearerAuth};
+use access::permissions::PermissionsError;
+use filters::header::authorization::BearerError;
+use futures_util::future;
+use http::{Method, StatusCode};
+use warp::{Filter, Rejection, Reply};
+
+//use tokio::sync::RwLock;
+use std::sync::RwLock;
 
 use crate::objects::Board;
 
+// FIXME: since we're not longer using actix, this is probably solvable?
 // NOTE: This can go back to being RwLock<Board> if we can get nice ownership
 // between the Board, BoardServer, and BoardServerSocket. Actix makes this
 // impossible.
@@ -37,16 +39,16 @@ use crate::objects::Board;
 // a board reference directly, rather than resorting to reference counted
 // maybe-there, maybe-not solutions (like below).
 type BoardRef = Arc<RwLock<Option<Board>>>;
-pub type BoardDataMap = Data<RwLock<HashMap<usize, BoardRef>>>;
+pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
 
 embed_migrations!();
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() {
 	let config = crate::config::CONFIG.read().unwrap();
 
 	let manager = diesel::r2d2::ConnectionManager::new(config.database_url.to_string());
-	let pool = r2d2::Pool::new(manager).unwrap();
+	let pool = Arc::new(r2d2::Pool::new(manager).unwrap());
 	let connection = pool.get().unwrap();
 
 	embedded_migrations::run_with_output(&connection, &mut std::io::stdout())
@@ -58,43 +60,56 @@ async fn main() -> std::io::Result<()> {
 		.into_iter()
 		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))
 		.collect::<HashMap<_, _>>();
-	let boards: BoardDataMap = Data::new(RwLock::new(boards));
 
-	HttpServer::new(move || {
-		App::new()
-			.data(pool.clone())
-			.app_data(boards.clone())
-			.wrap(BearerAuth::new(validator))
-			.wrap(
-				actix_cors::Cors::default()
+	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
+
+	let routes = routes::core::info::get()
+		.or(routes::core::access::get())
+		.or(routes::core::boards::list(Arc::clone(&boards)))
+		.or(routes::core::boards::get(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::default())
+		.or(routes::core::boards::post(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::patch(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::delete(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::data::get_colors(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::data::get_initial(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::data::get_mask(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::data::get_timestamps(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::data::patch_initial(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::data::patch_mask(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::users::get(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::pixels::list(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::pixels::get(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::pixels::post(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::auth::auth::get())
+		.recover(|rejection: Rejection| {
+			if let Some(err) = rejection.find::<BearerError>() {
+				future::ok(StatusCode::UNAUTHORIZED.into_response())
+			} else if let Some(err) = rejection.find::<PermissionsError>() {
+				future::ok(StatusCode::FORBIDDEN.into_response())
+			} else {
+				future::err(rejection)
+			}
+		});
+
+	warp::serve(
+		routes
+			// TODO: This doesn't look at accept-encoding.
+			// Until it does (or you wrap it in something that does), keep it disabled
+			//.with(warp::compression::gzip())
+			.with(
+				warp::cors::cors()
 					.allow_any_origin()
-					.allow_any_header()
-					.allow_any_method(),
-			)
-			.wrap(NormalizePath::new(TrailingSlash::Trim))
-			.wrap(Compress::default())
-			.service(routes::core::info::get)
-			.service(routes::core::access::get)
-			.service(routes::core::boards::list)
-			.service(routes::core::boards::get)
-			.service(routes::core::boards::get_default)
-			.service(routes::core::boards::post)
-			.service(routes::core::boards::patch)
-			.service(routes::core::boards::delete)
-			.service(routes::core::boards::socket)
-			.service(routes::core::boards::data::get_colors)
-			.service(routes::core::boards::data::get_timestamps)
-			.service(routes::core::boards::data::get_mask)
-			.service(routes::core::boards::data::get_initial)
-			.service(routes::core::boards::data::patch_initial)
-			.service(routes::core::boards::data::patch_mask)
-			.service(routes::core::boards::users::get)
-			.service(routes::core::boards::pixels::list)
-			.service(routes::core::boards::pixels::get)
-			.service(routes::core::boards::pixels::post)
-			.service(routes::auth::auth::get)
-	})
-	.bind(format!("{}:{}", config.host, config.port))?
-	.run()
-	.await
+					.allow_credentials(true)
+					.allow_methods([
+						Method::GET,
+						Method::POST,
+						Method::DELETE,
+						Method::PATCH,
+					])
+					// TODO: allow headers
+			),
+	)
+	.run(([127, 0, 0, 1], config.port))
+	.await;
 }

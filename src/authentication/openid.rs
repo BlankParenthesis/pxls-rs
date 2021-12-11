@@ -1,13 +1,29 @@
-use std::collections::HashSet;
+use reqwest::Client;
 
-use actix_web::{client::Client, error::Error};
 use http::StatusCode;
 use jsonwebkey::JsonWebKey;
 use jsonwebtoken::{decode, decode_header, errors::Error as JWTError, TokenData, Validation};
 use serde::Deserialize;
 use url::Url;
 
-use crate::{access::permissions::Permission, objects::User};
+use crate::objects::User;
+
+#[derive(Debug)]
+pub enum DiscoveryError {
+	ContactFailed,
+	InvalidResponse,
+	InvalidConfigResponse,
+}
+
+impl From<DiscoveryError> for StatusCode {
+	fn from(error: DiscoveryError) -> Self {
+		match error {
+			DiscoveryError::InvalidResponse => StatusCode::BAD_GATEWAY,
+			DiscoveryError::InvalidConfigResponse => StatusCode::BAD_GATEWAY,
+			DiscoveryError::ContactFailed => StatusCode::GATEWAY_TIMEOUT,
+		}
+	}
+}
 
 #[derive(Deserialize)]
 pub struct Discovery {
@@ -20,25 +36,22 @@ impl Discovery {
 	pub async fn load(
 		discovery_url: Url,
 		client: &Client,
-	) -> Result<Self, Error> {
-		let mut response = client
+	) -> Result<Self, DiscoveryError> {
+		let response = client
 			.get(discovery_url.to_string())
 			.send()
-			.await?;
+			.await
+			.map_err(|_| DiscoveryError::ContactFailed)?;
 
 		match response.status() {
 			StatusCode::OK => {
-				response.json().await.map_err(|_| {
-					actix_web::error::ErrorBadGateway(
-						"identity provider gave invalid Open ID configuration",
-					)
-				})
-			},
+				response
+					.json()
+					.await
+					.map_err(|_| DiscoveryError::InvalidConfigResponse)
+				},
 			code => {
-				Err(actix_web::error::ErrorBadGateway(format!(
-					"Got unexpected response from identity provider: {}",
-					code
-				)))
+				Err(DiscoveryError::InvalidResponse)
 			},
 		}
 	}
@@ -47,11 +60,12 @@ impl Discovery {
 	pub async fn jwks_keys(
 		&self,
 		client: &Client,
-	) -> Result<Vec<JsonWebKey>, Error> {
-		let mut response = client
+	) -> Result<Vec<JsonWebKey>, DiscoveryError> {
+		let response = client
 			.get(self.jwks_uri.to_string())
 			.send()
-			.await?;
+			.await
+			.map_err(|_| DiscoveryError::ContactFailed)?;
 
 		match response.status() {
 			StatusCode::OK => {
@@ -64,17 +78,10 @@ impl Discovery {
 					.json::<Keys>()
 					.await
 					.map(|json| json.keys)
-					.map_err(|_| {
-						actix_web::error::ErrorBadGateway(
-							"identity provider gave invalid Open ID configuration",
-						)
-					})
+					.map_err(|_| DiscoveryError::InvalidConfigResponse)
 			},
 			code => {
-				Err(actix_web::error::ErrorBadGateway(format!(
-					"Got unexpected response from identity provider: {}",
-					code
-				)))
+				Err(DiscoveryError::InvalidResponse)
 			},
 		}
 	}
@@ -95,7 +102,7 @@ impl From<Identity> for User {
 #[derive(Debug)]
 pub enum ValidationError {
 	JWTError(JWTError),
-	DiscoveryError(Error),
+	DiscoveryError(DiscoveryError),
 	NoValidKeys,
 }
 
@@ -105,9 +112,9 @@ impl From<JWTError> for ValidationError {
 	}
 }
 
-impl From<Error> for ValidationError {
-	fn from(actix_error: Error) -> Self {
-		Self::DiscoveryError(actix_error)
+impl From<DiscoveryError> for ValidationError {
+	fn from(error: DiscoveryError) -> Self {
+		Self::DiscoveryError(error)
 	}
 }
 
