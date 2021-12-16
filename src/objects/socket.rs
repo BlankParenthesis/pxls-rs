@@ -1,20 +1,26 @@
 use core::hash::Hash;
-use std::{sync::{Arc, Weak}, time::{Duration, SystemTime}};
-use parking_lot::RwLock;
+use std::{
+	sync::{Arc, Weak},
+	time::{Duration, SystemTime},
+};
 
+use async_trait::async_trait;
 use enum_map::Enum;
 use enumset::{EnumSet, EnumSetType};
-use futures_util::{StreamExt, FutureExt, stream::SplitStream};
-
+use futures_util::{stream::SplitStream, FutureExt, StreamExt};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use uuid::Uuid;
 use warp::ws;
 
-use async_trait::async_trait;
-
-use crate::{objects::{User, AuthedUser, Board, packet}, authentication::openid::ValidationError, database::Pool, access::permissions::Permission};
-use uuid::Uuid;
+use crate::{
+	access::permissions::Permission,
+	authentication::openid::ValidationError,
+	database::Pool,
+	objects::{packet, AuthedUser, Board, User},
+};
 
 #[derive(Debug, EnumSetType, Enum, Deserialize, Serialize)]
 #[enumset(serialize_as_list)]
@@ -66,8 +72,7 @@ trait MessageStream {
 #[async_trait]
 impl MessageStream for SplitStream<ws::WebSocket> {
 	async fn receive(&mut self) -> Option<Result<Message, ()>> {
-		self
-			.next()
+		self.next()
 			.await
 			.map(|o| o.map(Message::from).map_err(|_| ()))
 	}
@@ -99,16 +104,17 @@ impl UnauthedSocket {
 
 		let sender_receiver = UnboundedReceiverStream::new(sender_receiver);
 
-		tokio::task::spawn(sender_receiver.forward(ws_sender).map(|result| {
-			if let Err(e) = result {
-				eprintln!("error sending websocket msg: {}", e);
-			}
-		}));
+		tokio::task::spawn(
+			sender_receiver
+				.forward(ws_sender)
+				.map(|result| {
+					if let Err(e) = result {
+						eprintln!("error sending websocket msg: {}", e);
+					}
+				}),
+		);
 
-		let socket = Self {
-			sender,
-			extensions,
-		};
+		let socket = Self { sender, extensions };
 
 		let timeout = tokio::time::sleep(Duration::from_secs(5));
 
@@ -116,29 +122,32 @@ impl UnauthedSocket {
 			_ = timeout => Err(AuthFailure::Timeout),
 			socket = socket.auth(&mut ws_receiver) => socket,
 		};
-		
+
 		if let Ok(socket) = auth_attempt {
 			let socket = Arc::new(socket);
 
 			// add socket
 			if let Some(board) = board.upgrade() {
 				let mut board = board.write();
-				if let Some(ref mut board) = *board{
+				if let Some(ref mut board) = *board {
 					let connection = connection_pool.get().unwrap();
-					board.insert_socket(Arc::clone(&socket), &connection).unwrap();
+					board
+						.insert_socket(Arc::clone(&socket), &connection)
+						.unwrap();
 				}
 			}
 
-			socket.handle_packets(&mut ws_receiver).await;
+			socket
+				.handle_packets(&mut ws_receiver)
+				.await;
 
 			// remove socket
 			if let Some(board) = board.upgrade() {
 				let mut board = board.write();
-				if let Some(ref mut board) = *board{
+				if let Some(ref mut board) = *board {
 					board.remove_socket(Arc::clone(&socket));
 				}
 			}
-
 		}
 	}
 
@@ -146,13 +155,16 @@ impl UnauthedSocket {
 		self,
 		receiver: &mut SplitStream<ws::WebSocket>,
 	) -> Result<AuthedSocket, AuthFailure> {
-		if !self.extensions.contains(Extension::Authentication) {
+		if !self
+			.extensions
+			.contains(Extension::Authentication)
+		{
 			return Ok(AuthedSocket {
 				uuid: Uuid::new_v4(),
 				sender: self.sender,
 				extensions: self.extensions,
 				user: RwLock::new(AuthedUser::None),
-			})
+			});
 		}
 
 		while let Some(Ok(msg)) = receiver.receive().await {
@@ -170,14 +182,16 @@ impl UnauthedSocket {
 						.map_err(AuthFailure::ValidationError)
 						.and_then(|user| {
 							let default_user = User::default();
-							let actual_user = Option::<&User>::from(&user)
-								.unwrap_or(&default_user);
+							let actual_user = Option::<&User>::from(&user).unwrap_or(&default_user);
 
-							let has_permission = self.extensions
+							let has_permission = self
+								.extensions
 								.iter()
 								.map(Permission::from)
 								.all(|permission| {
-									actual_user.permissions.contains(&permission)
+									actual_user
+										.permissions
+										.contains(&permission)
 								});
 
 							if has_permission {
@@ -212,28 +226,34 @@ pub struct AuthedSocket {
 }
 
 impl PartialEq for AuthedSocket {
-    fn eq(&self, other: &Self) -> bool {
-        self.uuid == other.uuid
-    }
+	fn eq(
+		&self,
+		other: &Self,
+	) -> bool {
+		self.uuid == other.uuid
+	}
 }
 
 impl Eq for AuthedSocket {}
 
 impl Hash for AuthedSocket {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.uuid.hash(state);
-    }
+	fn hash<H: std::hash::Hasher>(
+		&self,
+		state: &mut H,
+	) {
+		self.uuid.hash(state);
+	}
 }
 
 impl AuthedSocket {
-	pub fn send(&self, message: &packet::server::Packet) {
-		let message = ws::Message::text(
-			serde_json::to_string(message).unwrap()
-		);
+	pub fn send(
+		&self,
+		message: &packet::server::Packet,
+	) {
+		let message = ws::Message::text(serde_json::to_string(message).unwrap());
 
 		if self.auth_valid() {
-			self.sender
-				.send(Ok(message));
+			self.sender.send(Ok(message));
 		} else {
 			self.close();
 		}
@@ -242,7 +262,10 @@ impl AuthedSocket {
 	fn auth_valid(&self) -> bool {
 		let user = self.user.read();
 		match &*user {
-			AuthedUser::Authed { user: _, valid_until } => SystemTime::now() < *valid_until,
+			AuthedUser::Authed {
+				user: _,
+				valid_until,
+			} => SystemTime::now() < *valid_until,
 			AuthedUser::None => true,
 		}
 	}
@@ -259,7 +282,10 @@ impl AuthedSocket {
 		while let Some(Ok(msg)) = receiver.receive().await {
 			match msg {
 				Message::Packet(packet::client::Packet::Authenticate { token }) => {
-					if self.extensions.contains(Extension::Authentication) {
+					if self
+						.extensions
+						.contains(Extension::Authentication)
+					{
 						let user = if let Some(token) = token {
 							crate::authentication::openid::validate_token(&token)
 								.await
@@ -281,7 +307,7 @@ impl AuthedSocket {
 							},
 							Err(_) => {
 								self.close();
-							}
+							},
 						}
 					} else {
 						self.close();

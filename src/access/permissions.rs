@@ -1,8 +1,8 @@
+use futures_util::future;
 use serde::{Serialize, Serializer};
 use warp::{reject::Reject, Rejection};
 
 use crate::objects::{AuthedUser, User};
-use futures_util::future;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Permission {
@@ -57,18 +57,24 @@ pub enum PermissionsError {
 impl Reject for PermissionsError {}
 
 pub fn with_permission(
-	permission: Permission,
+	permission: Permission
 ) -> (impl Fn(AuthedUser) -> future::Ready<Result<AuthedUser, Rejection>> + Clone) {
 	move |authed| {
 		let has_perm = match Option::<&User>::from(&authed) {
 			Some(user) => user.permissions.contains(&permission),
-			None => User::default().permissions.contains(&permission),
+			None => {
+				User::default()
+					.permissions
+					.contains(&permission)
+			},
 		};
 
 		if has_perm {
 			future::ok(authed)
 		} else {
-			future::err(warp::reject::custom(PermissionsError::MissingPermission(permission)))
+			future::err(warp::reject::custom(PermissionsError::MissingPermission(
+				permission,
+			)))
 		}
 	}
 }

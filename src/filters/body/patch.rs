@@ -1,6 +1,6 @@
-use super::*;
-
 use bytes::Bytes;
+
+use super::*;
 use crate::filters::header::content_range::{self, ContentRange};
 
 #[derive(Debug)]
@@ -50,7 +50,8 @@ impl BinaryPatch {
 			}
 		}
 
-		let start = content_range.range
+		let start = content_range
+			.range
 			.map(|(start, _end)| start)
 			.unwrap_or(0);
 
@@ -66,11 +67,13 @@ impl BinaryPatch {
 pub fn bytes() -> impl Filter<Extract = (BinaryPatch,), Error = Rejection> + Copy {
 	warp::patch()
 		.and(warp::body::bytes())
-		.and(warp::header::exact(header::CONTENT_TYPE.as_str(), "application/octet-stream"))
+		.and(warp::header::exact(
+			header::CONTENT_TYPE.as_str(),
+			"application/octet-stream",
+		))
 		.and(content_range::content_range())
-		.and_then(|bytes, range| async move {
-			BinaryPatch::new(bytes, range)
-				.map_err(warp::reject::custom)
+		.and_then(|bytes, range| {
+			async move { BinaryPatch::new(bytes, range).map_err(warp::reject::custom) }
 		})
 }
 

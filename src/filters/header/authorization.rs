@@ -1,9 +1,8 @@
 use futures_util::future;
-use http::{StatusCode, header};
+use http::{header, StatusCode};
 use warp::{reject::Reject, Filter, Rejection, Reply};
 
-use crate::authentication::openid::ValidationError;
-use crate::objects::AuthedUser;
+use crate::{authentication::openid::ValidationError, objects::AuthedUser};
 
 #[derive(Debug)]
 pub enum BearerError {

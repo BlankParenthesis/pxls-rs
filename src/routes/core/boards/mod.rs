@@ -1,17 +1,16 @@
-use parking_lot::RwLock;
 use std::sync::Arc;
 
+use fragile::Fragile;
 use http::header;
-
+use parking_lot::RwLock;
 use warp::path::Tail;
 
 use super::*;
-use crate::filters::resource::board::PassableBoard;
-use crate::filters::resource::board::PendingDelete;
-use crate::objects::socket::Extension;
-use crate::{BoardDataMap};
-
-use fragile::Fragile;
+use crate::{
+	filters::resource::board::{PassableBoard, PendingDelete},
+	objects::socket::Extension,
+	BoardDataMap,
+};
 
 pub mod data;
 pub mod pixels;
@@ -78,7 +77,10 @@ pub fn default() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 
 			Response::builder()
 				.status(StatusCode::SEE_OTHER)
-				.header(header::LOCATION, format!("/boards/{}/{}", id, path_tail.as_str()))
+				.header(
+					header::LOCATION,
+					format!("/boards/{}/{}", id, path_tail.as_str()),
+				)
 				.body("")
 				.unwrap()
 		})
@@ -105,8 +107,7 @@ pub fn get(
 					.unwrap();
 
 				for (key, value) in cooldown_info.into_headers() {
-					response = reply::with_header(response, key, value)
-						.into_response();
+					response = reply::with_header(response, key, value).into_response();
 				}
 			}
 
@@ -137,7 +138,12 @@ pub fn post(
 
 			let mut response = json(&Reference::from(board)).into_response();
 			response = reply::with_status(response, StatusCode::CREATED).into_response();
-			response = reply::with_header(response, header::LOCATION, http::Uri::from(board).to_string()).into_response();
+			response = reply::with_header(
+				response,
+				header::LOCATION,
+				http::Uri::from(board).to_string(),
+			)
+			.into_response();
 			response
 		})
 }
@@ -177,14 +183,16 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
 		.and(database::connection(database_pool))
-		.map(move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection| {
-			let mut deletion = deletion.into_inner();
-			let board = deletion.perform();
-			let mut board = board.write();
-			let board = board.take().unwrap();
-			board.delete(&connection).unwrap();
-			StatusCode::NO_CONTENT.into_response()
-		})
+		.map(
+			move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection| {
+				let mut deletion = deletion.into_inner();
+				let board = deletion.perform();
+				let mut board = board.write();
+				let board = board.take().unwrap();
+				board.delete(&connection).unwrap();
+				StatusCode::NO_CONTENT.into_response()
+			},
+		)
 }
 
 #[derive(serde::Deserialize)]
@@ -202,36 +210,39 @@ pub fn socket(
 		.and(warp::path::end())
 		.and(serde_qs::warp::query(Default::default()))
 		.and(warp::ws())
-		.map(move |board: PassableBoard, options: SocketOptions, ws: warp::ws::Ws| {
-			let database_pool = Arc::clone(&database_pool);
+		.map(
+			move |board: PassableBoard, options: SocketOptions, ws: warp::ws::Ws| {
+				let database_pool = Arc::clone(&database_pool);
 
-			if let Some(extensions) = options.extensions {
-				if !extensions.is_empty() {
-					ws.on_upgrade(move |websocket| {
-						UnauthedSocket::connect(
-							websocket,
-							extensions,
-							Arc::downgrade(&*board),
-							database_pool,
-						)
-					})
-					.into_response()
+				if let Some(extensions) = options.extensions {
+					if !extensions.is_empty() {
+						ws.on_upgrade(move |websocket| {
+							UnauthedSocket::connect(
+								websocket,
+								extensions,
+								Arc::downgrade(&*board),
+								database_pool,
+							)
+						})
+						.into_response()
+					} else {
+						StatusCode::UNPROCESSABLE_ENTITY.into_response()
+					}
 				} else {
 					StatusCode::UNPROCESSABLE_ENTITY.into_response()
 				}
-			} else {
-				StatusCode::UNPROCESSABLE_ENTITY.into_response()
-			}
-		})
-		.recover(|rejection: Rejection| async {
-			if let Some(err) = rejection.find::<serde_qs::Error>() {
-				Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
-			} else {
-				Err(rejection)
+			},
+		)
+		.recover(|rejection: Rejection| {
+			async {
+				if let Some(err) = rejection.find::<serde_qs::Error>() {
+					Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
+				} else {
+					Err(rejection)
+				}
 			}
 		})
 }
-
 
 //#[get("/boards/{id}/socket")]
 //#[allow(clippy::too_many_arguments)] // humans don't call this function.

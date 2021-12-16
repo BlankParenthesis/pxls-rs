@@ -1,6 +1,5 @@
-use crate::database::{Connection, Pool};
-
 use super::*;
+use crate::database::{Connection, Pool};
 
 pub fn connection(
 	pool: std::sync::Arc<Pool>

@@ -1,16 +1,10 @@
-use super::*;
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use fragile::Fragile;
 use ouroboros::self_referencing;
-
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
-use std::{
-	collections::HashMap,
-	sync::Arc,
-};
 
-use std::ops::Deref;
-
+use super::*;
 use crate::{BoardDataMap, BoardRef};
 
 #[self_referencing]
@@ -43,7 +37,9 @@ pub struct PendingDelete {
 impl PendingDelete {
 	pub fn perform(&mut self) -> BoardRef {
 		self.with_mut(|fields| {
-			fields.lock.remove(fields.board_id)
+			fields
+				.lock
+				.remove(fields.board_id)
 				.expect("board went missing")
 		})
 	}
@@ -67,8 +63,7 @@ pub mod path {
 				}
 				.try_build();
 
-				board
-					.map_err(|_| warp::reject::not_found())
+				board.map_err(|_| warp::reject::not_found())
 			}
 		})
 	}
@@ -85,14 +80,17 @@ pub mod path {
 					board_id,
 					boards,
 					lock_builder: |boards| boards.write(),
-				}.build();
+				}
+				.build();
 
-				if writable.borrow_lock().contains_key(&board_id) {
+				if writable
+					.borrow_lock()
+					.contains_key(&board_id)
+				{
 					Ok(Fragile::new(writable))
 				} else {
 					Err(warp::reject::not_found())
 				}
-
 			}
 		})
 	}

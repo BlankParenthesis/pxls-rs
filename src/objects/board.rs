@@ -1,36 +1,33 @@
 use std::{
+	collections::{HashMap, HashSet},
 	convert::TryFrom,
 	io::{Seek, SeekFrom, Write},
-	time::{Duration, SystemTime, UNIX_EPOCH}, collections::{HashMap, HashSet}, sync::{Arc, Weak, RwLock},
+	sync::{Arc, RwLock, Weak},
+	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::filters::body::patch::BinaryPatch;
-
-use enum_map::EnumMap;
-use http::{header::{HeaderName, HeaderValue}, StatusCode};
 use bytes::BufMut;
 use diesel::{prelude::*, types::Record, Connection as DConnection};
-use http::Uri;
+use enum_map::EnumMap;
+use http::{
+	header::{HeaderName, HeaderValue},
+	StatusCode, Uri,
+};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
-use warp::{reply::Response, reject::Reject, Reply};
+use tokio_util::sync::CancellationToken;
+use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::{
 	database::{model, schema, Connection},
+	filters::body::patch::BinaryPatch,
 	objects::{
-		Color, Palette, Reference, SectorBuffer, SectorCache, SectorCacheAccess,
-		Shape, User, UserCount, VecShape, AuthedSocket, Extension, AuthedUser,
-		packet,
+		packet, AuthedSocket, AuthedUser, Color, Extension, Palette, Reference, SectorBuffer,
+		SectorCache, SectorCacheAccess, Shape, User, UserCount, VecShape,
 	},
-	//socket::{
-	//	event::{BoardData, BoardInfo as EventBoardInfo, Change, Event},
-	//	server::{BoardServer, Close, Cooldown, RunEvent},
-	//},
 };
-
-use tokio_util::sync::CancellationToken;
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -99,11 +96,17 @@ impl UserConnections {
 		user_connections
 	}
 
-	fn insert(&mut self, socket: Arc<AuthedSocket>) {
+	fn insert(
+		&mut self,
+		socket: Arc<AuthedSocket>,
+	) {
 		self.connections.insert(socket);
 	}
-	
-	fn remove(&mut self, socket: Arc<AuthedSocket>) {
+
+	fn remove(
+		&mut self,
+		socket: Arc<AuthedSocket>,
+	) {
 		self.connections.remove(&socket);
 	}
 
@@ -127,25 +130,29 @@ impl UserConnections {
 
 		let cloned_token = CancellationToken::clone(&new_token);
 
-		
 		let mut connections = connections.write().unwrap();
 
-		if let Some(cancellable) = connections.cooldown_timer.replace(new_token) {
+		if let Some(cancellable) = connections
+			.cooldown_timer
+			.replace(new_token)
+		{
 			cancellable.cancel();
 		}
 
 		let packet = packet::server::Packet::PixelsAvailable {
 			count: u32::try_from(cooldown_info.pixels_available).unwrap(),
-			next: cooldown_info.cooldown().map(|timestamp| {
-				timestamp
-					.duration_since(UNIX_EPOCH)
-					.unwrap()
-					.as_secs()
-			}),
+			next: cooldown_info
+				.cooldown()
+				.map(|timestamp| {
+					timestamp
+						.duration_since(UNIX_EPOCH)
+						.unwrap()
+						.as_secs()
+				}),
 		};
 
 		connections.send(&packet);
-		
+
 		tokio::task::spawn(async move {
 			tokio::select! {
 				_ = cloned_token.cancelled() => (),
@@ -154,10 +161,16 @@ impl UserConnections {
 		});
 	}
 
-	fn send(&self, packet: &packet::server::Packet) {
+	fn send(
+		&self,
+		packet: &packet::server::Packet,
+	) {
 		let extension = Extension::from(packet);
 		for connection in &self.connections {
-			if connection.extensions.contains(extension) {
+			if connection
+				.extensions
+				.contains(extension)
+			{
 				connection.send(packet);
 			}
 		}
@@ -218,7 +231,10 @@ impl Connections {
 				self.by_uid
 					.entry(id.clone())
 					.and_modify(|connections| {
-						connections.write().unwrap().insert(Arc::clone(&socket))
+						connections
+							.write()
+							.unwrap()
+							.insert(Arc::clone(&socket))
 					})
 					.or_insert_with(|| {
 						UserConnections::new(Arc::clone(&socket), cooldown_info.unwrap())
@@ -234,7 +250,7 @@ impl Connections {
 	pub fn remove(
 		&mut self,
 		socket: Arc<AuthedSocket>,
- 	) {
+	) {
 		let user = socket.user.read();
 		if let AuthedUser::Authed { user, valid_until } = &*user {
 			if let Some(ref id) = user.id {
@@ -250,7 +266,7 @@ impl Connections {
 			}
 		}
 
-		for extension in socket.extensions {			
+		for extension in socket.extensions {
 			self.by_extension[extension].remove(&socket);
 		}
 	}
@@ -264,14 +280,17 @@ impl Connections {
 			connection.send(&packet);
 		}
 	}
-	
+
 	pub fn send_to_user(
 		&self,
 		user_id: String,
 		packet: packet::server::Packet,
 	) {
 		if let Some(connections) = self.by_uid.get(&user_id) {
-			connections.read().unwrap().send(&packet);
+			connections
+				.read()
+				.unwrap()
+				.send(&packet);
 		}
 	}
 
@@ -281,10 +300,7 @@ impl Connections {
 		cooldown_info: CooldownInfo,
 	) {
 		if let Some(connections) = self.by_uid.get(&user_id) {
-			UserConnections::set_cooldown_info(
-				Arc::clone(connections),
-				cooldown_info,
-			);
+			UserConnections::set_cooldown_info(Arc::clone(connections), cooldown_info);
 		}
 	}
 
@@ -731,7 +747,8 @@ impl Board {
 				.user_cooldown_info(user, connection)
 				.unwrap();
 
-			self.connections.set_user_cooldown(user_id, cooldown_info);
+			self.connections
+				.set_user_cooldown(user_id, cooldown_info);
 		}
 
 		Ok(new_placement)
@@ -1055,15 +1072,18 @@ impl Board {
 		connection: &Connection,
 	) -> QueryResult<()> {
 		let user = socket.user.read();
-		let cooldown_info = Option::<&User>::from(&*user).and_then(|user| {
-			if user.id.is_some() {
-				Some(self.user_cooldown_info(user, connection))
-			} else {
-				None
-			}
-		}).transpose()?;
+		let cooldown_info = Option::<&User>::from(&*user)
+			.and_then(|user| {
+				if user.id.is_some() {
+					Some(self.user_cooldown_info(user, connection))
+				} else {
+					None
+				}
+			})
+			.transpose()?;
 
-		self.connections.insert(Arc::clone(&socket), cooldown_info);
+		self.connections
+			.insert(Arc::clone(&socket), cooldown_info);
 		socket.send(&packet::server::Packet::Ready);
 
 		Ok(())

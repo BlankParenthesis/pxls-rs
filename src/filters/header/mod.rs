@@ -1,9 +1,10 @@
-use super::*;
 use http::header;
 
+use super::*;
+
 pub mod authorization;
-pub mod range;
 pub mod content_range;
+pub mod range;
 
 #[derive(Debug)]
 pub enum RangeParseError {

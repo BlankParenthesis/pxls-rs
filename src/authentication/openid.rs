@@ -1,8 +1,7 @@
-use reqwest::Client;
-
 use http::StatusCode;
 use jsonwebkey::JsonWebKey;
 use jsonwebtoken::{decode, decode_header, errors::Error as JWTError, TokenData, Validation};
+use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
@@ -49,10 +48,8 @@ impl Discovery {
 					.json()
 					.await
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)
-				},
-			code => {
-				Err(DiscoveryError::InvalidResponse)
 			},
+			code => Err(DiscoveryError::InvalidResponse),
 		}
 	}
 
@@ -80,9 +77,7 @@ impl Discovery {
 					.map(|json| json.keys)
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)
 			},
-			code => {
-				Err(DiscoveryError::InvalidResponse)
-			},
+			code => Err(DiscoveryError::InvalidResponse),
 		}
 	}
 }

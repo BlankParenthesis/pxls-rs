@@ -1,4 +1,8 @@
-use std::{collections::HashSet, time::{SystemTime, UNIX_EPOCH, Duration}, hash::{Hash, Hasher}};
+use std::{
+	collections::HashSet,
+	hash::{Hash, Hasher},
+	time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use jsonwebtoken::TokenData;
 
@@ -50,23 +54,26 @@ impl Default for User {
 }
 
 impl PartialEq for User {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
+	fn eq(
+		&self,
+		other: &Self,
+	) -> bool {
+		self.id == other.id
+	}
 }
 
 impl Hash for User {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
+	fn hash<H: Hasher>(
+		&self,
+		state: &mut H,
+	) {
+		self.id.hash(state);
+	}
 }
 
 #[derive(Debug, Clone, Eq)]
 pub enum AuthedUser {
-	Authed{ 
-		user: User,
-		valid_until: SystemTime,
-	},
+	Authed { user: User, valid_until: SystemTime },
 	None,
 }
 
@@ -88,7 +95,10 @@ impl From<AuthedUser> for Option<User> {
 impl<'l> From<&'l AuthedUser> for Option<&'l User> {
 	fn from(authed: &'l AuthedUser) -> Self {
 		match authed {
-			AuthedUser::Authed{ ref user, valid_until } => Some(user),
+			AuthedUser::Authed {
+				ref user,
+				valid_until,
+			} => Some(user),
 			AuthedUser::None => None,
 		}
 	}
@@ -104,17 +114,32 @@ impl From<TokenData<Identity>> for AuthedUser {
 }
 
 impl PartialEq for AuthedUser {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Authed { user: l_user, valid_until: _ }, Self::Authed { user: r_user, valid_until: _ }) => l_user == r_user,
-            (Self::None, Self::None) => true,
+	fn eq(
+		&self,
+		other: &Self,
+	) -> bool {
+		match (self, other) {
+			(
+				Self::Authed {
+					user: l_user,
+					valid_until: _,
+				},
+				Self::Authed {
+					user: r_user,
+					valid_until: _,
+				},
+			) => l_user == r_user,
+			(Self::None, Self::None) => true,
 			_ => false,
-        }
-    }
+		}
+	}
 }
 
 impl Hash for AuthedUser {
-    fn hash<H: Hasher>(&self, state: &mut H) {
+	fn hash<H: Hasher>(
+		&self,
+		state: &mut H,
+	) {
 		Option::<&User>::from(self).hash(state);
-    }
+	}
 }

@@ -1,8 +1,7 @@
-use crate::objects::Extension;
-use crate::objects::VecShape;
-use crate::objects::Palette;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
+
+use crate::objects::{Extension, Palette, VecShape};
 
 pub mod server {
 	use super::*;
@@ -12,7 +11,7 @@ pub mod server {
 		pub position: u64,
 		pub values: Vec<T>,
 	}
-	
+
 	#[skip_serializing_none]
 	#[derive(Serialize, Debug, Clone)]
 	pub struct BoardInfo {
@@ -21,7 +20,7 @@ pub mod server {
 		pub palette: Option<Palette>,
 		pub max_stacked: Option<u32>,
 	}
-	
+
 	#[skip_serializing_none]
 	#[derive(Serialize, Debug, Clone)]
 	pub struct BoardData {
@@ -30,7 +29,7 @@ pub mod server {
 		pub initial: Option<Vec<Change<u8>>>,
 		pub mask: Option<Vec<Change<u8>>>,
 	}
-	
+
 	#[skip_serializing_none]
 	#[derive(Serialize, Debug, Clone)]
 	#[serde(tag = "type")]
@@ -65,9 +64,7 @@ pub mod client {
 	#[serde(tag = "type")]
 	#[serde(rename_all = "kebab-case")]
 	pub enum Packet {
-		Authenticate {
-			token: Option<String>,
-		},
+		Authenticate { token: Option<String> },
 	}
 
 	impl From<&Packet> for Extension {

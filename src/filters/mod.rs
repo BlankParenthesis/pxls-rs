@@ -1,9 +1,12 @@
+pub mod body;
 pub mod header;
 pub mod resource;
-pub mod body;
 
-use std::num::ParseIntError;
-use std::convert::Infallible;
+use std::{convert::Infallible, num::ParseIntError};
 
-use http::{StatusCode, Response};
-use warp::{reject::{Reject, Rejection}, Reply, reply::{self}, Filter};
+use http::{Response, StatusCode};
+use warp::{
+	reject::{Reject, Rejection},
+	reply::{self},
+	Filter, Reply,
+};

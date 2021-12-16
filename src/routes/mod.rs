@@ -1,19 +1,23 @@
-use http::{StatusCode, Response};
+use http::{Response, StatusCode};
 use serde::Serialize;
 use url::Url;
 use warp::{
 	reject::Rejection,
-	reply::{json, Reply, self},
+	reply::{self, json, Reply},
 	Filter,
 };
 
 use crate::{
 	access::permissions::{with_permission, Permission},
-	filters::header::{authorization, range::{self, Range}},
-	filters::resource::database,
-	filters::resource::board,
-	filters::body::patch,
 	database::Pool,
+	filters::{
+		body::patch,
+		header::{
+			authorization,
+			range::{self, Range},
+		},
+		resource::{board, database},
+	},
 	objects::*,
 };
 

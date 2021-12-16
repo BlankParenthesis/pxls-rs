@@ -1,13 +1,13 @@
-use super::*;
-
 use std::{
-	convert::{TryFrom, Infallible},
+	convert::{Infallible, TryFrom},
 	fmt::{self, Display, Formatter},
 	io::{Read, Seek},
 	ops::{Range as OpsRange, RangeFrom as OpsRangeFrom},
 };
 
 use rand::{self, Rng};
+
+use super::*;
 
 #[derive(Debug)]
 pub enum RangeIndexError {
@@ -42,7 +42,7 @@ impl Reply for RangeIndexError {
 					.header(header::CONTENT_RANGE, format!("bytes */{}", length))
 					.body("".into())
 					.unwrap()
-			}
+			},
 		};
 
 		warp::reply::with_header(base_response, header::ACCEPT_RANGES, "bytes").into_response()
@@ -199,7 +199,6 @@ fn merge_ranges(
 	joined
 }
 
-
 pub enum Range {
 	Multi {
 		unit: String,
@@ -224,9 +223,9 @@ impl TryFrom<&str> for Range {
 		let mut ranges: Vec<HttpRange> = range_data
 			.split(',')
 			.map(|range| {
-				let tuple = range.split_once('-').ok_or_else(|| {
-					RangeParseError::MissingHyphenMinus(String::from(range))
-				})?;
+				let tuple = range
+					.split_once('-')
+					.ok_or_else(|| RangeParseError::MissingHyphenMinus(String::from(range)))?;
 				let http_range = match tuple {
 					("", "") => Err(RangeParseError::RangeEmpty),
 					("", since_end) => {
@@ -293,7 +292,10 @@ impl Range {
 
 						Response::builder()
 							.status(StatusCode::PARTIAL_CONTENT)
-							.header(header::CONTENT_TYPE, format!("multipart/byteranges; boundary={}", boundary))
+							.header(
+								header::CONTENT_TYPE,
+								format!("multipart/byteranges; boundary={}", boundary),
+							)
 							.body(merged.into())
 							.unwrap()
 					},
@@ -324,9 +326,20 @@ impl Range {
 						data.read_exact(&mut buffer).unwrap();
 
 						let mut response = buffer.into_response();
-						response = reply::with_status(response, StatusCode::PARTIAL_CONTENT).into_response();
-						response = reply::with_header(response, header::CONTENT_TYPE, "application/octet-stream").into_response();
-						response = reply::with_header(response, header::CONTENT_TYPE, format!("bytes {}-{}/{}", range.start, range.end, length)).into_response();
+						response = reply::with_status(response, StatusCode::PARTIAL_CONTENT)
+							.into_response();
+						response = reply::with_header(
+							response,
+							header::CONTENT_TYPE,
+							"application/octet-stream",
+						)
+						.into_response();
+						response = reply::with_header(
+							response,
+							header::CONTENT_TYPE,
+							format!("bytes {}-{}/{}", range.start, range.end, length),
+						)
+						.into_response();
 						response
 					},
 					Err(error) => error.into_response(),
@@ -358,15 +371,11 @@ impl From<Option<Range>> for Range {
 }
 
 pub fn default() -> impl Filter<Extract = (Range,), Error = Infallible> + Copy {
-	warp::any()
-		.and_then(|| async {
-			Result::<_, Infallible>::Ok(Range::None)
-		})
+	warp::any().and_then(|| async { Result::<_, Infallible>::Ok(Range::None) })
 }
 
 pub fn range() -> impl Filter<Extract = (Range,), Error = Rejection> + Copy {
-	warp::header(header::RANGE.as_str()).and_then(|header: String| async move {
-		Range::try_from(header.as_str())
-			.map_err(warp::reject::custom)
+	warp::header(header::RANGE.as_str()).and_then(|header: String| {
+		async move { Range::try_from(header.as_str()).map_err(warp::reject::custom) }
 	})
 }

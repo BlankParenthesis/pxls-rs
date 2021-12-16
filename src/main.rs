@@ -11,22 +11,20 @@ mod access;
 mod database;
 mod authentication;
 mod config;
+mod filters;
 mod objects;
 mod routes;
-mod filters;
 //mod socket;
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use access::permissions::PermissionsError;
 use filters::header::authorization::BearerError;
 use futures_util::future;
 use http::{Method, StatusCode};
-use warp::{Filter, Rejection, Reply};
-
 //use tokio::sync::RwLock;
 use parking_lot::RwLock;
+use warp::{Filter, Rejection, Reply};
 
 use crate::objects::Board;
 
@@ -66,22 +64,67 @@ async fn main() {
 	let routes = routes::core::info::get()
 		.or(routes::core::access::get())
 		.or(routes::core::boards::list(Arc::clone(&boards)))
-		.or(routes::core::boards::get(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::get(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
 		.or(routes::core::boards::default())
-		.or(routes::core::boards::post(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::patch(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::delete(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::socket(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::data::get_colors(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::data::get_initial(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::data::get_mask(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::data::get_timestamps(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::data::patch_initial(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::data::patch_mask(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::users::get(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::pixels::list(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::pixels::get(Arc::clone(&boards), Arc::clone(&pool)))
-		.or(routes::core::boards::pixels::post(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::post(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::patch(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::delete(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::socket(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::data::get_colors(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::data::get_initial(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::data::get_mask(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::data::get_timestamps(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::data::patch_initial(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::data::patch_mask(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::users::get(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::pixels::list(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::pixels::get(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
+		.or(routes::core::boards::pixels::post(
+			Arc::clone(&boards),
+			Arc::clone(&pool),
+		))
 		.or(routes::auth::auth::get())
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
