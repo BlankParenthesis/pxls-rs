@@ -8,6 +8,8 @@ pub mod sector_cache;
 pub mod shape;
 pub mod user;
 pub mod user_count;
+pub mod socket;
+pub mod packet;
 
 pub use board::{Board, BoardInfo, BoardInfoPatch, BoardInfoPost, MaskValue};
 pub use board_sector::{BoardSector, SectorBuffer};
@@ -19,3 +21,4 @@ pub use sector_cache::{SectorCache, SectorCacheAccess};
 pub use shape::{Shape, VecShape};
 pub use user::{AuthedUser, User};
 pub use user_count::UserCount;
+pub use socket::{UnauthedSocket, AuthedSocket, Extension};

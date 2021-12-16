@@ -3,7 +3,7 @@ use http::{StatusCode, header};
 use warp::{reject::Reject, Filter, Rejection, Reply};
 
 use crate::authentication::openid::ValidationError;
-use crate::objects::{AuthedUser, User};
+use crate::objects::AuthedUser;
 
 #[derive(Debug)]
 pub enum BearerError {
@@ -68,6 +68,6 @@ pub fn bearer() -> impl Filter<Extract = (AuthedUser,), Error = Rejection> + Cop
 pub async fn validator(token: String) -> Result<AuthedUser, BearerError> {
 	crate::authentication::openid::validate_token(&token)
 		.await
-		.map(|token_data| AuthedUser::Authed(User::from(token_data.claims)))
+		.map(AuthedUser::from)
 		.map_err(BearerError::ValidationError)
 }

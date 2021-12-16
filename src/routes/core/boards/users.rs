@@ -11,9 +11,8 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsUsers)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, _user, connection| {
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+		.map(|board: PassableBoard, _user, connection| {
+			let board = board.read();
 			let board = board.as_ref().unwrap();
 			json(&board.user_count(&connection).unwrap()).into_response()
 		})

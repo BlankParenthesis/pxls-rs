@@ -1,11 +1,12 @@
 use std::{
 	convert::TryFrom,
 	io::{Seek, SeekFrom, Write},
-	time::{Duration, SystemTime, UNIX_EPOCH},
+	time::{Duration, SystemTime, UNIX_EPOCH}, collections::{HashMap, HashSet}, sync::{Arc, Weak, RwLock},
 };
 
 use crate::filters::body::patch::BinaryPatch;
 
+use enum_map::EnumMap;
 use http::{header::{HeaderName, HeaderValue}, StatusCode};
 use bytes::BufMut;
 use diesel::{prelude::*, types::Record, Connection as DConnection};
@@ -13,19 +14,23 @@ use http::Uri;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 use warp::{reply::Response, reject::Reject, Reply};
 
 use crate::{
 	database::{model, schema, Connection},
 	objects::{
 		Color, Palette, Reference, SectorBuffer, SectorCache, SectorCacheAccess,
-		Shape, User, UserCount, VecShape,
+		Shape, User, UserCount, VecShape, AuthedSocket, Extension, AuthedUser,
+		packet,
 	},
 	//socket::{
 	//	event::{BoardData, BoardInfo as EventBoardInfo, Change, Event},
 	//	server::{BoardServer, Close, Cooldown, RunEvent},
 	//},
 };
+
+use tokio_util::sync::CancellationToken;
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -52,29 +57,253 @@ pub struct BoardInfoPatch {
 	max_stacked: Option<u32>,
 }
 
-//impl From<BoardInfoPatch> for EventBoardInfo {
-//	fn from(
-//		BoardInfoPatch {
-//			name,
-//			shape,
-//			palette,
-//			max_stacked,
-//		}: BoardInfoPatch
-//	) -> Self {
-//		Self {
-//			name,
-//			shape,
-//			palette,
-//			max_stacked,
-//		}
-//	}
-//}
+impl From<BoardInfoPatch> for packet::server::BoardInfo {
+	fn from(
+		BoardInfoPatch {
+			name,
+			shape,
+			palette,
+			max_stacked,
+		}: BoardInfoPatch
+	) -> Self {
+		Self {
+			name,
+			shape,
+			palette,
+			max_stacked,
+		}
+	}
+}
+
+#[derive(Debug)]
+struct UserConnections {
+	connections: HashSet<Arc<AuthedSocket>>,
+	cooldown_timer: Option<CancellationToken>,
+}
+
+impl UserConnections {
+	fn new(
+		socket: Arc<AuthedSocket>,
+		cooldown_info: CooldownInfo,
+	) -> Arc<RwLock<Self>> {
+		let mut connections = HashSet::new();
+		connections.insert(socket);
+
+		let user_connections = Arc::new(RwLock::new(Self {
+			connections,
+			cooldown_timer: None,
+		}));
+
+		Self::set_cooldown_info(Arc::clone(&user_connections), cooldown_info);
+
+		user_connections
+	}
+
+	fn insert(&mut self, socket: Arc<AuthedSocket>) {
+		self.connections.insert(socket);
+	}
+	
+	fn remove(&mut self, socket: Arc<AuthedSocket>) {
+		self.connections.remove(&socket);
+	}
+
+	fn is_empty(&self) -> bool {
+		self.connections.is_empty()
+	}
+
+	fn cleanup(&mut self) {
+		assert!(self.is_empty());
+		if let Some(timer) = self.cooldown_timer.take() {
+			timer.cancel();
+		}
+	}
+
+	fn set_cooldown_info(
+		connections: Arc<RwLock<Self>>,
+		cooldown_info: CooldownInfo,
+	) {
+		let weak = Arc::downgrade(&connections);
+		let new_token = CancellationToken::new();
+
+		let cloned_token = CancellationToken::clone(&new_token);
+
+		
+		let mut connections = connections.write().unwrap();
+
+		if let Some(cancellable) = connections.cooldown_timer.replace(new_token) {
+			cancellable.cancel();
+		}
+
+		let packet = packet::server::Packet::PixelsAvailable {
+			count: u32::try_from(cooldown_info.pixels_available).unwrap(),
+			next: cooldown_info.cooldown().map(|timestamp| {
+				timestamp
+					.duration_since(UNIX_EPOCH)
+					.unwrap()
+					.as_secs()
+			}),
+		};
+
+		connections.send(&packet);
+		
+		tokio::task::spawn(async move {
+			tokio::select! {
+				_ = cloned_token.cancelled() => (),
+				_ = Self::cooldown_timer(weak, cooldown_info) => (),
+			}
+		});
+	}
+
+	fn send(&self, packet: &packet::server::Packet) {
+		let extension = Extension::from(packet);
+		for connection in &self.connections {
+			if connection.extensions.contains(extension) {
+				connection.send(packet);
+			}
+		}
+	}
+
+	async fn cooldown_timer(
+		connections: Weak<RwLock<Self>>,
+		mut cooldown_info: CooldownInfo,
+	) {
+		let mut next = cooldown_info.next();
+		while let Some(time) = next {
+			let instant = Instant::now()
+				+ time
+					.duration_since(SystemTime::now())
+					.unwrap_or(Duration::ZERO);
+			let count = cooldown_info.pixels_available;
+			tokio::time::sleep_until(instant).await;
+
+			next = cooldown_info.next();
+
+			let packet = packet::server::Packet::PixelsAvailable {
+				count: u32::try_from(count).unwrap(),
+				next: next.map(|time| {
+					time.duration_since(UNIX_EPOCH)
+						.unwrap()
+						.as_secs()
+				}),
+			};
+
+			match connections.upgrade() {
+				Some(connections) => {
+					let connections = connections.write().unwrap();
+					connections.send(&packet);
+				},
+				None => {
+					return;
+				},
+			}
+		}
+	}
+}
+
+#[derive(Debug, Default)]
+pub struct Connections {
+	by_uid: HashMap<String, Arc<RwLock<UserConnections>>>,
+	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
+}
+
+impl Connections {
+	pub fn insert(
+		&mut self,
+		socket: Arc<AuthedSocket>,
+		cooldown_info: Option<CooldownInfo>,
+	) {
+		let user = socket.user.read();
+		if let AuthedUser::Authed { user, valid_until } = &*user {
+			if let Some(ref id) = user.id {
+				self.by_uid
+					.entry(id.clone())
+					.and_modify(|connections| {
+						connections.write().unwrap().insert(Arc::clone(&socket))
+					})
+					.or_insert_with(|| {
+						UserConnections::new(Arc::clone(&socket), cooldown_info.unwrap())
+					});
+			}
+		}
+
+		for extension in socket.extensions {
+			self.by_extension[extension].insert(Arc::clone(&socket));
+		}
+	}
+
+	pub fn remove(
+		&mut self,
+		socket: Arc<AuthedSocket>,
+ 	) {
+		let user = socket.user.read();
+		if let AuthedUser::Authed { user, valid_until } = &*user {
+			if let Some(ref id) = user.id {
+				let connections = self.by_uid.get(id).unwrap();
+				let mut connections = connections.write().unwrap();
+
+				connections.remove(Arc::clone(&socket));
+				if connections.is_empty() {
+					connections.cleanup();
+					drop(connections);
+					self.by_uid.remove(id);
+				}
+			}
+		}
+
+		for extension in socket.extensions {			
+			self.by_extension[extension].remove(&socket);
+		}
+	}
+
+	pub fn send(
+		&self,
+		packet: packet::server::Packet,
+	) {
+		let extension = Extension::from(&packet);
+		for connection in self.by_extension[extension].iter() {
+			connection.send(&packet);
+		}
+	}
+	
+	pub fn send_to_user(
+		&self,
+		user_id: String,
+		packet: packet::server::Packet,
+	) {
+		if let Some(connections) = self.by_uid.get(&user_id) {
+			connections.read().unwrap().send(&packet);
+		}
+	}
+
+	pub fn set_user_cooldown(
+		&self,
+		user_id: String,
+		cooldown_info: CooldownInfo,
+	) {
+		if let Some(connections) = self.by_uid.get(&user_id) {
+			UserConnections::set_cooldown_info(
+				Arc::clone(connections),
+				cooldown_info,
+			);
+		}
+	}
+
+	pub fn close(&mut self) {
+		// TODO: maybe send a close reason
+
+		for connections in self.by_extension.values() {
+			for connection in connections {
+				connection.close();
+			}
+		}
+	}
+}
 
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
+	connections: Connections,
 	sectors: SectorCache,
-	//server: Arc<Addr<BoardServer>>,
 }
 
 #[derive(Clone, Debug)]
@@ -228,23 +457,20 @@ impl Board {
 			.write(&*patch.data)
 			.map_err(|_| "write error")?;
 
-		//let event = Event::BoardUpdate {
-		//	info: None,
-		//	data: Some(BoardData {
-		//		colors: None,
-		//		timestamps: None,
-		//		initial: Some(vec![Change {
-		//			position: patch.start,
-		//			values: Vec::from(&*patch.data),
-		//		}]),
-		//		mask: None,
-		//	}),
-		//};
+		let packet = packet::server::Packet::BoardUpdate {
+			info: None,
+			data: Some(packet::server::BoardData {
+				colors: None,
+				timestamps: None,
+				initial: Some(vec![packet::server::Change {
+					position: u64::try_from(patch.start).unwrap(),
+					values: Vec::from(&*patch.data),
+				}]),
+				mask: None,
+			}),
+		};
 
-		//self.server.do_send(RunEvent {
-		//	event,
-		//	user_id: None,
-		//});
+		self.connections.send(packet);
 
 		Ok(())
 	}
@@ -266,23 +492,20 @@ impl Board {
 			.write(&*patch.data)
 			.map_err(|_| "write error")?;
 
-		//let event = Event::BoardUpdate {
-		//	info: None,
-		//	data: Some(BoardData {
-		//		colors: None,
-		//		timestamps: None,
-		//		initial: None,
-		//		mask: Some(vec![Change {
-		//			position: patch.start,
-		//			values: Vec::from(&*patch.data),
-		//		}]),
-		//	}),
-		//};
+		let packet = packet::server::Packet::BoardUpdate {
+			info: None,
+			data: Some(packet::server::BoardData {
+				colors: None,
+				timestamps: None,
+				initial: None,
+				mask: Some(vec![packet::server::Change {
+					position: u64::try_from(patch.start).unwrap(),
+					values: Vec::from(&*patch.data),
+				}]),
+			}),
+		};
 
-		//self.server.do_send(RunEvent {
-		//	event,
-		//	user_id: None,
-		//});
+		self.connections.send(packet);
 
 		Ok(())
 	}
@@ -358,24 +581,21 @@ impl Board {
 			self.info.max_stacked = max_stacked;
 		}
 
-		//let event = Event::BoardUpdate {
-		//	info: Some(info.into()),
-		//	data: None,
-		//};
+		let packet = packet::server::Packet::BoardUpdate {
+			info: Some(info.into()),
+			data: None,
+		};
 
-		//self.server.do_send(RunEvent {
-		//	event,
-		//	user_id: None,
-		//});
+		self.connections.send(packet);
 
 		Ok(())
 	}
 
 	pub fn delete(
-		self,
+		mut self,
 		connection: &Connection,
 	) -> QueryResult<()> {
-		//self.server.do_send(Close {});
+		self.connections.close();
 
 		connection.transaction(|| {
 			diesel::delete(schema::board_sector::table)
@@ -488,37 +708,31 @@ impl Board {
 			.as_mut()
 			.put_u32_le(timestamp);
 
-		//let event = Event::BoardUpdate {
-		//	info: None,
-		//	data: Some(BoardData {
-		//		colors: Some(vec![Change {
-		//			position,
-		//			values: vec![color as u8],
-		//		}]),
-		//		timestamps: Some(vec![Change {
-		//			position,
-		//			values: vec![timestamp],
-		//		}]),
-		//		initial: None,
-		//		mask: None,
-		//	}),
-		//};
+		let packet = packet::server::Packet::BoardUpdate {
+			info: None,
+			data: Some(packet::server::BoardData {
+				colors: Some(vec![packet::server::Change {
+					position,
+					values: vec![color as u8],
+				}]),
+				timestamps: Some(vec![packet::server::Change {
+					position,
+					values: vec![timestamp],
+				}]),
+				initial: None,
+				mask: None,
+			}),
+		};
 
-		//self.server.do_send(RunEvent {
-		//	event,
-		//	user_id: None,
-		//});
+		self.connections.send(packet);
 
-		//if let Some(user_id) = user.id.clone() {
-		//	let cooldown_info = self
-		//		.user_cooldown_info(user, connection)
-		//		.unwrap();
+		if let Some(user_id) = user.id.clone() {
+			let cooldown_info = self
+				.user_cooldown_info(user, connection)
+				.unwrap();
 
-		//	self.server.do_send(Cooldown {
-		//		cooldown_info,
-		//		user_id,
-		//	});
-		//}
+			self.connections.set_user_cooldown(user_id, cooldown_info);
+		}
 
 		Ok(new_placement)
 	}
@@ -612,13 +826,13 @@ impl Board {
 			info.shape.sector_size(),
 		);
 
-		//let server = Arc::new(BoardServer::default().start());
+		let connections = Connections::default();
 
 		Ok(Board {
 			id,
 			info,
 			sectors,
-			//server,
+			connections,
 		})
 	}
 
@@ -810,8 +1024,7 @@ impl Board {
 		}
 
 		let count = diesel::sql_query(
-			"
-			SElECT COUNT(DISTINCT user_id) AS active
+			"SElECT COUNT(DISTINCT user_id) AS active
 			FROM placement
 			WHERE board = $1
 			AND timestamp BETWEEN $2 AND $3",
@@ -836,9 +1049,32 @@ impl Board {
 		self.user_count_for_time(self.current_timestamp(), connection)
 	}
 
-	//pub fn server(&self) -> Arc<Addr<BoardServer>> {
-	//	Arc::clone(&self.server)
-	//}
+	pub fn insert_socket(
+		&mut self,
+		socket: Arc<AuthedSocket>,
+		connection: &Connection,
+	) -> QueryResult<()> {
+		let user = socket.user.read();
+		let cooldown_info = Option::<&User>::from(&*user).and_then(|user| {
+			if user.id.is_some() {
+				Some(self.user_cooldown_info(user, connection))
+			} else {
+				None
+			}
+		}).transpose()?;
+
+		self.connections.insert(Arc::clone(&socket), cooldown_info);
+		socket.send(&packet::server::Packet::Ready);
+
+		Ok(())
+	}
+
+	pub fn remove_socket(
+		&mut self,
+		socket: Arc<AuthedSocket>,
+	) {
+		self.connections.remove(socket)
+	}
 }
 
 impl From<&Board> for Uri {

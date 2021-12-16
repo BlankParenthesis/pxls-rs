@@ -16,10 +16,9 @@ pub fn get_colors(
 		.and(warp::any().and(range::range()).or(range::default()).unify())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, connection| {
 			// TODO: content disposition
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+			let board = board.read();
 			let mut colors_data = board
 				.as_ref()
 				.unwrap()
@@ -43,10 +42,9 @@ pub fn get_timestamps(
 		.and(warp::any().and(range::range()).or(range::default()).unify())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, connection| {
 			// TODO: content disposition
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+			let board = board.read();
 			let mut timestamp_data = board
 				.as_ref()
 				.unwrap()
@@ -70,10 +68,9 @@ pub fn get_mask(
 		.and(warp::any().and(range::range()).or(range::default()).unify())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, connection| {
 			// TODO: content disposition
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+			let board = board.read();
 			let mut mask_data = board
 				.as_ref()
 				.unwrap()
@@ -97,10 +94,9 @@ pub fn get_initial(
 		.and(warp::any().and(range::range()).or(range::default()).unify())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, connection| {
 			// TODO: content disposition
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+			let board = board.read();
 			let mut initial_data = board
 				.as_ref()
 				.unwrap()
@@ -124,10 +120,9 @@ pub fn patch_initial(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
 		.and(patch::bytes())
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, _user, patch: BinaryPatch, connection| {
+		.map(|board: PassableBoard, _user, patch: BinaryPatch, connection| {
 			// TODO: content disposition
-			let board = board.into_inner();
-			let board = board.write().unwrap();
+			let board = board.write();
 			let patch_result = board
 				.as_ref()
 				.unwrap()
@@ -154,10 +149,9 @@ pub fn patch_mask(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
 		.and(patch::bytes())
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, _user, patch: BinaryPatch, connection| {
+		.map(|board: PassableBoard, _user, patch: BinaryPatch, connection| {
 			// TODO: content disposition
-			let board = board.into_inner();
-			let board = board.write().unwrap();
+			let board = board.write();
 			let patch_result = board
 				.as_ref()
 				.unwrap()

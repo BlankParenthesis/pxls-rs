@@ -19,6 +19,7 @@ pub enum Permission {
 	BoardsPixelsGet,
 	BoardsPixelsPost,
 	SocketCore,
+	SocketAuthentication,
 }
 
 impl Serialize for Permission {
@@ -43,6 +44,7 @@ impl Serialize for Permission {
 			Permission::BoardsPixelsGet => serializer.serialize_str("boards.pixels.get"),
 			Permission::BoardsPixelsPost => serializer.serialize_str("boards.pixels.post"),
 			Permission::SocketCore => serializer.serialize_str("socket.core"),
+			Permission::SocketAuthentication => serializer.serialize_str("socket.authentication"),
 		}
 	}
 }

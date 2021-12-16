@@ -12,15 +12,14 @@ pub fn list(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsList)))
 		.and(warp::query())
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: Fragile<PassableBoard>, _user, options: PaginationOptions<PageToken>, connection| {
+		.map(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, connection| {
 			let page = options.page.unwrap_or_default();
 			let limit = options
 				.limit
 				.unwrap_or(10)
 				.clamp(1, 100);
 	
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let previous_placements = board
 				.list_placements(page.timestamp, page.id, limit, true, &connection)
@@ -71,9 +70,8 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsGet)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: Fragile<PassableBoard>, position, _user, connection| {
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+		.map(|board: PassableBoard, position, _user, connection| {
+			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let placement = board
 				.lookup(position, &connection)
@@ -98,12 +96,11 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsPost)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: Fragile<PassableBoard>, position, placement: PlacementRequest, user, connection| {
+		.map(|board: PassableBoard, position, placement: PlacementRequest, user, connection| {
 			let user = Option::from(user)
 				.expect("Default user shouldn't have place permisisons");
 
-			let board = board.into_inner();
-			let board = board.write().unwrap();
+			let board = board.write();
 			let board = board.as_ref().unwrap();
 			let place_attempt = board.try_place(
 				// TODO: maybe accept option but make sure not to allow undos etc for anon users

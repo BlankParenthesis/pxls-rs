@@ -26,7 +26,7 @@ use http::{Method, StatusCode};
 use warp::{Filter, Rejection, Reply};
 
 //use tokio::sync::RwLock;
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use crate::objects::Board;
 
@@ -71,6 +71,7 @@ async fn main() {
 		.or(routes::core::boards::post(Arc::clone(&boards), Arc::clone(&pool)))
 		.or(routes::core::boards::patch(Arc::clone(&boards), Arc::clone(&pool)))
 		.or(routes::core::boards::delete(Arc::clone(&boards), Arc::clone(&pool)))
+		.or(routes::core::boards::socket(Arc::clone(&boards), Arc::clone(&pool)))
 		.or(routes::core::boards::data::get_colors(Arc::clone(&boards), Arc::clone(&pool)))
 		.or(routes::core::boards::data::get_initial(Arc::clone(&boards), Arc::clone(&pool)))
 		.or(routes::core::boards::data::get_mask(Arc::clone(&boards), Arc::clone(&pool)))

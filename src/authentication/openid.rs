@@ -90,7 +90,7 @@ impl Discovery {
 #[derive(Deserialize)]
 pub struct Identity {
 	pub sub: String,
-	pub exp: usize,
+	pub exp: u64,
 }
 
 impl From<Identity> for User {

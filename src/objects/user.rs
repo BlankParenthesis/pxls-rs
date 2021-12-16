@@ -1,8 +1,10 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::{SystemTime, UNIX_EPOCH, Duration}, hash::{Hash, Hasher}};
 
-use crate::access::permissions::Permission;
+use jsonwebtoken::TokenData;
 
-#[derive(Debug, Clone)]
+use crate::{access::permissions::Permission, authentication::openid::Identity};
+
+#[derive(Debug, Clone, Eq)]
 pub struct User {
 	pub id: Option<String>,
 	pub permissions: HashSet<Permission>,
@@ -47,8 +49,24 @@ impl Default for User {
 	}
 }
 
+impl PartialEq for User {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Hash for User {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Eq)]
 pub enum AuthedUser {
-	Authed(User),
+	Authed{ 
+		user: User,
+		valid_until: SystemTime,
+	},
 	None,
 }
 
@@ -61,7 +79,7 @@ impl From<AuthedUser> for User {
 impl From<AuthedUser> for Option<User> {
 	fn from(authed: AuthedUser) -> Self {
 		match authed {
-			AuthedUser::Authed(user) => Some(user),
+			AuthedUser::Authed { user, valid_until } => Some(user),
 			AuthedUser::None => None,
 		}
 	}
@@ -70,18 +88,33 @@ impl From<AuthedUser> for Option<User> {
 impl<'l> From<&'l AuthedUser> for Option<&'l User> {
 	fn from(authed: &'l AuthedUser) -> Self {
 		match authed {
-			AuthedUser::Authed(ref user) => Some(user),
+			AuthedUser::Authed{ ref user, valid_until } => Some(user),
 			AuthedUser::None => None,
 		}
 	}
 }
 
-impl From<Option<User>> for AuthedUser {
-	fn from(user: Option<User>) -> Self {
-		match user {
-			Some(user) => AuthedUser::Authed(user),
-			None => AuthedUser::None,
+impl From<TokenData<Identity>> for AuthedUser {
+	fn from(token_data: TokenData<Identity>) -> Self {
+		Self::Authed {
+			valid_until: UNIX_EPOCH + Duration::from_secs(token_data.claims.exp),
+			user: User::from(token_data.claims),
 		}
 	}
 }
 
+impl PartialEq for AuthedUser {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Authed { user: l_user, valid_until: _ }, Self::Authed { user: r_user, valid_until: _ }) => l_user == r_user,
+            (Self::None, Self::None) => true,
+			_ => false,
+        }
+    }
+}
+
+impl Hash for AuthedUser {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+		Option::<&User>::from(self).hash(state);
+    }
+}

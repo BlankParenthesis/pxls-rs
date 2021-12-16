@@ -1,4 +1,4 @@
-use std::sync::RwLock;
+use parking_lot::RwLock;
 use std::sync::Arc;
 
 use http::header;
@@ -8,6 +8,7 @@ use warp::path::Tail;
 use super::*;
 use crate::filters::resource::board::PassableBoard;
 use crate::filters::resource::board::PendingDelete;
+use crate::objects::socket::Extension;
 use crate::{BoardDataMap};
 
 use fragile::Fragile;
@@ -30,10 +31,10 @@ pub fn list(boards: BoardDataMap) -> impl Filter<Extract = impl Reply, Error = R
 				.clamp(1, 100);
 
 			let boards = Arc::clone(&boards);
-			let boards = boards.read().unwrap();
+			let boards = boards.read();
 			let boards = boards
 				.iter()
-				.map(|(id, board)| (id, board.read().unwrap()))
+				.map(|(id, board)| (id, board.read()))
 				.collect::<Vec<_>>();
 			let board_infos = boards
 				.iter()
@@ -93,13 +94,12 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, user, connection| {
-			let board = board.into_inner();
-			let board = board.read().unwrap();
+		.map(|board: PassableBoard, user, connection| {
+			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let mut response = json(&board.info).into_response();
 
-			if let AuthedUser::Authed(user) = user {
+			if let AuthedUser::Authed { user, valid_until } = user {
 				let cooldown_info = board
 					.user_cooldown_info(&user, &connection)
 					.unwrap();
@@ -129,10 +129,10 @@ pub fn post(
 			let id = board.id as usize;
 
 			let boards = Arc::clone(&boards);
-			let mut boards = boards.write().unwrap();
+			let mut boards = boards.write();
 			boards.insert(id, Arc::new(RwLock::new(Some(board))));
 
-			let board = boards.get(&id).unwrap().read().unwrap();
+			let board = boards.get(&id).unwrap().read();
 			let board = board.as_ref().unwrap();
 
 			let mut response = json(&Reference::from(board)).into_response();
@@ -154,9 +154,8 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
 		.and(database::connection(database_pool))
-		.map(|board: Fragile<PassableBoard>, patch: BoardInfoPatch, _user, connection| {
-			let board = board.into_inner();
-			let mut board = board.write().unwrap();
+		.map(|board: PassableBoard, patch: BoardInfoPatch, _user, connection| {
+			let mut board = board.write();
 			let board = board.as_mut().unwrap();
 
 			board.update_info(patch, &connection).unwrap();
@@ -181,12 +180,58 @@ pub fn delete(
 		.map(move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection| {
 			let mut deletion = deletion.into_inner();
 			let board = deletion.perform();
-			let mut board = board.write().unwrap();
+			let mut board = board.write();
 			let board = board.take().unwrap();
 			board.delete(&connection).unwrap();
 			StatusCode::NO_CONTENT.into_response()
 		})
 }
+
+#[derive(serde::Deserialize)]
+pub struct SocketOptions {
+	pub extensions: Option<enumset::EnumSet<Extension>>,
+}
+
+pub fn socket(
+	boards: BoardDataMap,
+	database_pool: Arc<Pool>,
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+	warp::path("boards")
+		.and(board::path::read(&boards))
+		.and(warp::path("socket"))
+		.and(warp::path::end())
+		.and(serde_qs::warp::query(Default::default()))
+		.and(warp::ws())
+		.map(move |board: PassableBoard, options: SocketOptions, ws: warp::ws::Ws| {
+			let database_pool = Arc::clone(&database_pool);
+
+			if let Some(extensions) = options.extensions {
+				if !extensions.is_empty() {
+					ws.on_upgrade(move |websocket| {
+						UnauthedSocket::connect(
+							websocket,
+							extensions,
+							Arc::downgrade(&*board),
+							database_pool,
+						)
+					})
+					.into_response()
+				} else {
+					StatusCode::UNPROCESSABLE_ENTITY.into_response()
+				}
+			} else {
+				StatusCode::UNPROCESSABLE_ENTITY.into_response()
+			}
+		})
+		.recover(|rejection: Rejection| async {
+			if let Some(err) = rejection.find::<serde_qs::Error>() {
+				Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
+			} else {
+				Err(rejection)
+			}
+		})
+}
+
 
 //#[get("/boards/{id}/socket")]
 //#[allow(clippy::too_many_arguments)] // humans don't call this function.
