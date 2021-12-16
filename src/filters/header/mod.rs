@@ -2,6 +2,7 @@ use http::header;
 
 use super::*;
 
+pub mod accept_encoding;
 pub mod authorization;
 pub mod content_range;
 pub mod range;

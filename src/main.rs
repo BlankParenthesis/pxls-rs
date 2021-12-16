@@ -134,26 +134,26 @@ async fn main() {
 			} else {
 				future::err(rejection)
 			}
-		});
+		})
+		.with(
+			warp::cors::cors()
+				.allow_any_origin()
+				.allow_credentials(true)
+				.allow_methods([
+					Method::GET,
+					Method::POST,
+					Method::DELETE,
+					Method::PATCH,
+				]), // TODO: allow headers
+		);
 
-	warp::serve(
-		routes
-			// TODO: This doesn't look at accept-encoding.
-			// Until it does (or you wrap it in something that does), keep it disabled
-			//.with(warp::compression::gzip())
-			.with(
-				warp::cors::cors()
-					.allow_any_origin()
-					.allow_credentials(true)
-					.allow_methods([
-						Method::GET,
-						Method::POST,
-						Method::DELETE,
-						Method::PATCH,
-					])
-					// TODO: allow headers
-			),
-	)
-	.run(([127, 0, 0, 1], config.port))
-	.await;
+	// Temporary fix for gzip until https://github.com/seanmonstar/warp/pull/513
+	// is merged
+	let gzip_routes = filters::header::accept_encoding::gzip()
+		.and(routes.clone())
+		.with(warp::compression::gzip());
+
+	warp::serve(gzip_routes.or(routes))
+		.run(([127, 0, 0, 1], config.port))
+		.await;
 }
