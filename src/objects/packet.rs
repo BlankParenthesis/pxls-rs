@@ -18,7 +18,7 @@ pub mod server {
 		pub name: Option<String>,
 		pub shape: Option<VecShape>,
 		pub palette: Option<Palette>,
-		pub max_stacked: Option<u32>,
+		pub max_pixels_available: Option<u32>,
 	}
 
 	#[skip_serializing_none]

@@ -35,7 +35,7 @@ pub struct BoardInfo {
 	created_at: u64,
 	shape: VecShape,
 	palette: Palette,
-	max_stacked: u32,
+	max_pixels_available: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -43,7 +43,7 @@ pub struct BoardInfoPost {
 	name: String,
 	shape: VecShape,
 	palette: Palette,
-	max_stacked: u32,
+	max_pixels_available: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -51,7 +51,7 @@ pub struct BoardInfoPatch {
 	name: Option<String>,
 	shape: Option<VecShape>,
 	palette: Option<Palette>,
-	max_stacked: Option<u32>,
+	max_pixels_available: Option<u32>,
 }
 
 impl From<BoardInfoPatch> for packet::server::BoardInfo {
@@ -60,14 +60,14 @@ impl From<BoardInfoPatch> for packet::server::BoardInfo {
 			name,
 			shape,
 			palette,
-			max_stacked,
+			max_pixels_available,
 		}: BoardInfoPatch
 	) -> Self {
 		Self {
 			name,
 			shape,
 			palette,
-			max_stacked,
+			max_pixels_available,
 		}
 	}
 }
@@ -437,7 +437,7 @@ impl Board {
 				name: info.name,
 				created_at: now as i64,
 				shape: info.shape.into(),
-				max_stacked: info.max_stacked as i32,
+				max_stacked: info.max_pixels_available as i32,
 			})
 			.get_result::<model::Board>(connection)?;
 
@@ -537,7 +537,7 @@ impl Board {
 			info.name.is_some()
 				|| info.palette.is_some()
 				|| info.shape.is_some()
-				|| info.max_stacked.is_some()
+				|| info.max_pixels_available.is_some()
 		);
 
 		connection.transaction::<_, diesel::result::Error, _>(|| {
@@ -565,7 +565,7 @@ impl Board {
 					.execute(connection)?;
 			}
 
-			if let Some(max_stacked) = info.max_stacked {
+			if let Some(max_stacked) = info.max_pixels_available {
 				diesel::update(schema::board::table)
 					.set(schema::board::max_stacked.eq(max_stacked as i32))
 					.filter(schema::board::id.eq(self.id))
@@ -593,8 +593,8 @@ impl Board {
 			)
 		}
 
-		if let Some(max_stacked) = info.max_stacked {
-			self.info.max_stacked = max_stacked;
+		if let Some(max_stacked) = info.max_pixels_available {
+			self.info.max_pixels_available = max_stacked;
 		}
 
 		let packet = packet::server::Packet::BoardUpdate {
@@ -834,7 +834,7 @@ impl Board {
 			created_at: board.created_at as u64,
 			shape: serde_json::from_value(board.shape).unwrap(),
 			palette,
-			max_stacked: board.max_stacked as u32,
+			max_pixels_available: board.max_stacked as u32,
 		};
 
 		let sectors = SectorCache::new(
@@ -920,7 +920,7 @@ impl Board {
 					.unwrap_or(0),
 			))
 			.map(|(a, b)| a + b)
-			.take(usize::try_from(self.info.max_stacked).unwrap())
+			.take(usize::try_from(self.info.max_pixels_available).unwrap())
 			.map(|offset| board_time + offset as u64)
 			.map(Duration::from_secs)
 			.map(|offset| UNIX_EPOCH + offset)
@@ -957,7 +957,7 @@ impl Board {
 	) -> QueryResult<CooldownInfo> {
 		let placements = self.recent_user_placements(
 			user,
-			usize::try_from(self.info.max_stacked).unwrap(),
+			usize::try_from(self.info.max_pixels_available).unwrap(),
 			connection,
 		)?;
 
@@ -974,7 +974,7 @@ impl Board {
 		// TODO: actually, I think this generalizes and we only have to
 		// check the last `Board::MAX_STACKED - current_stacked` pixels.
 		let incomplete_info_is_correct = info.pixels_available
-			>= (usize::try_from(self.info.max_stacked.saturating_sub(1)).unwrap());
+			>= (usize::try_from(self.info.max_pixels_available.saturating_sub(1)).unwrap());
 
 		if !placements.is_empty() && !incomplete_info_is_correct {
 			// In order to place MAX_STACKED pixels, a user must either:
