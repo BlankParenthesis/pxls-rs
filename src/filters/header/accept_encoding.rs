@@ -1,3 +1,5 @@
+use futures_util::future;
+
 use super::*;
 
 pub fn gzip() -> impl Filter<Extract = (), Error = Rejection> + Copy {
@@ -11,8 +13,13 @@ pub fn gzip() -> impl Filter<Extract = (), Error = Rejection> + Copy {
 						value.trim() == "gzip"
 					})
 					.then(|| ())
-					.ok_or(warp::reject())
+					.ok_or_else(warp::reject)
 			}
 		})
+		// Convert accept-encoding rejection into 404 rejection.
+		// If this wasn't done, the encoding error can fall through and clients
+		// that don't accept gzip get this instead of 404.
+		.recover(|_| -> future::Ready<Result<_, Rejection>> { future::err(warp::reject()) })
+		.unify()
 		.untuple_one()
 }
