@@ -36,7 +36,7 @@ impl Default for User {
 		permissions.insert(Permission::Info);
 		permissions.insert(Permission::BoardsList);
 		permissions.insert(Permission::BoardsGet);
-		//permissions.insert(Permission::BoardsPost);
+		permissions.insert(Permission::BoardsPost);
 		permissions.insert(Permission::BoardsPatch);
 		permissions.insert(Permission::BoardsDelete);
 		permissions.insert(Permission::BoardsDataGet);

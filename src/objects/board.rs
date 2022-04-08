@@ -974,7 +974,12 @@ impl Board {
 		// TODO: actually, I think this generalizes and we only have to
 		// check the last `Board::MAX_STACKED - current_stacked` pixels.
 		let incomplete_info_is_correct = info.pixels_available
-			>= (usize::try_from(self.info.max_pixels_available.saturating_sub(1)).unwrap());
+			>= (usize::try_from(
+				self.info
+					.max_pixels_available
+					.saturating_sub(1),
+			)
+			.unwrap());
 
 		if !placements.is_empty() && !incomplete_info_is_correct {
 			// In order to place MAX_STACKED pixels, a user must either:

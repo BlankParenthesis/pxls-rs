@@ -68,13 +68,22 @@ impl Discovery {
 			StatusCode::OK => {
 				#[derive(Deserialize)]
 				struct Keys {
-					keys: Vec<JsonWebKey>,
+					keys: Vec<serde_json::Value>,
 				}
 
 				response
 					.json::<Keys>()
 					.await
-					.map(|json| json.keys)
+					.map(|json| {
+						json.keys
+							.into_iter()
+							.filter_map(|k| serde_json::from_value::<JsonWebKey>(k).ok())
+							.collect()
+					})
+					.map_err(|e| {
+						println!("{:?}", e);
+						e
+					})
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)
 			},
 			code => Err(DiscoveryError::InvalidResponse),
