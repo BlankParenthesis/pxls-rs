@@ -19,6 +19,7 @@ mod routes;
 use std::{collections::HashMap, sync::Arc};
 
 use access::permissions::PermissionsError;
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use filters::header::authorization::BearerError;
 use futures_util::future;
 use http::{Method, StatusCode};
@@ -40,19 +41,18 @@ use crate::config::CONFIG;
 type BoardRef = Arc<RwLock<Option<Board>>>;
 pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
 
-embed_migrations!();
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 #[tokio::main]
 async fn main() {
 	let manager = diesel::r2d2::ConnectionManager::new(CONFIG.database_url.to_string());
 	let pool = Arc::new(r2d2::Pool::new(manager).unwrap());
-	let connection = pool.get().unwrap();
+	let mut connection = pool.get().unwrap();
 
-	embedded_migrations::run_with_output(&connection, &mut std::io::stdout())
+	MigrationHarness::run_pending_migrations(&mut connection, MIGRATIONS)
 		.expect("Migration failed");
 
-	let connection = pool.get().unwrap();
-	let boards = database::queries::load_boards(&connection)
+	let boards = database::queries::load_boards(&mut connection)
 		.expect("Failed to load boards")
 		.into_iter()
 		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))

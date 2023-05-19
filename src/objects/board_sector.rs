@@ -29,7 +29,7 @@ impl BoardSector {
 		board: i32,
 		index: i32,
 		size: usize,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Self> {
 		// NOTE: default mask is NoPlace so that new boards require activation
 		// before use.
@@ -53,7 +53,7 @@ impl BoardSector {
 	pub fn load(
 		board_id: i32,
 		sector_index: i32,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Option<Self>> {
 		let sector = schema::board_sector::table
 			.find((board_id, sector_index))
@@ -69,7 +69,7 @@ impl BoardSector {
 
 	pub fn save(
 		&self,
-		connection: &Connection,
+		connection: &mut Connection,
 		buffer: Option<&SectorBuffer>,
 	) -> QueryResult<()> {
 		match buffer {
@@ -116,7 +116,7 @@ impl BoardSector {
 
 	fn from_model(
 		sector: model::BoardSector,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Self> {
 		let index = sector.index;
 		let board = sector.board;

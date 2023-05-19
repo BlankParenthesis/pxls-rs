@@ -96,14 +96,14 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, user, connection| {
+		.map(|board: PassableBoard, user, mut connection| {
 			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let mut response = json(&board.info).into_response();
 
 			if let AuthedUser::Authed { user, valid_until } = user {
 				let cooldown_info = board
-					.user_cooldown_info(&user, &connection)
+					.user_cooldown_info(&user, &mut connection)
 					.unwrap();
 
 				for (key, value) in cooldown_info.into_headers() {
@@ -125,8 +125,8 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPost)))
 		.and(database::connection(database_pool))
-		.map(move |data: BoardInfoPost, _user, connection| {
-			let board = Board::create(data, &connection).unwrap();
+		.map(move |data: BoardInfoPost, _user, mut connection| {
+			let board = Board::create(data, &mut connection).unwrap();
 			let id = board.id as usize;
 
 			let boards = Arc::clone(&boards);
@@ -160,11 +160,11 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, patch: BoardInfoPatch, _user, connection| {
+		.map(|board: PassableBoard, patch: BoardInfoPatch, _user, mut connection| {
 			let mut board = board.write();
 			let board = board.as_mut().unwrap();
 
-			board.update_info(patch, &connection).unwrap();
+			board.update_info(patch, &mut connection).unwrap();
 
 			let mut response = json(&Reference::from(&*board)).into_response();
 			response = reply::with_status(response, StatusCode::CREATED).into_response();
@@ -184,12 +184,12 @@ pub fn delete(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
 		.and(database::connection(database_pool))
 		.map(
-			move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection| {
+			move |deletion: Fragile<PendingDelete>, _user: AuthedUser, mut connection| {
 				let mut deletion = deletion.into_inner();
 				let board = deletion.perform();
 				let mut board = board.write();
 				let board = board.take().unwrap();
-				board.delete(&connection).unwrap();
+				board.delete(&mut connection).unwrap();
 				StatusCode::NO_CONTENT.into_response()
 			},
 		)

@@ -34,7 +34,7 @@ impl SectorCache {
 	fn fill_sector(
 		&self,
 		sector_index: usize,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<RwLockWriteGuard<Option<BoardSector>>> {
 		let mut option = self
 			.sectors
@@ -81,7 +81,7 @@ impl SectorCache {
 	pub fn read_sector(
 		&self,
 		sector_index: usize,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> Option<MappedRwLockReadGuard<BoardSector>> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.read();
@@ -107,7 +107,7 @@ impl SectorCache {
 	pub fn write_sector(
 		&self,
 		sector_index: usize,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> Option<MappedRwLockWriteGuard<BoardSector>> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.write();
@@ -130,7 +130,7 @@ impl SectorCache {
 	pub fn access<'l>(
 		&'l self,
 		buffer: SectorBuffer,
-		connection: &'l Connection,
+		connection: &'l mut Connection,
 	) -> SectorCacheAccess<'l> {
 		SectorCacheAccess {
 			cursor: 0,
@@ -153,7 +153,7 @@ pub struct SectorCacheAccess<'l> {
 	cursor: usize,
 	buffer: SectorBuffer,
 	sectors: &'l SectorCache,
-	connection: &'l Connection,
+	connection: &'l mut Connection,
 }
 
 impl<'l> SectorCacheAccess<'l> {
@@ -261,7 +261,7 @@ impl<'l> Write for SectorCacheAccess<'l> {
 
 		Ok(self
 			.connection
-			.transaction::<usize, diesel::result::Error, _>(|| {
+			.transaction::<usize, diesel::result::Error, _>(|connection| {
 				let mut written = 0;
 
 				while !input.is_empty() && (0..total_size).contains(&self.cursor) {
@@ -271,7 +271,7 @@ impl<'l> Write for SectorCacheAccess<'l> {
 
 					let mut sector = self
 						.sectors
-						.write_sector(sector_index, self.connection)
+						.write_sector(sector_index, connection)
 						.unwrap();
 
 					let buf = &mut match self.buffer {
@@ -290,7 +290,7 @@ impl<'l> Write for SectorCacheAccess<'l> {
 					written = write_len;
 					self.cursor += write_len;
 
-					sector.save(self.connection, Some(&self.buffer))?;
+					sector.save(connection, Some(&self.buffer))?;
 
 					if self.buffer == SectorBuffer::Initial {
 						drop(sector);

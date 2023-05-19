@@ -25,9 +25,9 @@ impl From<model::Color> for Color {
 pub fn replace_palette(
 	palette: &Palette,
 	board_id: i32,
-	connection: &Connection,
+	connection: &mut Connection,
 ) -> QueryResult<()> {
-	connection.transaction(|| {
+	connection.transaction(|connection| {
 		diesel::delete(schema::color::table)
 			.filter(schema::color::board.eq(board_id))
 			.execute(connection)?;

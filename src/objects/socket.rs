@@ -129,9 +129,9 @@ impl UnauthedSocket {
 			if let Some(board) = board.upgrade() {
 				let mut board = board.write();
 				if let Some(ref mut board) = *board {
-					let connection = connection_pool.get().unwrap();
+					let mut connection = connection_pool.get().unwrap();
 					board
-						.insert_socket(Arc::clone(&socket), &connection)
+						.insert_socket(Arc::clone(&socket), &mut connection)
 						.unwrap();
 				}
 			}

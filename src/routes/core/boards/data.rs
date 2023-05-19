@@ -19,13 +19,13 @@ pub fn get_colors(
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, mut connection| {
 			// TODO: content disposition
 			let board = board.read();
 			let mut colors_data = board
 				.as_ref()
 				.unwrap()
-				.read(SectorBuffer::Colors, &connection);
+				.read(SectorBuffer::Colors, &mut connection);
 
 			range.respond_with(&mut colors_data)
 		})
@@ -49,14 +49,14 @@ pub fn get_timestamps(
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, range: Range, _user, connection| {
-			// TODO: content disposition
+		.map(|board: PassableBoard, range: Range, _user, mut connection| {
+		// TODO: content disposition
 			let board = board.read();
 			let mut timestamp_data = board
 				.as_ref()
 				.unwrap()
-				.read(SectorBuffer::Timestamps, &connection);
-
+				.read(SectorBuffer::Timestamps, &mut connection);
+				
 			range.respond_with(&mut timestamp_data)
 		})
 }
@@ -79,13 +79,13 @@ pub fn get_mask(
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, mut connection| {
 			// TODO: content disposition
 			let board = board.read();
 			let mut mask_data = board
 				.as_ref()
 				.unwrap()
-				.read(SectorBuffer::Mask, &connection);
+				.read(SectorBuffer::Mask, &mut connection);
 
 			range.respond_with(&mut mask_data)
 		})
@@ -109,13 +109,13 @@ pub fn get_initial(
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, range: Range, _user, connection| {
+		.map(|board: PassableBoard, range: Range, _user, mut connection| {
 			// TODO: content disposition
 			let board = board.read();
 			let mut initial_data = board
 				.as_ref()
 				.unwrap()
-				.read(SectorBuffer::Initial, &connection);
+				.read(SectorBuffer::Initial, &mut connection);
 
 			range.respond_with(&mut initial_data)
 		})
@@ -135,13 +135,13 @@ pub fn patch_initial(
 		.and(patch::bytes())
 		.and(database::connection(database_pool))
 		.map(
-			|board: PassableBoard, _user, patch: BinaryPatch, connection| {
+			|board: PassableBoard, _user, patch: BinaryPatch, mut connection| {
 				// TODO: content disposition
 				let board = board.write();
 				let patch_result = board
 					.as_ref()
 					.unwrap()
-					.try_patch_initial(&patch, &connection);
+					.try_patch_initial(&patch, &mut connection);
 
 				match patch_result {
 					Ok(_) => StatusCode::NO_CONTENT.into_response(),
@@ -165,13 +165,13 @@ pub fn patch_mask(
 		.and(patch::bytes())
 		.and(database::connection(database_pool))
 		.map(
-			|board: PassableBoard, _user, patch: BinaryPatch, connection| {
+			|board: PassableBoard, _user, patch: BinaryPatch, mut connection| {
 				// TODO: content disposition
 				let board = board.write();
 				let patch_result = board
 					.as_ref()
 					.unwrap()
-					.try_patch_mask(&patch, &connection);
+					.try_patch_mask(&patch, &mut connection);
 
 				match patch_result {
 					Ok(_) => StatusCode::NO_CONTENT.into_response(),

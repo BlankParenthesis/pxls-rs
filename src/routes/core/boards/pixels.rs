@@ -12,7 +12,7 @@ pub fn list(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsList)))
 		.and(warp::query())
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, connection| {
+		.map(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, mut connection| {
 			let page = options.page.unwrap_or_default();
 			let limit = options
 				.limit
@@ -22,12 +22,12 @@ pub fn list(
 			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let previous_placements = board
-				.list_placements(page.timestamp, page.id, limit, true, &connection)
+				.list_placements(page.timestamp, page.id, limit, true, &mut connection)
 				.unwrap();
 			let placements = board
 			// Limit is +1 to get the start of the next page as the last element.
 			// This is required for paging.
-			.list_placements(page.timestamp, page.id, limit + 1, false, &connection)
+			.list_placements(page.timestamp, page.id, limit + 1, false, &mut connection)
 			.unwrap();
 
 			fn page_uri(
@@ -71,11 +71,11 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsGet)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: PassableBoard, position, _user, connection| {
+		.map(|board: PassableBoard, position, _user, mut connection| {
 			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let placement = board
-				.lookup(position, &connection)
+				.lookup(position, &mut connection)
 				.unwrap();
 
 			placement
@@ -97,7 +97,7 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsPost)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: PassableBoard, position, placement: PlacementRequest, user, connection| {
+		.map(|board: PassableBoard, position, placement: PlacementRequest, user, mut connection| {
 			let user =
 				Option::from(user).expect("Default user shouldn't have place permisisons");
 
@@ -109,13 +109,13 @@ pub fn post(
 				&user,
 				position,
 				placement.color,
-				&connection,
+				&mut connection,
 			);
 
 			match place_attempt {
 				Ok(placement) => {
 					let cooldown_info = board
-						.user_cooldown_info(&user, &connection)
+						.user_cooldown_info(&user, &mut connection)
 						.unwrap();
 
 					let mut response = warp::reply::with_status(

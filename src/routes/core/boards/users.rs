@@ -11,9 +11,9 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsUsers)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, _user, connection| {
+		.map(|board: PassableBoard, _user, mut connection| {
 			let board = board.read();
 			let board = board.as_ref().unwrap();
-			json(&board.user_count(&connection).unwrap()).into_response()
+			json(&board.user_count(&mut connection).unwrap()).into_response()
 		})
 }

@@ -7,7 +7,7 @@ use std::{
 };
 
 use bytes::BufMut;
-use diesel::{prelude::*, types::Record, Connection as DConnection};
+use diesel::{prelude::*, Connection as DConnection, sql_types::Record};
 use enum_map::EnumMap;
 use http::{
 	header::{HeaderName, HeaderValue},
@@ -425,7 +425,7 @@ impl Reply for PlaceError {
 impl Board {
 	pub fn create(
 		info: BoardInfoPost,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Self> {
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
@@ -449,7 +449,7 @@ impl Board {
 	pub fn read<'l>(
 		&'l self,
 		buffer: SectorBuffer,
-		connection: &'l Connection,
+		connection: &'l mut Connection,
 	) -> SectorCacheAccess<'l> {
 		self.sectors.access(buffer, connection)
 	}
@@ -458,7 +458,7 @@ impl Board {
 	pub fn try_patch_initial(
 		&self,
 		patch: &BinaryPatch,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> Result<(), &'static str> {
 		// TODO: check bounds
 		let mut sector_data = self
@@ -494,7 +494,7 @@ impl Board {
 	pub fn try_patch_mask(
 		&self,
 		patch: &BinaryPatch,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> Result<(), &'static str> {
 		let mut sector_data = self
 			.sectors
@@ -531,7 +531,7 @@ impl Board {
 	pub fn update_info(
 		&mut self,
 		info: BoardInfoPatch,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<()> {
 		assert!(
 			info.name.is_some()
@@ -540,7 +540,7 @@ impl Board {
 				|| info.max_pixels_available.is_some()
 		);
 
-		connection.transaction::<_, diesel::result::Error, _>(|| {
+		connection.transaction::<_, diesel::result::Error, _>(|connection| {
 			if let Some(ref name) = info.name {
 				diesel::update(schema::board::table)
 					.set(schema::board::name.eq(name))
@@ -609,11 +609,11 @@ impl Board {
 
 	pub fn delete(
 		mut self,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<()> {
 		self.connections.close();
 
-		connection.transaction(|| {
+		connection.transaction(|connection| {
 			diesel::delete(schema::board_sector::table)
 				.filter(schema::board_sector::board.eq(self.id))
 				.execute(connection)?;
@@ -637,7 +637,7 @@ impl Board {
 	pub fn last_place_time(
 		&self,
 		user: &User,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<u32> {
 		Ok(schema::placement::table
 			.filter(
@@ -661,7 +661,7 @@ impl Board {
 		user: &User,
 		position: u64,
 		color: u8,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> Result<model::Placement, PlaceError> {
 		// TODO: I hate most things about how this is written. Redo it and/or move
 		// stuff.
@@ -758,7 +758,7 @@ impl Board {
 		id: usize,
 		limit: usize,
 		reverse: bool,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Vec<model::Placement>> {
 		// TODO: Reduce duplication.
 		// This stems from le and ge having different types, polluting the entire
@@ -798,7 +798,7 @@ impl Board {
 	pub fn lookup(
 		&self,
 		position: u64,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Option<model::Placement>> {
 		Ok(schema::placement::table
 			.filter(
@@ -817,7 +817,7 @@ impl Board {
 
 	pub fn load(
 		board: model::Board,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Self> {
 		let id = board.id;
 
@@ -869,7 +869,7 @@ impl Board {
 		&self,
 		position: u64,
 		timestamp: u32,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<usize> {
 		schema::placement::table
 			.select(diesel::dsl::count_star())
@@ -888,7 +888,7 @@ impl Board {
 	fn calculate_cooldowns(
 		&self,
 		placement: Option<&model::Placement>,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Vec<SystemTime>> {
 		// this is pretty ugly
 		// TODO: generalize for more cooldown variables
@@ -928,7 +928,7 @@ impl Board {
 		&self,
 		user: &User,
 		limit: usize,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<Vec<model::Placement>> {
 		Ok(schema::placement::table
 			.filter(
@@ -950,7 +950,7 @@ impl Board {
 	pub fn user_cooldown_info(
 		&self,
 		user: &User,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<CooldownInfo> {
 		let placements = self.recent_user_placements(
 			user,
@@ -1019,7 +1019,7 @@ impl Board {
 	fn user_count_for_time(
 		&self,
 		timestamp: u32,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<UserCount> {
 		// TODO: make configurable
 		let idle_timeout = 5 * 60;
@@ -1063,7 +1063,7 @@ impl Board {
 
 	pub fn user_count(
 		&self,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<UserCount> {
 		self.user_count_for_time(self.current_timestamp(), connection)
 	}
@@ -1071,7 +1071,7 @@ impl Board {
 	pub fn insert_socket(
 		&mut self,
 		socket: Arc<AuthedSocket>,
-		connection: &Connection,
+		connection: &mut Connection,
 	) -> QueryResult<()> {
 		let user = socket.user.read();
 		let cooldown_info = Option::<&User>::from(&*user)
