@@ -33,8 +33,8 @@ pub enum Extension {
 impl From<Extension> for Permission {
 	fn from(extension: Extension) -> Permission {
 		match extension {
-			Core => Self::SocketCore,
-			Authentication => Self::SocketAuthentication,
+			Extension::Core => Self::SocketCore,
+			Extension::Authentication => Self::SocketAuthentication,
 		}
 	}
 }
