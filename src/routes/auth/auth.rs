@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::CONFIG;
 
 #[derive(Serialize)]
 pub struct AuthInfo {
@@ -9,11 +10,9 @@ pub struct AuthInfo {
 
 lazy_static! {
 	static ref AUTH_INFO: AuthInfo = {
-		let config = crate::config::CONFIG.read().unwrap();
-
 		AuthInfo {
-			issuer: config.oidc_issuer.clone(),
-			client_id: config.oidc_client_id.clone(),
+			issuer: CONFIG.oidc_issuer.clone(),
+			client_id: CONFIG.oidc_client_id.clone(),
 		}
 	};
 }

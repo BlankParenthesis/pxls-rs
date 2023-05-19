@@ -1,5 +1,3 @@
-use std::sync::RwLock;
-
 use serde::Deserialize;
 use url::Url;
 
@@ -21,6 +19,6 @@ impl Config {
 }
 
 lazy_static! {
-	pub static ref CONFIG: RwLock<Config> =
-		RwLock::new(envy::from_env::<Config>().expect("Incomplete config setup"));
+	pub static ref CONFIG: Config = envy::from_env::<Config>()
+		.expect("Incomplete config setup");
 }

@@ -6,6 +6,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::objects::User;
+use crate::config::CONFIG;
 
 #[derive(Debug)]
 pub enum DiscoveryError {
@@ -124,10 +125,7 @@ impl From<DiscoveryError> for ValidationError {
 
 pub async fn validate_token(token: &str) -> Result<TokenData<Identity>, ValidationError> {
 	let client = Client::new();
-	let discovery_url = crate::config::CONFIG
-		.read()
-		.unwrap()
-		.discovery_url();
+	let discovery_url = CONFIG.discovery_url();
 
 	let discovery = Discovery::load(discovery_url, &client).await?;
 	let keys = discovery.jwks_keys(&client).await?;

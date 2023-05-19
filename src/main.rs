@@ -27,6 +27,7 @@ use parking_lot::RwLock;
 use warp::{Filter, Rejection, Reply};
 
 use crate::objects::Board;
+use crate::config::CONFIG;
 
 // FIXME: since we're not longer using actix, this is probably solvable?
 // NOTE: This can go back to being RwLock<Board> if we can get nice ownership
@@ -43,9 +44,7 @@ embed_migrations!();
 
 #[tokio::main]
 async fn main() {
-	let config = crate::config::CONFIG.read().unwrap();
-
-	let manager = diesel::r2d2::ConnectionManager::new(config.database_url.to_string());
+	let manager = diesel::r2d2::ConnectionManager::new(CONFIG.database_url.to_string());
 	let pool = Arc::new(r2d2::Pool::new(manager).unwrap());
 	let connection = pool.get().unwrap();
 
@@ -154,6 +153,6 @@ async fn main() {
 		.with(warp::compression::gzip());
 
 	warp::serve(gzip_routes.or(routes))
-		.run(([127, 0, 0, 1], config.port))
+		.run(([127, 0, 0, 1], CONFIG.port))
 		.await;
 }
