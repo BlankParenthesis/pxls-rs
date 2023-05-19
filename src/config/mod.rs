@@ -12,9 +12,7 @@ pub struct Config {
 
 impl Config {
 	pub fn discovery_url(&self) -> Url {
-		self.oidc_issuer
-			.join(".well-known/openid-configuration")
-			.unwrap()
+		self.oidc_issuer.join(".well-known/openid-configuration").unwrap()
 	}
 }
 

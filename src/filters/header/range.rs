@@ -20,14 +20,12 @@ impl Display for RangeIndexError {
 		&self,
 		f: &mut Formatter<'_>,
 	) -> fmt::Result {
-		write!(
-			f,
-			"cannot index with range: {}",
-			match self {
-				Self::UnknownUnit => "unit not supported",
-				Self::TooLarge(_length) => "range exceeds bounds",
-			}
-		)
+		let reason = match self {
+			Self::UnknownUnit => "unit not supported",
+			Self::TooLarge(_length) => "range exceeds bounds",
+		};
+
+		write!(f, "cannot index with range: {}", reason)
 	}
 }
 
@@ -45,10 +43,12 @@ impl Reply for RangeIndexError {
 			},
 		};
 
-		warp::reply::with_header(base_response, header::ACCEPT_RANGES, "bytes").into_response()
+		warp::reply::with_header(base_response, header::ACCEPT_RANGES, "bytes")
+			.into_response()
 	}
 }
 
+#[allow(clippy::enum_variant_names)]
 pub enum HttpRange {
 	FromStartToEnd(OpsRange<usize>),
 	FromStartToLast(OpsRangeFrom<usize>),
@@ -108,12 +108,9 @@ where
 
 	for range in iter {
 		let mut current_range = efficient_ranges.last_mut().unwrap();
+		let gap = range.start.saturating_sub(current_range.end);
 
-		if (range
-			.start
-			.saturating_sub(current_range.end))
-			< inbetween_threshold
-		{
+		if gap < inbetween_threshold {
 			// extend last range
 			current_range.end = range.end;
 		} else {
@@ -146,18 +143,18 @@ where
 
 fn choose_boundary(datas: &[DataRange]) -> String {
 	fn random_boundary_string() -> String {
-		format!(
-			"--{}",
-			rand::thread_rng()
-				.sample_iter::<char, _>(rand::distributions::Standard)
-				.take(8)
-				.collect::<String>()
-		)
+		let random_string = rand::thread_rng()
+			.sample_iter::<char, _>(rand::distributions::Standard)
+			.take(8)
+			.collect::<String>();
+
+		format!("--{}", random_string)
 	}
 
 	let mut boundary = random_boundary_string();
 
 	// generate new strings until we get one that doesn't exist in the data
+	// NOTE: this is probably not worth the compute cost
 	while datas
 		.iter()
 		.any(|DataRange { data, range: _ }| {
@@ -180,13 +177,10 @@ fn merge_ranges(
 		joined.extend_from_slice(
 			format!(
 				"{}\r\n\
-			content-type: application/octet-stream\r\n\
-			content-range: bytes {}-{}/{}\r\n\
-			\r\n",
+				content-type: application/octet-stream\r\n\
+				content-range: bytes {}-{}/{}\r\n\r\n",
 				boundary,
-				range.start,
-				range.end,
-				data.len(),
+				range.start, range.end, data.len(),
 			)
 			.as_bytes(),
 		);
@@ -229,20 +223,17 @@ impl TryFrom<&str> for Range {
 				let http_range = match tuple {
 					("", "") => Err(RangeParseError::RangeEmpty),
 					("", since_end) => {
-						since_end
-							.parse()
+						since_end.parse()
 							.map(HttpRange::FromEndToLast)
 							.map_err(RangeParseError::ValueParseError)
 					},
 					(start, "") => {
-						start
-							.parse()
+						start.parse()
 							.map(|start| HttpRange::FromStartToLast(start..))
 							.map_err(RangeParseError::ValueParseError)
 					},
 					(start, end) => {
-						start
-							.parse()
+						start.parse()
 							.and_then(|start| {
 								end.parse()
 									.map(|end| HttpRange::FromStartToEnd(start..end))
@@ -375,7 +366,8 @@ pub fn default() -> impl Filter<Extract = (Range,), Error = Infallible> + Copy {
 }
 
 pub fn range() -> impl Filter<Extract = (Range,), Error = Rejection> + Copy {
-	warp::header(header::RANGE.as_str()).and_then(|header: String| {
-		async move { Range::try_from(header.as_str()).map_err(warp::reject::custom) }
+	warp::header(header::RANGE.as_str()).and_then(|header: String| async move {
+		Range::try_from(header.as_str())
+			.map_err(warp::reject::custom)
 	})
 }

@@ -23,29 +23,28 @@ pub enum Permission {
 }
 
 impl Serialize for Permission {
-	fn serialize<S>(
+	fn serialize<S: Serializer>(
 		&self,
 		serializer: S,
-	) -> Result<S::Ok, S::Error>
-	where
-		S: Serializer,
-	{
-		match self {
-			Permission::Info => serializer.serialize_str("info"),
-			Permission::BoardsList => serializer.serialize_str("boards.list"),
-			Permission::BoardsGet => serializer.serialize_str("boards.get"),
-			Permission::BoardsPost => serializer.serialize_str("boards.post"),
-			Permission::BoardsPatch => serializer.serialize_str("boards.patch"),
-			Permission::BoardsDelete => serializer.serialize_str("boards.delete"),
-			Permission::BoardsDataGet => serializer.serialize_str("boards.data.get"),
-			Permission::BoardsDataPatch => serializer.serialize_str("boards.data.patch"),
-			Permission::BoardsUsers => serializer.serialize_str("boards.users"),
-			Permission::BoardsPixelsList => serializer.serialize_str("boards.pixels.list"),
-			Permission::BoardsPixelsGet => serializer.serialize_str("boards.pixels.get"),
-			Permission::BoardsPixelsPost => serializer.serialize_str("boards.pixels.post"),
-			Permission::SocketCore => serializer.serialize_str("socket.core"),
-			Permission::SocketAuthentication => serializer.serialize_str("socket.authentication"),
-		}
+	) -> Result<S::Ok, S::Error> {
+		let permission_str = match self {
+			Self::Info => "info",
+			Self::BoardsList => "boards.list",
+			Self::BoardsGet => "boards.get",
+			Self::BoardsPost => "boards.post",
+			Self::BoardsPatch => "boards.patch",
+			Self::BoardsDelete => "boards.delete",
+			Self::BoardsDataGet => "boards.data.get",
+			Self::BoardsDataPatch => "boards.data.patch",
+			Self::BoardsUsers => "boards.users",
+			Self::BoardsPixelsList => "boards.pixels.list",
+			Self::BoardsPixelsGet => "boards.pixels.get",
+			Self::BoardsPixelsPost => "boards.pixels.post",
+			Self::SocketCore => "socket.core",
+			Self::SocketAuthentication => "socket.authentication",
+		};
+
+		serializer.serialize_str(permission_str)
 	}
 }
 
@@ -60,16 +59,10 @@ pub fn with_permission(
 	permission: Permission
 ) -> (impl Fn(AuthedUser) -> future::Ready<Result<AuthedUser, Rejection>> + Clone) {
 	move |authed| {
-		let has_perm = match Option::<&User>::from(&authed) {
-			Some(user) => user.permissions.contains(&permission),
-			None => {
-				User::default()
-					.permissions
-					.contains(&permission)
-			},
-		};
+		let user = Option::<&User>::from(&authed)
+			.unwrap_or_default();
 
-		if has_perm {
+		if user.permissions.contains(&permission) {
 			future::ok(authed)
 		} else {
 			future::err(warp::reject::custom(PermissionsError::MissingPermission(

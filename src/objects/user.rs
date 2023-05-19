@@ -30,6 +30,16 @@ impl User {
 	}
 }
 
+lazy_static! {
+	static ref DEFAULT_USER: User = User::default();
+}
+
+impl Default for &User {
+	fn default() -> Self {
+		&DEFAULT_USER
+	}
+}
+
 impl Default for User {
 	fn default() -> Self {
 		let mut permissions = HashSet::new();
@@ -86,7 +96,7 @@ impl From<AuthedUser> for User {
 impl From<AuthedUser> for Option<User> {
 	fn from(authed: AuthedUser) -> Self {
 		match authed {
-			AuthedUser::Authed { user, valid_until } => Some(user),
+			AuthedUser::Authed { user, .. } => Some(user),
 			AuthedUser::None => None,
 		}
 	}
@@ -95,10 +105,7 @@ impl From<AuthedUser> for Option<User> {
 impl<'l> From<&'l AuthedUser> for Option<&'l User> {
 	fn from(authed: &'l AuthedUser) -> Self {
 		match authed {
-			AuthedUser::Authed {
-				ref user,
-				valid_until,
-			} => Some(user),
+			AuthedUser::Authed { ref user, .. } => Some(user),
 			AuthedUser::None => None,
 		}
 	}
@@ -120,14 +127,8 @@ impl PartialEq for AuthedUser {
 	) -> bool {
 		match (self, other) {
 			(
-				Self::Authed {
-					user: l_user,
-					valid_until: _,
-				},
-				Self::Authed {
-					user: r_user,
-					valid_until: _,
-				},
+				Self::Authed { user: l_user, .. },
+				Self::Authed { user: r_user, .. },
 			) => l_user == r_user,
 			(Self::None, Self::None) => true,
 			_ => false,

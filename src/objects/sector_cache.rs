@@ -42,7 +42,11 @@ impl SectorCache {
 			.unwrap()
 			.write();
 
-		let load = BoardSector::load(self.board_id, sector_index as i32, connection)?;
+		let load = BoardSector::load(
+			self.board_id,
+			sector_index as i32,
+			connection,
+		)?;
 
 		let sector = match load {
 			Some(sector) => sector,

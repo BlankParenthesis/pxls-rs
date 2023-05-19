@@ -134,7 +134,7 @@ impl BoardSector {
 		// until then, maybe there's a non-nested way to do this.
 		let placements = diesel::sql_query(
 			"
-			SElECT DISTINCT ON (position) * FROM (
+			SELECT DISTINCT ON (position) * FROM (
 				SELECT * FROM placement
 				WHERE board = $1
 				AND position BETWEEN $2 AND $3

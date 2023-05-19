@@ -72,8 +72,8 @@ pub fn bytes() -> impl Filter<Extract = (BinaryPatch,), Error = Rejection> + Cop
 			"application/octet-stream",
 		))
 		.and(content_range::content_range())
-		.and_then(|bytes, range| {
-			async move { BinaryPatch::new(bytes, range).map_err(warp::reject::custom) }
+		.and_then(|bytes, range| async move {
+			BinaryPatch::new(bytes, range).map_err(warp::reject::custom)
 		})
 }
 

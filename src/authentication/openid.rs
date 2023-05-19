@@ -1,6 +1,7 @@
 use http::StatusCode;
 use jsonwebkey::JsonWebKey;
-use jsonwebtoken::{decode, decode_header, errors::Error as JWTError, TokenData, Validation};
+use jsonwebtoken::{decode, decode_header, TokenData, Validation, Algorithm};
+use jsonwebtoken::errors::Error as JWTError;
 use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
@@ -39,15 +40,13 @@ impl Discovery {
 	) -> Result<Self, DiscoveryError> {
 		let response = client
 			.get(discovery_url.to_string())
-			.send()
-			.await
+			.send().await
 			.map_err(|_| DiscoveryError::ContactFailed)?;
 
 		match response.status() {
 			StatusCode::OK => {
 				response
-					.json()
-					.await
+					.json().await
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)
 			},
 			code => Err(DiscoveryError::InvalidResponse),
@@ -61,8 +60,7 @@ impl Discovery {
 	) -> Result<Vec<JsonWebKey>, DiscoveryError> {
 		let response = client
 			.get(self.jwks_uri.to_string())
-			.send()
-			.await
+			.send().await
 			.map_err(|_| DiscoveryError::ContactFailed)?;
 
 		match response.status() {
@@ -73,17 +71,12 @@ impl Discovery {
 				}
 
 				response
-					.json::<Keys>()
-					.await
+					.json::<Keys>().await
 					.map(|json| {
 						json.keys
 							.into_iter()
-							.filter_map(|k| serde_json::from_value::<JsonWebKey>(k).ok())
+							.filter_map(|k| serde_json::from_value(k).ok())
 							.collect()
-					})
-					.map_err(|e| {
-						println!("{:?}", e);
-						e
 					})
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)
 			},
@@ -123,30 +116,56 @@ impl From<DiscoveryError> for ValidationError {
 	}
 }
 
-pub async fn validate_token(token: &str) -> Result<TokenData<Identity>, ValidationError> {
+fn find_key_by_id(
+	id: String,
+) -> impl FnMut(&&JsonWebKey) -> bool {
+	move |key| key.key_id.as_deref() == Some(id.as_str())
+}
+
+/// Safety: assumes key algorithm is not None
+unsafe fn find_key_by_algorithm(
+	algorithm: Algorithm,
+) -> impl FnMut(&&JsonWebKey) -> bool {
+	move |key| {
+		let key_algorithm = unsafe {
+			key.algorithm.unwrap_unchecked()
+		};
+		algorithm == key_algorithm.into()
+	}
+}
+
+pub async fn validate_token(
+	token: &str
+) -> Result<TokenData<Identity>, ValidationError> {
 	let client = Client::new();
 	let discovery_url = CONFIG.discovery_url();
 
 	let discovery = Discovery::load(discovery_url, &client).await?;
 	let keys = discovery.jwks_keys(&client).await?;
+	let mut valid_keys = keys
+		.iter()
+		.filter(|key| key.algorithm.is_some());
 
 	let header = decode_header(token)?;
 
-	let matching_key = if header.kid.is_some() {
-		keys.iter()
-			.filter(|key| key.algorithm.is_some())
-			.find(|key| key.key_id.as_deref() == header.kid.as_deref())
+	let matching_key = if let Some(id) = header.kid {
+		valid_keys.find(find_key_by_id(id))
 	} else {
-		keys.iter()
-			.filter(|key| key.algorithm.is_some())
-			.find(|key| header.alg == key.algorithm.unwrap().into())
+		// Safety: valid_keys only contains keys where algorithm is Some
+		valid_keys.find(unsafe { find_key_by_algorithm(header.alg) })
 	};
 
 	if let Some(key) = matching_key {
+		// Safety: valid_keys only contains keys where algorithm is Some;
+		// key came from matching_key which came from valid_keys.
+		let algorithm = unsafe {
+			key.algorithm.unwrap_unchecked()
+		};
+
 		decode::<Identity>(
 			token,
 			&key.key.to_decoding_key(),
-			&Validation::new(key.algorithm.unwrap().into()),
+			&Validation::new(algorithm.into()),
 		)
 		.map_err(ValidationError::from)
 	} else {

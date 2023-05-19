@@ -72,8 +72,7 @@ trait MessageStream {
 #[async_trait]
 impl MessageStream for SplitStream<ws::WebSocket> {
 	async fn receive(&mut self) -> Option<Result<Message, ()>> {
-		self.next()
-			.await
+		self.next().await
 			.map(|o| o.map(Message::from).map_err(|_| ()))
 	}
 }
@@ -182,7 +181,8 @@ impl UnauthedSocket {
 						.map_err(AuthFailure::ValidationError)
 						.and_then(|user| {
 							let default_user = User::default();
-							let actual_user = Option::<&User>::from(&user).unwrap_or(&default_user);
+							let actual_user = Option::<&User>::from(&user)
+								.unwrap_or(&default_user);
 
 							let has_permission = self
 								.extensions
@@ -271,8 +271,7 @@ impl AuthedSocket {
 	}
 
 	pub fn close(&self) {
-		self.sender
-			.send(Ok(ws::Message::close()));
+		self.sender.send(Ok(ws::Message::close()));
 	}
 
 	async fn handle_packets(
@@ -282,10 +281,7 @@ impl AuthedSocket {
 		while let Some(Ok(msg)) = receiver.receive().await {
 			match msg {
 				Message::Packet(packet::client::Packet::Authenticate { token }) => {
-					if self
-						.extensions
-						.contains(Extension::Authentication)
-					{
+					if self.extensions.contains(Extension::Authentication) {
 						let user = if let Some(token) = token {
 							crate::authentication::openid::validate_token(&token)
 								.await

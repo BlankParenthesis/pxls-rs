@@ -25,10 +25,7 @@ impl TryFrom<&str> for ContentRange {
 		let size = if size == "*" {
 			None
 		} else {
-			Some(
-				size.parse()
-					.map_err(RangeParseError::ValueParseError)?,
-			)
+			Some(size.parse().map_err(RangeParseError::ValueParseError)?)
 		};
 
 		let range = if range == "*" {
@@ -53,7 +50,9 @@ impl TryFrom<&str> for ContentRange {
 }
 
 pub fn content_range() -> impl Filter<Extract = (ContentRange,), Error = Rejection> + Copy {
-	warp::header(header::CONTENT_RANGE.as_str()).and_then(|header: String| {
-		async move { ContentRange::try_from(header.as_str()).map_err(warp::reject::custom) }
-	})
+	warp::header(header::CONTENT_RANGE.as_str())
+		.and_then(|header: String| async move {
+			ContentRange::try_from(header.as_str())
+				.map_err(warp::reject::custom)
+		})
 }

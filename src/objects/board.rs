@@ -25,7 +25,7 @@ use crate::{
 	filters::body::patch::BinaryPatch,
 	objects::{
 		packet, AuthedSocket, AuthedUser, Color, Extension, Palette, Reference, SectorBuffer,
-		SectorCache, SectorCacheAccess, Shape, User, UserCount, VecShape,
+		SectorCache, SectorCacheAccess, Shape, User, UserCount, VecShape, color::replace_palette,
 	},
 };
 
@@ -470,7 +470,7 @@ impl Board {
 			.map_err(|_| "invalid start position")?;
 
 		sector_data
-			.write(&*patch.data)
+			.write(&patch.data)
 			.map_err(|_| "write error")?;
 
 		let packet = packet::server::Packet::BoardUpdate {
@@ -505,7 +505,7 @@ impl Board {
 			.map_err(|_| "invalid start position")?;
 
 		sector_data
-			.write(&*patch.data)
+			.write(&patch.data)
 			.map_err(|_| "write error")?;
 
 		let packet = packet::server::Packet::BoardUpdate {
@@ -549,7 +549,7 @@ impl Board {
 			}
 
 			if let Some(ref palette) = info.palette {
-				crate::objects::color::replace_palette(palette, self.id, connection)?;
+				replace_palette(palette, self.id, connection)?;
 			}
 
 			if let Some(ref shape) = info.shape {
@@ -672,12 +672,10 @@ impl Board {
 			.to_local(position as usize)
 			.ok_or(PlaceError::OutOfBounds)?;
 
-		self.info
-			.palette
-			.contains_key(&(color as u32))
-			.then(|| ())
-			.ok_or(PlaceError::InvalidColor)?;
-
+		if !self.info.palette.contains_key(&(color as u32)) {
+			return Err(PlaceError::InvalidColor);
+		}
+		
 		let mut sector = self
 			.sectors
 			.write_sector(sector_index, connection)
@@ -693,9 +691,9 @@ impl Board {
 			None => Err(PlaceError::UnknownMaskValue),
 		}?;
 
-		(sector.colors[sector_offset] != color)
-			.then(|| ())
-			.ok_or(PlaceError::NoOp)?;
+		if sector.colors[sector_offset] == color {
+			return Err(PlaceError::NoOp);
+		}
 
 		let timestamp = self.current_timestamp();
 		let cooldown_info = self
@@ -729,7 +727,7 @@ impl Board {
 			data: Some(packet::server::BoardData {
 				colors: Some(vec![packet::server::Change {
 					position,
-					values: vec![color as u8],
+					values: vec![color],
 				}]),
 				timestamps: Some(vec![packet::server::Change {
 					position,
@@ -805,7 +803,7 @@ impl Board {
 		Ok(schema::placement::table
 			.filter(
 				schema::placement::board
-					.eq(self.id as i32)
+					.eq(self.id)
 					.and(schema::placement::position.eq(position as i64)),
 			)
 			.order((
@@ -896,8 +894,7 @@ impl Board {
 		// TODO: generalize for more cooldown variables
 		let (activity, density) = if let Some(placement) = placement {
 			(
-				self.user_count_for_time(placement.timestamp as u32, connection)?
-					.active,
+				self.user_count_for_time(placement.timestamp as u32, connection)?.active,
 				self.pixel_density_at_time(
 					placement.position as u64,
 					placement.timestamp as u32,

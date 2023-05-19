@@ -62,8 +62,7 @@ impl<'de> Deserialize<'de> for PageToken {
 			where
 				E: de::Error,
 			{
-				value
-					.split_once("_")
+				value.split_once('_')
 					.ok_or_else(|| E::custom("missing underscore"))
 					.and_then(|(timestamp, id)| {
 						Ok(PageToken {

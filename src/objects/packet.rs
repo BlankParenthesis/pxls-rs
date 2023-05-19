@@ -49,8 +49,8 @@ pub mod server {
 	impl From<&Packet> for Extension {
 		fn from(event: &Packet) -> Self {
 			match event {
-				Packet::BoardUpdate { info, data } => Extension::Core,
-				Packet::PixelsAvailable { count, next } => Extension::Core,
+				Packet::BoardUpdate { .. } => Extension::Core,
+				Packet::PixelsAvailable { .. } => Extension::Core,
 				Packet::Ready => Extension::Core,
 			}
 		}
@@ -70,7 +70,7 @@ pub mod client {
 	impl From<&Packet> for Extension {
 		fn from(event: &Packet) -> Self {
 			match event {
-				Packet::Authenticate { token } => Extension::Authentication,
+				Packet::Authenticate { .. } => Extension::Authentication,
 			}
 		}
 	}

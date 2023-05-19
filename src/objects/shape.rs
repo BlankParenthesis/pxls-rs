@@ -41,11 +41,7 @@ impl Shape for VecShape {
 	fn sector_size(&self) -> usize {
 		self.iter()
 			.last()
-			.map(|last| {
-				last.iter()
-					.map(|item| *item as usize)
-					.product()
-			})
+			.map(|last| last.iter().product())
 			.unwrap_or(0)
 	}
 
@@ -53,12 +49,7 @@ impl Shape for VecShape {
 		self.iter()
 			.rev()
 			.skip(1)
-			.map(|items| {
-				items
-					.iter()
-					.map(|item| *item as usize)
-					.product::<usize>()
-			})
+			.map(|items| items.iter().product::<usize>())
 			.product()
 	}
 
