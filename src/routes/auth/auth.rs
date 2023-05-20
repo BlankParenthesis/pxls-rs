@@ -17,7 +17,7 @@ lazy_static! {
 	};
 }
 
-pub fn get() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+pub fn get() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("auth")
 		.and(warp::path::end())
 		.and(warp::get())

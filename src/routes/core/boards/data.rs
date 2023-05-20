@@ -4,7 +4,7 @@ use crate::filters::body::patch::BinaryPatch;
 pub fn get_colors(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
@@ -34,7 +34,7 @@ pub fn get_colors(
 pub fn get_timestamps(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
@@ -64,7 +64,7 @@ pub fn get_timestamps(
 pub fn get_mask(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
@@ -94,7 +94,7 @@ pub fn get_mask(
 pub fn get_initial(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
@@ -124,7 +124,7 @@ pub fn get_initial(
 pub fn patch_initial(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
@@ -154,7 +154,7 @@ pub fn patch_initial(
 pub fn patch_mask(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))

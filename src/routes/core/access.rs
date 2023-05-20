@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn get() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+pub fn get() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("access")
 		.and(warp::path::end())
 		.and(warp::get())

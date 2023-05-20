@@ -16,7 +16,7 @@ pub mod data;
 pub mod pixels;
 pub mod users;
 
-pub fn list(boards: BoardDataMap) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+pub fn list(boards: BoardDataMap) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::get())
@@ -67,7 +67,7 @@ pub fn list(boards: BoardDataMap) -> impl Filter<Extract = impl Reply, Error = R
 		})
 }
 
-pub fn default() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+pub fn default() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path("default"))
 		.and(warp::path::tail())
@@ -89,7 +89,7 @@ pub fn default() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
 pub fn get(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path::end())
@@ -101,7 +101,7 @@ pub fn get(
 			let board = board.as_ref().unwrap();
 			let mut response = json(&board.info).into_response();
 
-			if let AuthedUser::Authed { user, valid_until } = user {
+			if let AuthedUser::Authed { user, .. } = user {
 				let cooldown_info = board
 					.user_cooldown_info(&user, &mut connection)
 					.unwrap();
@@ -118,7 +118,7 @@ pub fn get(
 pub fn post(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::post())
@@ -151,7 +151,7 @@ pub fn post(
 pub fn patch(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path::end())
@@ -176,7 +176,7 @@ pub fn patch(
 pub fn delete(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::prepare_delete(&boards))
 		.and(warp::path::end())
@@ -203,7 +203,7 @@ pub struct SocketOptions {
 pub fn socket(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("socket"))

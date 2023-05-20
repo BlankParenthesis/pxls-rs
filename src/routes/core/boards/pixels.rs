@@ -3,7 +3,7 @@ use super::*;
 pub fn list(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("pixels"))
@@ -62,7 +62,7 @@ pub fn list(
 pub fn get(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("pixels"))
@@ -87,7 +87,7 @@ pub fn get(
 pub fn post(
 	boards: BoardDataMap,
 	database_pool: Arc<Pool>,
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("pixels"))
