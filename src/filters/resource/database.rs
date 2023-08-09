@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use super::*;
-use crate::database::{Connection, Pool};
+use sea_orm::DatabaseConnection as Connection;
 
 pub fn connection(
-	pool: std::sync::Arc<Pool>
-) -> impl Filter<Extract = (Connection,), Error = Infallible> + Clone {
-	warp::any().map(move || pool.get().unwrap())
+	db: Arc<Connection>
+) -> impl Filter<Extract = (Arc<Connection>,), Error = Infallible> + Clone {
+	warp::any().map(move || db.clone())
 }

@@ -1,9 +1,5 @@
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate diesel;
-#[macro_use]
-extern crate diesel_migrations;
 
 #[macro_use]
 mod access;
@@ -19,7 +15,7 @@ mod routes;
 use std::{collections::HashMap, sync::Arc};
 
 use access::permissions::PermissionsError;
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use sea_orm::Database;
 use filters::header::authorization::BearerError;
 use futures_util::future;
 use http::{Method, StatusCode};
@@ -27,6 +23,7 @@ use http::{Method, StatusCode};
 use parking_lot::RwLock;
 use warp::{Filter, Rejection, Reply};
 
+use crate::database::migrations::{Migrator, MigratorTrait};
 use crate::objects::Board;
 use crate::config::CONFIG;
 
@@ -41,18 +38,15 @@ use crate::config::CONFIG;
 type BoardRef = Arc<RwLock<Option<Board>>>;
 pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
 
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
-
 #[tokio::main]
 async fn main() {
-	let manager = diesel::r2d2::ConnectionManager::new(CONFIG.database_url.to_string());
-	let pool = Arc::new(r2d2::Pool::new(manager).unwrap());
-	let mut connection = pool.get().unwrap();
+	let db = Arc::new(Database::connect(CONFIG.database_url.to_string()).await
+		.expect("Failed to connect to database"));
 
-	MigrationHarness::run_pending_migrations(&mut connection, MIGRATIONS)
-		.expect("Migration failed");
+	Migrator::up(db.as_ref(), None).await.expect("Failed to run migrations");
 
-	let boards = database::queries::load_boards(&mut connection)
+	let boards = database::queries::load_boards(db.as_ref())
+		.await
 		.expect("Failed to load boards")
 		.into_iter()
 		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))
@@ -65,64 +59,64 @@ async fn main() {
 		.or(routes::core::boards::list(Arc::clone(&boards)))
 		.or(routes::core::boards::get(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::default())
 		.or(routes::core::boards::post(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::patch(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::delete(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::socket(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::data::get_colors(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::data::get_initial(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::data::get_mask(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::data::get_timestamps(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::data::patch_initial(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::data::patch_mask(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::users::get(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::pixels::list(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::pixels::get(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::core::boards::pixels::post(
 			Arc::clone(&boards),
-			Arc::clone(&pool),
+			Arc::clone(&db),
 		))
 		.or(routes::auth::auth::get())
 		.recover(|rejection: Rejection| {

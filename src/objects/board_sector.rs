@@ -1,8 +1,8 @@
-use bytes::{BufMut, BytesMut};
-use diesel::{prelude::*, QueryResult};
+use bytes::{BytesMut, BufMut};
+use sea_orm::{sea_query::{Query, self, Expr}, Order, Set, EntityTrait, ColumnTrait, QueryFilter, Iden, ConnectionTrait, JoinType};
 
 use crate::{
-	database::{model, schema, Connection},
+	database::{entities::*, DbResult},
 	objects::MaskValue,
 };
 
@@ -25,100 +25,87 @@ pub struct BoardSector {
 }
 
 impl BoardSector {
-	pub fn new(
+	pub async fn new<Connection: ConnectionTrait>(
 		board: i32,
 		index: i32,
 		size: usize,
-		connection: &mut Connection,
-	) -> QueryResult<Self> {
+		connection: &Connection,
+	) -> DbResult<Self> {
 		// NOTE: default mask is NoPlace so that new boards require activation
 		// before use.
 		let mask = vec![MaskValue::NoPlace as u8; size];
 		let initial = vec![0; size];
 
-		let new_sector = model::BoardSector {
-			board,
-			index,
-			mask,
-			initial,
+		let new_sector = board_sector::ActiveModel {
+			board: Set(board),
+			sector: Set(index),
+			mask: Set(mask),
+			initial: Set(initial),
 		};
 
-		diesel::insert_into(schema::board_sector::table)
-			.values(&new_sector)
-			.execute(connection)?;
+		let sector = board_sector::Entity::insert(new_sector)
+			.exec_with_returning(connection).await?;
 
-		Self::from_model(new_sector, connection)
+		Self::from_model(sector, connection).await
 	}
 
-	pub fn load(
+	pub async fn load<Connection: ConnectionTrait>(
 		board_id: i32,
 		sector_index: i32,
-		connection: &mut Connection,
-	) -> QueryResult<Option<Self>> {
-		let sector = schema::board_sector::table
-			.find((board_id, sector_index))
-			.load::<model::BoardSector>(connection)?
-			.pop();
+		connection: &Connection,
+	) -> DbResult<Option<Self>> {
+		let sector = board_sector::Entity::find_by_id((board_id, sector_index))
+			.one(connection).await?;
 
 		if let Some(sector) = sector {
-			Ok(Some(Self::from_model(sector, connection)?))
+			Ok(Some(Self::from_model(sector, connection).await?))
 		} else {
 			Ok(None)
 		}
 	}
 
-	pub fn save(
+	pub async fn save<Connection: ConnectionTrait>(
 		&self,
-		connection: &mut Connection,
+		connection: &Connection,
 		buffer: Option<&SectorBuffer>,
-	) -> QueryResult<()> {
+	) -> DbResult<()> {
+		let find_this_sector = board_sector::Column::Sector
+			.eq(self.index)
+			.and(board_sector::Column::Board.eq(self.board));
+
 		match buffer {
 			Some(SectorBuffer::Colors) => unimplemented!(),
 			Some(SectorBuffer::Timestamps) => unimplemented!(),
 			Some(SectorBuffer::Initial) => {
-				diesel::update(schema::board_sector::table)
-					.set(schema::board_sector::initial.eq(&*self.initial))
-					.filter(
-						schema::board_sector::index
-							.eq(self.index)
-							.and(schema::board_sector::board.eq(self.board)),
-					)
-					.execute(connection)
+				board_sector::Entity::update_many()
+					.col_expr(board_sector::Column::Initial, self.initial.to_vec().into())
+					.filter(find_this_sector)
+					.exec(connection).await
 					.map(|_| ())
 			},
 			Some(SectorBuffer::Mask) => {
-				diesel::update(schema::board_sector::table)
-					.set(schema::board_sector::mask.eq(&*self.mask))
-					.filter(
-						schema::board_sector::index
-							.eq(self.index)
-							.and(schema::board_sector::board.eq(self.board)),
-					)
-					.execute(connection)
+				board_sector::Entity::update_many()
+					.col_expr(board_sector::Column::Mask, self.mask.to_vec().into())
+					.filter(find_this_sector)
+					.exec(connection).await
 					.map(|_| ())
 			},
 			None => {
-				diesel::update(schema::board_sector::table)
-					.set((
-						schema::board_sector::initial.eq(&*self.initial),
-						schema::board_sector::mask.eq(&*self.mask),
-					))
-					.filter(
-						schema::board_sector::index
-							.eq(self.index)
-							.and(schema::board_sector::board.eq(self.board)),
-					)
-					.execute(connection)
+				board_sector::Entity::update_many()
+					.col_expr(board_sector::Column::Initial, self.initial.to_vec().into())
+					.col_expr(board_sector::Column::Mask, self.mask.to_vec().into())
+					.filter(find_this_sector)
+					.exec(connection).await
 					.map(|_| ())
 			},
 		}
 	}
 
-	fn from_model(
-		sector: model::BoardSector,
-		connection: &mut Connection,
-	) -> QueryResult<Self> {
-		let index = sector.index;
+	async fn from_model<Connection: ConnectionTrait>(
+		sector: board_sector::Model,
+		connection: &Connection,
+	) -> DbResult<Self> {
+		let index = sector.sector;
 		let board = sector.board;
 		let sector_size = sector.initial.len();
 
@@ -127,24 +114,29 @@ impl BoardSector {
 		let mut colors = initial.clone();
 		let mut timestamps = BytesMut::from(&vec![0; sector_size * 4][..]);
 
-		let start_position = sector_size as i64 * sector.index as i64;
+		let start_position = sector_size as i64 * sector.sector as i64;
 		let end_position = start_position + sector_size as i64 - 1;
 
-		// TODO: maybe this will be possible in qsl one day…
-		// until then, maybe there's a non-nested way to do this.
-		let placements = diesel::sql_query(
-			"
-			SELECT DISTINCT ON (position) * FROM (
-				SELECT * FROM placement
-				WHERE board = $1
-				AND position BETWEEN $2 AND $3
-				ORDER BY timestamp DESC, id DESC
-			) AS ordered",
-		)
-		.bind::<diesel::sql_types::Int4, _>(sector.board)
-		.bind::<diesel::sql_types::Int8, _>(start_position)
-		.bind::<diesel::sql_types::Int8, _>(end_position)
-		.load::<model::Placement>(connection)?;
+		#[derive(Iden)]
+		struct Inner;
+
+		let placements = placement::Entity::find()
+			.filter(placement::Column::Board.eq(board))
+			.filter(placement::Column::Position.between(start_position, end_position))
+			.filter(placement::Column::Id.in_subquery(
+				Query::select()
+					.from_as(placement::Entity, Inner)
+					.column((Inner, placement::Column::Id))
+					.and_where(
+						Expr::col((placement::Entity, placement::Column::Position))
+							.equals((Inner, placement::Column::Position))
+					)
+					.order_by((Inner, placement::Column::Timestamp), Order::Desc)
+					.order_by((Inner, placement::Column::Id), Order::Desc)
+					.limit(1)
+					.to_owned()
+			))
+			.all(connection).await?;
 
 		for placement in placements {
 			let index = placement.position as usize;

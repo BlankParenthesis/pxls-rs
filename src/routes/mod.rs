@@ -9,7 +9,6 @@ use warp::{
 
 use crate::{
 	access::permissions::{with_permission, Permission},
-	database::Pool,
 	filters::{
 		body::patch,
 		header::{

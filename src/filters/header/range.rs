@@ -1,11 +1,13 @@
 use std::{
 	convert::{Infallible, TryFrom},
+	io::Seek,
 	fmt::{self, Display, Formatter},
-	io::{Read, Seek},
 	ops::{Range as OpsRange, RangeFrom as OpsRangeFrom},
 };
 
 use rand::{self, Rng};
+
+use crate::objects::sector_cache::{AsyncRead, Len};
 
 use super::*;
 
@@ -79,13 +81,13 @@ struct DataRange {
 	range: OpsRange<usize>,
 }
 
-fn data_ranges<D>(
+async fn data_ranges<D>(
 	data: &mut D,
 	unit: &str,
 	ranges: &[HttpRange],
 ) -> Result<Vec<DataRange>, RangeIndexError>
 where
-	D: Read + Seek + crate::objects::sector_cache::Len,
+	D: AsyncRead + Seek + Len,
 {
 	if !unit.eq("bytes") {
 		return Err(RangeIndexError::UnknownUnit);
@@ -119,26 +121,29 @@ where
 		}
 	}
 
-	Ok(efficient_ranges
-		.into_iter()
-		.map(|range| {
-			let length = range.end - range.start;
-			let mut subdata: Vec<u8> = std::iter::repeat(0)
-				.take(length)
-				.collect();
+	let mut ranges = Vec::with_capacity(efficient_ranges.len());
+	for range in efficient_ranges {
+		let length = range.start - range.end;
 
-			data.seek(std::io::SeekFrom::Start(
-				u64::try_from(range.start).unwrap(),
-			))
-			.unwrap();
-			data.read_exact(&mut subdata).unwrap();
+		let mut subdata: Vec<u8> = std::iter::repeat(0)
+			.take(length)
+			.collect();
 
-			DataRange {
-				data: subdata,
-				range,
-			}
+		data.seek(std::io::SeekFrom::Start(
+			u64::try_from(range.start).unwrap(),
+		))
+		.unwrap();
+	
+		// TODO: assert correct read_size
+		let read_size = data.read(&mut subdata).await.unwrap(); // TODO: bad unwrap
+
+		ranges.push(DataRange {
+			data: subdata,
+			range,
 		})
-		.collect())
+	}
+
+	Ok(ranges)
 }
 
 fn choose_boundary(datas: &[DataRange]) -> String {
@@ -267,16 +272,16 @@ impl TryFrom<&str> for Range {
 }
 
 impl Range {
-	pub fn respond_with<D>(
+	pub async fn respond_with<D>(
 		&self,
 		data: &mut D,
 	) -> reply::Response
 	where
-		D: Read + Seek + crate::objects::sector_cache::Len,
+		D: AsyncRead + Seek + Len,
 	{
 		match self {
 			Self::Multi { unit, ranges } => {
-				match data_ranges(data, unit, ranges) {
+				match data_ranges(data, unit, ranges).await {
 					Ok(datas) => {
 						let boundary = choose_boundary(&datas);
 						let merged = merge_ranges(&datas, &boundary);
@@ -314,7 +319,8 @@ impl Range {
 						))
 						.unwrap();
 
-						data.read_exact(&mut buffer).unwrap();
+						// TODO: assert correct read_size
+						let read_size = data.read(&mut buffer).await.unwrap(); // TODO: bad unwrap
 
 						let mut response = buffer.into_response();
 						response = reply::with_status(response, StatusCode::PARTIAL_CONTENT)
@@ -340,7 +346,8 @@ impl Range {
 				let length = data.len();
 				let mut buffer = vec![0; length];
 
-				data.read_exact(&mut buffer).unwrap();
+				// TODO: assert correct read_size
+				let read_size = data.read(&mut buffer).await.unwrap(); // TODO: bad unwrap
 
 				Response::builder()
 					.header(header::CONTENT_TYPE, "application/octet-stream")

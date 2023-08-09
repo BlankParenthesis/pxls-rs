@@ -4,6 +4,7 @@ use std::{
 	time::{Duration, SystemTime},
 };
 
+use sea_orm::DatabaseConnection as Connection;
 use async_trait::async_trait;
 use enum_map::Enum;
 use enumset::{EnumSet, EnumSetType};
@@ -18,12 +19,11 @@ use warp::ws;
 use crate::{
 	access::permissions::Permission,
 	authentication::openid::ValidationError,
-	database::Pool,
 	objects::{packet, AuthedUser, Board, User},
 };
 
 #[derive(Debug, EnumSetType, Enum, Deserialize, Serialize)]
-#[enumset(serialize_as_list)]
+#[enumset(serialize_repr = "list")]
 #[serde(rename_all = "lowercase")]
 pub enum Extension {
 	Core,
@@ -96,7 +96,7 @@ impl UnauthedSocket {
 		websocket: ws::WebSocket,
 		extensions: EnumSet<Extension>,
 		board: Weak<RwLock<Option<Board>>>,
-		connection_pool: Arc<Pool>,
+		connection: Arc<Connection>,
 	) {
 		let (ws_sender, mut ws_receiver) = websocket.split();
 		let (sender, sender_receiver) = mpsc::unbounded_channel();
@@ -129,10 +129,8 @@ impl UnauthedSocket {
 			if let Some(board) = board.upgrade() {
 				let mut board = board.write();
 				if let Some(ref mut board) = *board {
-					let mut connection = connection_pool.get().unwrap();
-					board
-						.insert_socket(Arc::clone(&socket), &mut connection)
-						.unwrap();
+					board.insert_socket(Arc::clone(&socket), connection.as_ref()).await
+						.unwrap(); // TODO: bad unwrap?
 				}
 			}
 

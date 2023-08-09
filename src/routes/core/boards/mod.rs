@@ -4,6 +4,7 @@ use fragile::Fragile;
 use http::header;
 use parking_lot::RwLock;
 use warp::path::Tail;
+use sea_orm::DatabaseConnection as Connection;
 
 use super::*;
 use crate::{
@@ -88,7 +89,7 @@ pub fn default() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Cl
 
 pub fn get(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -96,15 +97,15 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, user, mut connection| {
+		.then(|board: PassableBoard, user, connection: Arc<Connection>| async move {
 			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let mut response = json(&board.info).into_response();
 
 			if let AuthedUser::Authed { user, .. } = user {
 				let cooldown_info = board
-					.user_cooldown_info(&user, &mut connection)
-					.unwrap();
+					.user_cooldown_info(&user, connection.as_ref()).await
+					.unwrap(); // TODO: bad unwrap?
 
 				for (key, value) in cooldown_info.into_headers() {
 					response = reply::with_header(response, key, value).into_response();
@@ -117,7 +118,7 @@ pub fn get(
 
 pub fn post(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
@@ -125,32 +126,34 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPost)))
 		.and(database::connection(database_pool))
-		.map(move |data: BoardInfoPost, _user, mut connection| {
-			let board = Board::create(data, &mut connection).unwrap();
-			let id = board.id as usize;
-
+		.then(move |data: BoardInfoPost, _user, connection: Arc<Connection>| {
 			let boards = Arc::clone(&boards);
-			let mut boards = boards.write();
-			boards.insert(id, Arc::new(RwLock::new(Some(board))));
+			async move {
+				let board = Board::create(data, connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
+				let id = board.id as usize;
 
-			let board = boards.get(&id).unwrap().read();
-			let board = board.as_ref().unwrap();
+				let mut boards = boards.write();
+				boards.insert(id, Arc::new(RwLock::new(Some(board))));
 
-			let mut response = json(&Reference::from(board)).into_response();
-			response = reply::with_status(response, StatusCode::CREATED).into_response();
-			response = reply::with_header(
-				response,
-				header::LOCATION,
-				http::Uri::from(board).to_string(),
-			)
-			.into_response();
-			response
+				let board = boards.get(&id).unwrap().read();
+				let board = board.as_ref().unwrap();
+
+				let mut response = json(&Reference::from(board)).into_response();
+				response = reply::with_status(response, StatusCode::CREATED).into_response();
+				response = reply::with_header(
+					response,
+					header::LOCATION,
+					http::Uri::from(board).to_string(),
+				)
+				.into_response();
+				response
+			}
 		})
 }
 
 pub fn patch(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -160,11 +163,11 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
 		.and(database::connection(database_pool))
-		.map(|board: PassableBoard, patch: BoardInfoPatch, _user, mut connection| {
+		.then(|board: PassableBoard, patch: BoardInfoPatch, _user, connection: Arc<Connection>| async move {
 			let mut board = board.write();
 			let board = board.as_mut().unwrap();
 
-			board.update_info(patch, &mut connection).unwrap();
+			board.update_info(patch, connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
 
 			let mut response = json(&Reference::from(&*board)).into_response();
 			response = reply::with_status(response, StatusCode::CREATED).into_response();
@@ -175,7 +178,7 @@ pub fn patch(
 
 pub fn delete(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::prepare_delete(&boards))
@@ -183,16 +186,14 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
 		.and(database::connection(database_pool))
-		.map(
-			move |deletion: Fragile<PendingDelete>, _user: AuthedUser, mut connection| {
-				let mut deletion = deletion.into_inner();
-				let board = deletion.perform();
-				let mut board = board.write();
-				let board = board.take().unwrap();
-				board.delete(&mut connection).unwrap();
-				StatusCode::NO_CONTENT.into_response()
-			},
-		)
+		.then(move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection: Arc<Connection>| async move {
+			let mut deletion = deletion.into_inner();
+			let board = deletion.perform();
+			let mut board = board.write();
+			let board = board.take().unwrap();
+			board.delete(connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
+			StatusCode::NO_CONTENT.into_response()
+		})
 }
 
 #[derive(serde::Deserialize)]
@@ -202,7 +203,7 @@ pub struct SocketOptions {
 
 pub fn socket(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))

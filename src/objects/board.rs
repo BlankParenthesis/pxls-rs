@@ -1,13 +1,12 @@
 use std::{
 	collections::{HashMap, HashSet},
 	convert::TryFrom,
-	io::{Seek, SeekFrom, Write},
+	io::{Seek, SeekFrom},
 	sync::{Arc, RwLock, Weak},
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use bytes::BufMut;
-use diesel::{prelude::*, Connection as DConnection, sql_types::Record};
 use enum_map::EnumMap;
 use http::{
 	header::{HeaderName, HeaderValue},
@@ -15,19 +14,21 @@ use http::{
 };
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use sea_orm::{ConnectionTrait, Set, ActiveValue::NotSet, EntityTrait, ColumnTrait, QueryFilter, QueryOrder, Order, QuerySelect, sea_query::Expr, ModelTrait, PaginatorTrait, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::{
-	database::{model, schema, Connection},
 	filters::body::patch::BinaryPatch,
 	objects::{
 		packet, AuthedSocket, AuthedUser, Color, Extension, Palette, Reference, SectorBuffer,
 		SectorCache, SectorCacheAccess, Shape, User, UserCount, VecShape, color::replace_palette,
-	},
+	}, database::{DbResult, entities::*},
 };
+
+use super::sector_cache::AsyncWrite;
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -423,42 +424,42 @@ impl Reply for PlaceError {
 }
 
 impl Board {
-	pub fn create(
+	pub async fn create<Connection: ConnectionTrait + TransactionTrait>(
 		info: BoardInfoPost,
-		connection: &mut Connection,
-	) -> QueryResult<Self> {
+		connection: &Connection,
+	) -> DbResult<Self> {
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap()
 			.as_secs();
 
-		let new_board = diesel::insert_into(schema::board::table)
-			.values(model::NewBoard {
-				name: info.name,
-				created_at: now as i64,
-				shape: info.shape.into(),
-				max_stacked: info.max_pixels_available as i32,
+		let new_board = board::Entity::insert(board::ActiveModel {
+				id: NotSet,
+				name: Set(info.name),
+				created_at: Set(now as i64),
+				shape: Set(serde_json::to_value(info.shape).unwrap()),
+				max_stacked: Set(info.max_pixels_available as i32),
 			})
-			.get_result::<model::Board>(connection)?;
+			.exec_with_returning(connection).await?;
 
-		crate::objects::color::replace_palette(&info.palette, new_board.id, connection)?;
+		crate::objects::color::replace_palette(&info.palette, new_board.id, connection).await?;
 
-		Self::load(new_board, connection)
+		Self::load(new_board, connection).await
 	}
 
-	pub fn read<'l>(
+	pub async fn read<'l, Connection: ConnectionTrait + TransactionTrait>(
 		&'l self,
 		buffer: SectorBuffer,
-		connection: &'l mut Connection,
-	) -> SectorCacheAccess<'l> {
+		connection: &'l Connection,
+	) -> SectorCacheAccess<'l, Connection> {
 		self.sectors.access(buffer, connection)
 	}
 
 	// TODO: proper error type
-	pub fn try_patch_initial(
+	pub async fn try_patch_initial<Connection: ConnectionTrait + TransactionTrait>(
 		&self,
 		patch: &BinaryPatch,
-		connection: &mut Connection,
+		connection: &Connection,
 	) -> Result<(), &'static str> {
 		// TODO: check bounds
 		let mut sector_data = self
@@ -470,7 +471,7 @@ impl Board {
 			.map_err(|_| "invalid start position")?;
 
 		sector_data
-			.write(&patch.data)
+			.write(&patch.data).await
 			.map_err(|_| "write error")?;
 
 		let packet = packet::server::Packet::BoardUpdate {
@@ -491,10 +492,10 @@ impl Board {
 		Ok(())
 	}
 
-	pub fn try_patch_mask(
+	pub async fn try_patch_mask<Connection: ConnectionTrait + TransactionTrait>(
 		&self,
 		patch: &BinaryPatch,
-		connection: &mut Connection,
+		connection: &Connection,
 	) -> Result<(), &'static str> {
 		let mut sector_data = self
 			.sectors
@@ -505,7 +506,7 @@ impl Board {
 			.map_err(|_| "invalid start position")?;
 
 		sector_data
-			.write(&patch.data)
+			.write(&patch.data).await
 			.map_err(|_| "write error")?;
 
 		let packet = packet::server::Packet::BoardUpdate {
@@ -528,11 +529,11 @@ impl Board {
 
 	// TODO: find some way to exhaustively match info so that the compiler knows
 	// when new fields are added and can notify that this function needs updates.
-	pub fn update_info(
+	pub async fn update_info<Connection: ConnectionTrait + TransactionTrait>(
 		&mut self,
 		info: BoardInfoPatch,
-		connection: &mut Connection,
-	) -> QueryResult<()> {
+		connection: &Connection,
+	) -> DbResult<()> {
 		assert!(
 			info.name.is_some()
 				|| info.palette.is_some()
@@ -540,40 +541,38 @@ impl Board {
 				|| info.max_pixels_available.is_some()
 		);
 
-		connection.transaction::<_, diesel::result::Error, _>(|connection| {
-			if let Some(ref name) = info.name {
-				diesel::update(schema::board::table)
-					.set(schema::board::name.eq(name))
-					.filter(schema::board::id.eq(self.id))
-					.execute(connection)?;
-			}
+		let transaction = connection.begin().await?;
+		if let Some(ref name) = info.name {
+			board::Entity::update_many()
+				.col_expr(board::Column::Name, name.into())
+				.filter(board::Column::Id.eq(self.id))
+				.exec(&transaction).await?;
+		}
 
-			if let Some(ref palette) = info.palette {
-				replace_palette(palette, self.id, connection)?;
-			}
+		if let Some(ref palette) = info.palette {
+			replace_palette(palette, self.id, &transaction).await?;
+		}
 
-			if let Some(ref shape) = info.shape {
-				// TODO: try and preserve data.
+		if let Some(ref shape) = info.shape {
+			board::Entity::update_many()
+				.col_expr(board::Column::Shape, serde_json::to_value(shape).unwrap().into())
+				.filter(board::Column::Id.eq(self.id))
+				.exec(&transaction).await?;
 
-				diesel::update(schema::board::table)
-					.set(schema::board::shape.eq(serde_json::to_value(shape).unwrap()))
-					.filter(schema::board::id.eq(self.id))
-					.execute(connection)?;
+			// TODO: try and preserve data.
+			board_sector::Entity::delete_many()
+				.filter(board_sector::Column::Board.eq(self.id))
+				.exec(&transaction).await?;
+		}
 
-				diesel::delete(schema::board_sector::table)
-					.filter(schema::board_sector::board.eq(self.id))
-					.execute(connection)?;
-			}
-
-			if let Some(max_stacked) = info.max_pixels_available {
-				diesel::update(schema::board::table)
-					.set(schema::board::max_stacked.eq(max_stacked as i32))
-					.filter(schema::board::id.eq(self.id))
-					.execute(connection)?;
-			}
-
-			Ok(())
-		})?;
+		if let Some(max_stacked) = info.max_pixels_available {
+			board::Entity::update_many()
+				.col_expr(board::Column::MaxStacked, (max_stacked as i32).into())
+				.filter(board::Column::Id.eq(self.id))
+				.exec(&transaction).await?;
+		}
+		
+		transaction.commit().await?;
 
 		if let Some(ref name) = info.name {
 			self.info.name = name.clone();
@@ -607,62 +606,58 @@ impl Board {
 		Ok(())
 	}
 
-	pub fn delete(
+	pub async fn delete<Connection: ConnectionTrait + TransactionTrait>(
 		mut self,
-		connection: &mut Connection,
-	) -> QueryResult<()> {
+		connection: &Connection,
+	) -> DbResult<()> {
 		self.connections.close();
 
-		connection.transaction(|connection| {
-			diesel::delete(schema::board_sector::table)
-				.filter(schema::board_sector::board.eq(self.id))
-				.execute(connection)?;
+		let transaction = connection.begin().await?;
 
-			diesel::delete(schema::placement::table)
-				.filter(schema::placement::board.eq(self.id))
-				.execute(connection)?;
+		board_sector::Entity::delete_many()
+			.filter(board_sector::Column::Board.eq(self.id))
+			.exec(&transaction).await?;
 
-			diesel::delete(schema::color::table)
-				.filter(schema::color::board.eq(self.id))
-				.execute(connection)?;
+		placement::Entity::delete_many()
+			.filter(placement::Column::Board.eq(self.id))
+			.exec(&transaction).await?;
 
-			diesel::delete(schema::board::table)
-				.filter(schema::board::id.eq(self.id))
-				.execute(connection)?;
+		color::Entity::delete_many()
+			.filter(color::Column::Board.eq(self.id))
+			.exec(&transaction).await?;
 
-			Ok(())
-		})
+		board::Entity::delete_many()
+			// deliberate bug to test things
+			.filter(color::Column::Board.eq(self.id))
+			.exec(&transaction).await?;
+		
+		transaction.commit().await
 	}
 
-	pub fn last_place_time(
+	pub async fn last_place_time<Connection: ConnectionTrait>(
 		&self,
 		user: &User,
-		connection: &mut Connection,
-	) -> QueryResult<u32> {
-		Ok(schema::placement::table
+		connection: &Connection,
+	) -> DbResult<u32> {
+		Ok(placement::Entity::find()
 			.filter(
-				schema::placement::board
-					.eq(self.id)
-					.and(schema::placement::user_id.eq(user.id.clone())),
+				placement::Column::Board.eq(self.id)
+					.and(placement::Column::UserId.eq(user.id.clone())),
 			)
-			.order((
-				schema::placement::timestamp.desc(),
-				schema::placement::id.desc(),
-			))
-			.limit(1)
-			.load::<model::Placement>(connection)?
-			.pop()
+			.order_by(placement::Column::Timestamp, Order::Desc)
+			.order_by(placement::Column::Id, Order::Desc)
+			.one(connection).await?
 			.map(|placement| placement.timestamp as u32)
 			.unwrap_or(0))
 	}
 
-	pub fn try_place(
+	pub async fn try_place<Connection: ConnectionTrait>(
 		&self,
 		user: &User,
 		position: u64,
 		color: u8,
-		connection: &mut Connection,
-	) -> Result<model::Placement, PlaceError> {
+		connection: &Connection,
+	) -> Result<placement::Model, PlaceError> {
 		// TODO: I hate most things about how this is written. Redo it and/or move
 		// stuff.
 
@@ -678,7 +673,7 @@ impl Board {
 		
 		let mut sector = self
 			.sectors
-			.write_sector(sector_index, connection)
+			.write_sector(sector_index, connection).await
 			.expect("Failed to load sector");
 
 		match FromPrimitive::from_u8(sector.mask[sector_offset]) {
@@ -697,22 +692,24 @@ impl Board {
 
 		let timestamp = self.current_timestamp();
 		let cooldown_info = self
-			.user_cooldown_info(user, connection)
-			.unwrap();
+			.user_cooldown_info(user, connection).await
+			.unwrap(); // TODO: bad unwrap >:(
 
 		if cooldown_info.pixels_available == 0 {
 			return Err(PlaceError::Cooldown);
 		}
 
-		let new_placement = diesel::insert_into(schema::placement::table)
-			.values(model::NewPlacement {
-				board: self.id,
-				position: position as i64,
-				color: color as i16,
-				timestamp: timestamp as i32,
-				user_id: user.id.clone(),
-			})
-			.get_result::<model::Placement>(connection)
+		let new_placement = placement::Entity::insert(
+				placement::ActiveModel {
+					id: NotSet,
+					board: Set(self.id),
+					position: Set(position as i64),
+					color: Set(color as i16),
+					timestamp: Set(timestamp as i32),
+					user_id: Set(user.id.clone()),
+				}
+			)
+			.exec_with_returning(connection).await
 			.expect("failed to insert placement");
 
 		sector.colors[sector_offset] = color;
@@ -742,8 +739,8 @@ impl Board {
 
 		if let Some(user_id) = user.id.clone() {
 			let cooldown_info = self
-				.user_cooldown_info(user, connection)
-				.unwrap();
+				.user_cooldown_info(user, connection).await
+				.unwrap(); // TODO: another bad unwrap >>>:(
 
 			self.connections
 				.set_user_cooldown(user_id, cooldown_info);
@@ -752,80 +749,63 @@ impl Board {
 		Ok(new_placement)
 	}
 
-	pub fn list_placements(
+	pub async fn list_placements<Connection: ConnectionTrait>(
 		&self,
 		timestamp: u32,
 		id: usize,
 		limit: usize,
 		reverse: bool,
-		connection: &mut Connection,
-	) -> QueryResult<Vec<model::Placement>> {
-		// TODO: Reduce duplication.
-		// This stems from le and ge having different types, polluting the entire
-		// expression. I suppose the original also had duplication in the sql query,
-		// but I guess I was more okay with that?
-		if reverse {
-			schema::placement::table
-				.filter(
-					schema::placement::board
-						.eq(self.id)
-						.and(
-							(schema::placement::timestamp, schema::placement::id)
-								.into_sql::<Record<_>>()
-								.le((timestamp as i32, id as i64)),
-						),
-				)
-				.order((schema::placement::timestamp, schema::placement::id))
-				.limit(limit as i64)
-				.load::<model::Placement>(connection)
+		connection: &Connection,
+	) -> DbResult<Vec<placement::Model>> {
+		let column_timestamp_id_pair = Expr::tuple([
+			Expr::col(placement::Column::Timestamp).into(),
+			Expr::col(placement::Column::Id).into(),
+		]);
+
+		let value_timestamp_id_pair = Expr::tuple([
+			(timestamp as i32).into(),
+			(id as i32).into(),
+		]);
+
+		let compare = if reverse {
+			Expr::lt(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
 		} else {
-			schema::placement::table
-				.filter(
-					schema::placement::board
-						.eq(self.id)
-						.and(
-							(schema::placement::timestamp, schema::placement::id)
-								.into_sql::<Record<_>>()
-								.ge((timestamp as i32, id as i64)),
-						),
-				)
-				.order((schema::placement::timestamp, schema::placement::id))
-				.limit(limit as i64)
-				.load::<model::Placement>(connection)
-		}
+			Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
+		};
+
+		placement::Entity::find()
+			.filter(placement::Column::Board.eq(self.id).and(compare))
+			.order_by(column_timestamp_id_pair, Order::Desc)
+			.limit(limit as u64)
+			.all(connection).await
 	}
 
-	pub fn lookup(
+	pub async fn lookup<Connection: ConnectionTrait>(
 		&self,
 		position: u64,
-		connection: &mut Connection,
-	) -> QueryResult<Option<model::Placement>> {
-		Ok(schema::placement::table
+		connection: &Connection,
+	) -> DbResult<Option<placement::Model>> {
+		placement::Entity::find()
 			.filter(
-				schema::placement::board
-					.eq(self.id)
-					.and(schema::placement::position.eq(position as i64)),
+				placement::Column::Board.eq(self.id)
+					.and(placement::Column::Position.eq(position as i64)),
 			)
-			.order((
-				schema::placement::timestamp.desc(),
-				schema::placement::id.desc(),
-			))
-			.limit(1)
-			.load::<model::Placement>(connection)?
-			.pop())
+			.order_by(placement::Column::Timestamp, Order::Desc)
+			.order_by(placement::Column::Id, Order::Desc)
+			.one(connection).await
 	}
 
-	pub fn load(
-		board: model::Board,
-		connection: &mut Connection,
-	) -> QueryResult<Self> {
+	pub async fn load<Connection: ConnectionTrait>(
+		board: board::Model,
+		connection: &Connection,
+	) -> DbResult<Self> {
 		let id = board.id;
 
-		let palette = model::Color::belonging_to(&board)
-			.load::<model::Color>(connection)?
+		let palette: Palette = board.find_related(color::Entity)
+			.all(connection).await?
 			.into_iter()
 			.map(|color| (color.index as u32, Color::from(color)))
-			.collect::<Palette>();
+			.collect();
 
 		let info = BoardInfo {
 			name: board.name.clone(),
@@ -865,41 +845,39 @@ impl Board {
 		.unwrap()
 	}
 
-	fn pixel_density_at_time(
+	async fn pixel_density_at_time<Connection: ConnectionTrait>(
 		&self,
 		position: u64,
 		timestamp: u32,
-		connection: &mut Connection,
-	) -> QueryResult<usize> {
-		schema::placement::table
-			.select(diesel::dsl::count_star())
+		connection: &Connection,
+	) -> DbResult<usize> {
+		placement::Entity::find()
 			.filter(
-				schema::placement::position
-					.eq(position as i64)
-					.and(schema::placement::timestamp.lt(timestamp as i32)),
+				placement::Column::Position.eq(position as i64)
+				.and(placement::Column::Timestamp.lt(timestamp as i32)),
 			)
-			.first(connection)
-			.map(|i: i64| usize::try_from(i).unwrap())
+			.count(connection).await
+			.map(|i| i as usize)
 	}
 
 	// TODO: This should REALLY be cached.
 	// It's very heavy for how often it should be used, but values should
 	// continue to be valid until the cooldown formula itself changes.
-	fn calculate_cooldowns(
+	async fn calculate_cooldowns<Connection: ConnectionTrait>(
 		&self,
-		placement: Option<&model::Placement>,
-		connection: &mut Connection,
-	) -> QueryResult<Vec<SystemTime>> {
+		placement: Option<&placement::Model>,
+		connection: &Connection,
+	) -> DbResult<Vec<SystemTime>> {
 		// this is pretty ugly
 		// TODO: generalize for more cooldown variables
 		let (activity, density) = if let Some(placement) = placement {
 			(
-				self.user_count_for_time(placement.timestamp as u32, connection)?.active,
+				self.user_count_for_time(placement.timestamp as u32, connection).await?.active,
 				self.pixel_density_at_time(
 					placement.position as u64,
 					placement.timestamp as u32,
 					connection,
-				)?,
+				).await?,
 			)
 		} else {
 			(0, 0)
@@ -924,41 +902,40 @@ impl Board {
 			.collect())
 	}
 
-	fn recent_user_placements(
+	async fn recent_user_placements<Connection: ConnectionTrait>(
 		&self,
 		user: &User,
 		limit: usize,
-		connection: &mut Connection,
-	) -> QueryResult<Vec<model::Placement>> {
-		Ok(schema::placement::table
+		connection: &Connection,
+	) -> DbResult<Vec<placement::Model>> {
+		Ok(placement::Entity::find()
 			.filter(
-				schema::placement::board
-					.eq(self.id)
-					.and(schema::placement::user_id.eq(user.id.as_ref())),
+				placement::Column::Board.eq(self.id)
+					.and(placement::Column::UserId.eq(user.id.clone())),
 			)
-			.order((
-				schema::placement::timestamp.desc(),
-				schema::placement::id.desc(),
-			))
-			.limit(limit as i64)
-			.get_results::<model::Placement>(connection)?
+			.order_by(placement::Column::Timestamp, Order::Desc)
+			.order_by(placement::Column::Id, Order::Desc)
+			.limit(Some(limit as u64))
+			.all(connection).await?
 			.into_iter()
 			.rev()
 			.collect::<Vec<_>>())
 	}
 
-	pub fn user_cooldown_info(
+	// TODO: If any code here is a mess, this certainly is.
+	// The explanations don't even make sense: just make it readable.
+	pub async fn user_cooldown_info<Connection: ConnectionTrait>(
 		&self,
 		user: &User,
-		connection: &mut Connection,
-	) -> QueryResult<CooldownInfo> {
+		connection: &Connection,
+	) -> DbResult<CooldownInfo> {
 		let placements = self.recent_user_placements(
 			user,
 			usize::try_from(self.info.max_pixels_available).unwrap(),
 			connection,
-		)?;
+		).await?;
 
-		let cooldowns = self.calculate_cooldowns(placements.last(), connection)?;
+		let cooldowns = self.calculate_cooldowns(placements.last(), connection).await?;
 
 		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
 
@@ -970,13 +947,8 @@ impl Board {
 		// `MAX_STACKED - 1` since then.
 		// TODO: actually, I think this generalizes and we only have to
 		// check the last `Board::MAX_STACKED - current_stacked` pixels.
-		let incomplete_info_is_correct = info.pixels_available
-			>= (usize::try_from(
-				self.info
-					.max_pixels_available
-					.saturating_sub(1),
-			)
-			.unwrap());
+		let max_minus_one = self.info.max_pixels_available.saturating_sub(1) as usize;
+		let incomplete_info_is_correct = info.pixels_available >= max_minus_one;
 
 		if !placements.is_empty() && !incomplete_info_is_correct {
 			// In order to place MAX_STACKED pixels, a user must either:
@@ -998,7 +970,7 @@ impl Board {
 
 			for pair in placements.windows(2) {
 				let info = CooldownInfo::new(
-					self.calculate_cooldowns(Some(&pair[0]), connection)?,
+					self.calculate_cooldowns(Some(&pair[0]), connection).await?,
 					UNIX_EPOCH
 						+ Duration::from_secs(
 							u64::from(pair[1].timestamp as u32) + self.info.created_at,
@@ -1016,73 +988,52 @@ impl Board {
 		Ok(info)
 	}
 
-	fn user_count_for_time(
+	async fn user_count_for_time<Connection: ConnectionTrait>(
 		&self,
 		timestamp: u32,
-		connection: &mut Connection,
-	) -> QueryResult<UserCount> {
+		connection: &Connection,
+	) -> DbResult<UserCount> {
 		// TODO: make configurable
 		let idle_timeout = 5 * 60;
 		let max_time = i32::try_from(timestamp).unwrap();
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
 
-		// TODO: this is possible in diesel's master branch but not available yet
-		/*
-		let active = schema::placement::table.select(
-				diesel::dsl::count_distinct(schema::placement::user_id)
-			).filter(schema::placement::board.eq(self.id)
-				.and(schema::placement::timestamp.between(min_time, max_time)))
-			.get_result::<i64>(connection)? as usize;
-		*/
-		// so instead we have this ugliness 😭:
-
-		#[derive(QueryableByName)]
-		struct Count {
-			#[sql_type = "diesel::sql_types::Int8"]
-			active: i64,
-		}
-
-		let count = diesel::sql_query(
-			"SElECT COUNT(DISTINCT user_id) AS active
-			FROM placement
-			WHERE board = $1
-			AND timestamp BETWEEN $2 AND $3",
-		)
-		.bind::<diesel::sql_types::Int4, _>(self.id)
-		.bind::<diesel::sql_types::Int4, _>(min_time)
-		.bind::<diesel::sql_types::Int4, _>(max_time)
-		.get_result::<Count>(connection)?;
-
-		let active = count.active as usize;
+		let count = placement::Entity::find()
+			.distinct_on([placement::Column::UserId])
+			.filter(placement::Column::Board.eq(self.id))
+			.filter(placement::Column::Timestamp.between(min_time, max_time))
+			.count(connection).await?;
 
 		Ok(UserCount {
 			idle_timeout,
-			active,
+			active: count as usize,
 		})
 	}
 
-	pub fn user_count(
+	pub async fn user_count<Connection: ConnectionTrait>(
 		&self,
-		connection: &mut Connection,
-	) -> QueryResult<UserCount> {
-		self.user_count_for_time(self.current_timestamp(), connection)
+		connection: &Connection,
+	) -> DbResult<UserCount> {
+		self.user_count_for_time(self.current_timestamp(), connection).await
 	}
 
-	pub fn insert_socket(
+	pub async fn insert_socket<Connection: ConnectionTrait>(
 		&mut self,
 		socket: Arc<AuthedSocket>,
-		connection: &mut Connection,
-	) -> QueryResult<()> {
+		connection: &Connection,
+	) -> DbResult<()> {
 		let user = socket.user.read();
-		let cooldown_info = Option::<&User>::from(&*user)
-			.and_then(|user| {
-				if user.id.is_some() {
-					Some(self.user_cooldown_info(user, connection))
-				} else {
-					None
-				}
-			})
-			.transpose()?;
+		let user = Option::<&User>::from(&*user);
+
+		let cooldown_info = if let Some(user) = user {
+			if user.id.is_some() {
+				Some(self.user_cooldown_info(user, connection).await?)
+			} else {
+				None
+			}
+		} else {
+			None
+		};
 
 		self.connections
 			.insert(Arc::clone(&socket), cooldown_info);

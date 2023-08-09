@@ -1,12 +1,20 @@
-use diesel::prelude::*;
+use sea_orm::{ConnectionTrait, EntityTrait};
 
-use super::Connection;
-use crate::{database::schema, objects::Board};
+use crate::objects::Board;
 
-pub fn load_boards(connection: &mut Connection) -> QueryResult<Vec<Board>> {
-	schema::board::table
-		.load(connection)?
-		.into_iter()
-		.map(|board| Board::load(board, connection))
-		.collect()
-}
+use super::{entities::board, DbResult};
+
+pub async fn load_boards<Connection: ConnectionTrait>(
+	connection: &Connection
+) -> DbResult<Vec<Board>> {
+	let db_boards = board::Entity::find()
+		.all(connection).await?;
+
+	let mut boards = Vec::with_capacity(db_boards.len());
+
+	for board in db_boards {
+		boards.push(Board::load(board, connection).await?);
+	}
+	
+	Ok(boards)
+}		

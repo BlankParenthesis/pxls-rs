@@ -26,8 +26,6 @@ num-traits = "0.2"
 num-derive = "0.3"
 envy = "0.4"
 url = { version = "2.3", features = ["serde"] }
-diesel = { version = "2.0.4", features = ["postgres", "r2d2", "serde_json"] }
-diesel_migrations = "2.0.0"
 mime = "0.3.17"
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 enum-map = "2.5.0"
@@ -39,3 +37,5 @@ fragile = "2.0.0"
 async-trait = "0.1.68"
 tokio-util = "0.7.8"
 uuid = { version = "1.3.3", features = ["v4"] }
+sea-orm = { version = "0.12.2", features = ["sqlx-postgres", "runtime-tokio"] }
+sea-orm-migration = { version = "0.12.2", features = ["sqlx-postgres", "runtime-tokio-rustls"] }

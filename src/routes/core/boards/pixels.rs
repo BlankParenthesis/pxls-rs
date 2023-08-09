@@ -1,8 +1,10 @@
 use super::*;
 
+use sea_orm::DatabaseConnection as Connection;
+
 pub fn list(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -12,7 +14,7 @@ pub fn list(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsList)))
 		.and(warp::query())
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, mut connection| {
+		.then(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, connection: Arc<Connection>| async move {
 			let page = options.page.unwrap_or_default();
 			let limit = options
 				.limit
@@ -22,13 +24,13 @@ pub fn list(
 			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let previous_placements = board
-				.list_placements(page.timestamp, page.id, limit, true, &mut connection)
+				.list_placements(page.timestamp, page.id, limit, true, connection.as_ref()).await
 				.unwrap();
 			let placements = board
-			// Limit is +1 to get the start of the next page as the last element.
-			// This is required for paging.
-			.list_placements(page.timestamp, page.id, limit + 1, false, &mut connection)
-			.unwrap();
+				// Limit is +1 to get the start of the next page as the last element.
+				// This is required for paging.
+				.list_placements(page.timestamp, page.id, limit + 1, false, connection.as_ref()).await
+				.unwrap();// TODO: bad unwrap?
 
 			fn page_uri(
 				board_id: i32,
@@ -61,7 +63,7 @@ pub fn list(
 
 pub fn get(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -71,12 +73,12 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsGet)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: PassableBoard, position, _user, mut connection| {
+		.then(|board: PassableBoard, position, _user, connection: Arc<Connection>| async move {
 			let board = board.read();
 			let board = board.as_ref().unwrap();
 			let placement = board
-				.lookup(position, &mut connection)
-				.unwrap();
+				.lookup(position, connection.as_ref()).await
+				.unwrap(); // TODO: bad unwrap?
 
 			placement
 				.map(|placement| json(&placement).into_response())
@@ -86,7 +88,7 @@ pub fn get(
 
 pub fn post(
 	boards: BoardDataMap,
-	database_pool: Arc<Pool>,
+	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -97,9 +99,8 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsPost)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.map(|board: PassableBoard, position, placement: PlacementRequest, user, mut connection| {
-			let user =
-				Option::from(user).expect("Default user shouldn't have place permisisons");
+		.then(|board: PassableBoard, position, placement: PlacementRequest, user, connection: Arc<Connection>| async move {
+			let user = Option::from(user).expect("Default user shouldn't have place permisisons");
 
 			let board = board.write();
 			let board = board.as_ref().unwrap();
@@ -109,14 +110,14 @@ pub fn post(
 				&user,
 				position,
 				placement.color,
-				&mut connection,
-			);
+				connection.as_ref(),
+			).await;
 
 			match place_attempt {
 				Ok(placement) => {
 					let cooldown_info = board
-						.user_cooldown_info(&user, &mut connection)
-						.unwrap();
+						.user_cooldown_info(&user, connection.as_ref()).await
+						.unwrap(); // TODO: bad unwrap?
 
 					let mut response = warp::reply::with_status(
 						json(&placement).into_response(),
