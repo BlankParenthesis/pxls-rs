@@ -21,7 +21,7 @@ pub fn list(
 				.unwrap_or(10)
 				.clamp(1, 100);
 
-			let board = board.read();
+			let board = board.read().await;
 			let board = board.as_ref().unwrap();
 			let previous_placements = board
 				.list_placements(page.timestamp, page.id, limit, true, connection.as_ref()).await
@@ -74,7 +74,7 @@ pub fn get(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsGet)))
 		.and(database::connection(Arc::clone(&database_pool)))
 		.then(|board: PassableBoard, position, _user, connection: Arc<Connection>| async move {
-			let board = board.read();
+			let board = board.read().await;
 			let board = board.as_ref().unwrap();
 			let placement = board
 				.lookup(position, connection.as_ref()).await
@@ -102,7 +102,7 @@ pub fn post(
 		.then(|board: PassableBoard, position, placement: PlacementRequest, user, connection: Arc<Connection>| async move {
 			let user = Option::from(user).expect("Default user shouldn't have place permisisons");
 
-			let board = board.write();
+			let board = board.write().await;
 			let board = board.as_ref().unwrap();
 			let place_attempt = board.try_place(
 				// TODO: maybe accept option but make sure not to allow undos etc for anon

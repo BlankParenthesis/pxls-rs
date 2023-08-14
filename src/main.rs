@@ -20,7 +20,7 @@ use filters::header::authorization::BearerError;
 use futures_util::future;
 use http::{Method, StatusCode};
 //use tokio::sync::RwLock;
-use parking_lot::RwLock;
+use tokio::sync::RwLock;
 use warp::{Filter, Rejection, Reply};
 
 use crate::database::migrations::{Migrator, MigratorTrait};

@@ -1,8 +1,8 @@
 use std::sync::Arc;
+use std::ops::Deref;
 
-use fragile::Fragile;
 use http::header;
-use parking_lot::RwLock;
+use tokio::sync::RwLock;
 use warp::path::Tail;
 use sea_orm::DatabaseConnection as Connection;
 
@@ -23,48 +23,50 @@ pub fn list(boards: BoardDataMap) -> impl Filter<Extract = (impl Reply,), Error 
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsList)))
 		.and(warp::query())
-		.map(move |_user, pagination: PaginationOptions<usize>| {
-			let page = pagination.page.unwrap_or(0);
-			let limit = pagination
-				.limit
-				.unwrap_or(10)
-				.clamp(1, 100);
-
+		.then(move |_user, pagination: PaginationOptions<usize>| {
 			let boards = Arc::clone(&boards);
-			let boards = boards.read();
-			let boards = boards
-				.iter()
-				.map(|(id, board)| (id, board.read()))
-				.collect::<Vec<_>>();
-			let board_infos = boards
-				.iter()
-				.map(|(_id, board)| Reference::from(board.as_ref().unwrap()))
-				.collect::<Vec<_>>();
-			let mut chunks = board_infos.chunks(limit);
+			async move {
+				let page = pagination.page.unwrap_or(0);
+				let limit = pagination
+					.limit
+					.unwrap_or(10)
+					.clamp(1, 100);
 
-			fn page_uri(
-				page: usize,
-				limit: usize,
-			) -> String {
-				format!("/boards?page={}&limit={}", page, limit)
+				let boards = Arc::clone(&boards);
+				let boards = boards.read().await;
+				let boards = boards.iter()
+					.map(|(_id, board)| board)
+					.collect::<Vec<_>>();
+				let mut pages = boards.chunks(limit)
+					.skip(page.saturating_sub(2));
+				
+				fn page_uri(
+					page: usize,
+					limit: usize,
+				) -> String {
+					format!("/boards?page={}&limit={}", page, limit)
+				}
+
+				let previous = page.checked_sub(1).and_then(|page| {
+					pages.next().map(|_| page_uri(page, limit))
+				});
+
+				let mut items = Vec::with_capacity(limit);
+				for board in pages.next().unwrap_or_default() {
+					let board = board.read().await;
+					let reference = Reference::from(board.deref().as_ref().unwrap());
+					items.push(serde_json::to_value(reference).unwrap());
+				}
+
+				let next = page.checked_add(1).and_then(|page| {
+					pages.next().map(|_| page_uri(page, limit))
+				});
+
+				// TODO: standardize generation of this
+				let response = Page { previous, items: items.as_slice(), next };
+
+				json(&response).into_response()
 			}
-
-			// TODO: standardize generation of this
-			let response = Page {
-				previous: page.checked_sub(1).and_then(|page| {
-					chunks
-						.nth(page)
-						.map(|_| page_uri(page, limit))
-				}),
-				items: chunks.next().unwrap_or_default(),
-				next: page.checked_add(1).and_then(|page| {
-					chunks
-						.next()
-						.map(|_| page_uri(page, limit))
-				}),
-			};
-
-			json(&response).into_response()
 		})
 }
 
@@ -98,7 +100,7 @@ pub fn get(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, user, connection: Arc<Connection>| async move {
-			let board = board.read();
+			let board = board.read().await;
 			let board = board.as_ref().unwrap();
 			let mut response = json(&board.info).into_response();
 
@@ -132,10 +134,10 @@ pub fn post(
 				let board = Board::create(data, connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
 				let id = board.id as usize;
 
-				let mut boards = boards.write();
+				let mut boards = boards.write().await;
 				boards.insert(id, Arc::new(RwLock::new(Some(board))));
 
-				let board = boards.get(&id).unwrap().read();
+				let board = boards.get(&id).unwrap().read().await;
 				let board = board.as_ref().unwrap();
 
 				let mut response = json(&Reference::from(board)).into_response();
@@ -164,7 +166,7 @@ pub fn patch(
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, patch: BoardInfoPatch, _user, connection: Arc<Connection>| async move {
-			let mut board = board.write();
+			let mut board = board.write().await;
 			let board = board.as_mut().unwrap();
 
 			board.update_info(patch, connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
@@ -186,10 +188,9 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
 		.and(database::connection(database_pool))
-		.then(move |deletion: Fragile<PendingDelete>, _user: AuthedUser, connection: Arc<Connection>| async move {
-			let mut deletion = deletion.into_inner();
+		.then(move |mut deletion: PendingDelete, _user: AuthedUser, connection: Arc<Connection>| async move {
 			let board = deletion.perform();
-			let mut board = board.write();
+			let mut board = board.write().await;
 			let board = board.take().unwrap();
 			board.delete(connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
 			StatusCode::NO_CONTENT.into_response()

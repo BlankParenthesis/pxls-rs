@@ -1,5 +1,5 @@
 use bytes::{BytesMut, BufMut};
-use sea_orm::{sea_query::{Query, self, Expr}, Order, Set, EntityTrait, ColumnTrait, QueryFilter, Iden, ConnectionTrait, JoinType};
+use sea_orm::{sea_query::{Query, self, Expr}, Order, Set, EntityTrait, ColumnTrait, QueryFilter, Iden, ConnectionTrait};
 
 use crate::{
 	database::{entities::*, DbResult},

@@ -4,7 +4,7 @@ use std::io::Read;
 use async_trait::async_trait;
 use sea_orm::{TransactionTrait, ConnectionTrait};
 
-use parking_lot::*;
+use tokio::sync::*;
 
 use crate::{
 	database::DbResult,
@@ -59,9 +59,8 @@ impl SectorCache {
 	) -> DbResult<RwLockWriteGuard<Option<BoardSector>>> {
 		let mut option = self
 			.sectors
-			.get(sector_index)
-			.unwrap()
-			.write();
+			.get(sector_index).unwrap()
+			.write().await;
 
 		let load = BoardSector::load(
 			self.board_id,
@@ -86,15 +85,14 @@ impl SectorCache {
 		Ok(option)
 	}
 
-	pub fn evict_sector(
+	pub async fn evict_sector(
 		&self,
 		sector_index: usize,
 	) -> Option<BoardSector> {
 		let mut option = self
 			.sectors
-			.get(sector_index)
-			.unwrap()
-			.write();
+			.get(sector_index).unwrap()
+			.write().await;
 
 		option.take()
 	}
@@ -103,9 +101,9 @@ impl SectorCache {
 		&self,
 		sector_index: usize,
 		connection: &Connection,
-	) -> Option<MappedRwLockReadGuard<BoardSector>> {
+	) -> Option<RwLockReadGuard<BoardSector>> {
 		if let Some(lock) = self.sectors.get(sector_index) {
-			let option = lock.read();
+			let option = lock.read().await;
 			if option.is_some() {
 				Some(RwLockReadGuard::map(option, |o| o.as_ref().unwrap()))
 			} else {
@@ -128,9 +126,9 @@ impl SectorCache {
 		&self,
 		sector_index: usize,
 		connection: &Connection,
-	) -> Option<MappedRwLockWriteGuard<BoardSector>> {
+	) -> Option<RwLockMappedWriteGuard<BoardSector>> {
 		if let Some(lock) = self.sectors.get(sector_index) {
-			let option = lock.write();
+			let option = lock.write().await;
 			if option.is_some() {
 				Some(RwLockWriteGuard::map(option, |o| o.as_mut().unwrap()))
 			} else {
@@ -313,7 +311,7 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorCa
 
 			if self.buffer == SectorBuffer::Initial {
 				drop(sector);
-				self.sectors.evict_sector(sector_index);
+				self.sectors.evict_sector(sector_index).await;
 			}
 		}
 

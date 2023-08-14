@@ -1845,7 +1845,6 @@ dependencies = [
  "num-derive",
  "num-traits",
  "ouroboros 0.15.6",
- "parking_lot",
  "r2d2",
  "rand",
  "reqwest",

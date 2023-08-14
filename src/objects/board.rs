@@ -221,13 +221,13 @@ pub struct Connections {
 }
 
 impl Connections {
-	pub fn insert(
+	pub async fn insert(
 		&mut self,
 		socket: Arc<AuthedSocket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
-		let user = socket.user.read();
-		if let AuthedUser::Authed { user, valid_until } = &*user {
+		let user = socket.user.read().await;
+		if let AuthedUser::Authed { user, .. } = &*user {
 			if let Some(ref id) = user.id {
 				self.by_uid
 					.entry(id.clone())
@@ -248,12 +248,12 @@ impl Connections {
 		}
 	}
 
-	pub fn remove(
+	pub async fn remove(
 		&mut self,
 		socket: Arc<AuthedSocket>,
 	) {
-		let user = socket.user.read();
-		if let AuthedUser::Authed { user, valid_until } = &*user {
+		let user = socket.user.read().await;
+		if let AuthedUser::Authed { user, .. } = &*user {
 			if let Some(ref id) = user.id {
 				let connections = self.by_uid.get(id).unwrap();
 				let mut connections = connections.write().unwrap();
@@ -1025,7 +1025,7 @@ impl Board {
 		socket: Arc<AuthedSocket>,
 		connection: &Connection,
 	) -> DbResult<()> {
-		let user = socket.user.read();
+		let user = socket.user.read().await;
 		let user = Option::<&User>::from(&*user);
 
 		let cooldown_info = if let Some(user) = user {
@@ -1038,18 +1038,17 @@ impl Board {
 			None
 		};
 
-		self.connections
-			.insert(Arc::clone(&socket), cooldown_info);
-		socket.send(&packet::server::Packet::Ready);
+		self.connections.insert(Arc::clone(&socket), cooldown_info).await;
+		socket.send(&packet::server::Packet::Ready).await;
 
 		Ok(())
 	}
 
-	pub fn remove_socket(
+	pub async fn remove_socket(
 		&mut self,
 		socket: Arc<AuthedSocket>,
 	) {
-		self.connections.remove(socket)
+		self.connections.remove(socket).await
 	}
 }
 

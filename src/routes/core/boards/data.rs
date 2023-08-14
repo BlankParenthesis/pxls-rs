@@ -23,10 +23,8 @@ pub fn get_colors(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
-			let board = board.read();
-			let mut colors_data = board
-				.as_ref()
-				.unwrap()
+			let board = board.read().await;
+			let mut colors_data = board.as_ref().unwrap() // TODO: bad unwrap?
 				.read(SectorBuffer::Colors, connection.as_ref()).await;
 
 			range.respond_with(&mut colors_data).await
@@ -53,10 +51,8 @@ pub fn get_timestamps(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
-			let board = board.read();
-			let mut timestamp_data = board
-				.as_ref()
-				.unwrap()
+			let board = board.read().await;
+			let mut timestamp_data = board.as_ref().unwrap() // TODO: bad unwrap?
 				.read(SectorBuffer::Timestamps, connection.as_ref()).await;
 				
 			range.respond_with(&mut timestamp_data).await
@@ -83,10 +79,8 @@ pub fn get_mask(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
-			let board = board.read();
-			let mut mask_data = board
-				.as_ref()
-				.unwrap()
+			let board = board.read().await;
+			let mut mask_data = board.as_ref().unwrap() // TODO: bad unwrap?
 				.read(SectorBuffer::Mask, connection.as_ref()).await;
 
 			range.respond_with(&mut mask_data).await
@@ -113,10 +107,8 @@ pub fn get_initial(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
-			let board = board.read();
-			let mut initial_data = board
-				.as_ref()
-				.unwrap()
+			let board = board.read().await;
+			let mut initial_data = board.as_ref().unwrap() // TODO: bad unwrap?
 				.read(SectorBuffer::Initial, connection.as_ref()).await;
 
 			range.respond_with(&mut initial_data).await
@@ -138,10 +130,8 @@ pub fn patch_initial(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: Arc<Connection>| async move {
 			// TODO: content disposition
-			let board = board.write();
-			let patch_result = board
-				.as_ref()
-				.unwrap()
+			let board = board.write().await;
+			let patch_result = board.as_ref().unwrap() // TODO: bad unwrap?
 				.try_patch_initial(&patch, connection.as_ref()).await;
 
 			match patch_result {
@@ -166,10 +156,8 @@ pub fn patch_mask(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: Arc<Connection>| async move {
 			// TODO: content disposition
-			let board = board.write();
-			let patch_result = board
-				.as_ref()
-				.unwrap()
+			let board = board.write().await;
+			let patch_result = board.as_ref().unwrap() // TODO: bad unwrap?
 				.try_patch_mask(&patch, connection.as_ref()).await;
 
 			match patch_result {

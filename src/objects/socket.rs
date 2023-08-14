@@ -9,9 +9,8 @@ use async_trait::async_trait;
 use enum_map::Enum;
 use enumset::{EnumSet, EnumSetType};
 use futures_util::{stream::SplitStream, FutureExt, StreamExt};
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 use warp::ws;
@@ -127,7 +126,7 @@ impl UnauthedSocket {
 
 			// add socket
 			if let Some(board) = board.upgrade() {
-				let mut board = board.write();
+				let mut board = board.write().await;
 				if let Some(ref mut board) = *board {
 					board.insert_socket(Arc::clone(&socket), connection.as_ref()).await
 						.unwrap(); // TODO: bad unwrap?
@@ -140,9 +139,9 @@ impl UnauthedSocket {
 
 			// remove socket
 			if let Some(board) = board.upgrade() {
-				let mut board = board.write();
+				let mut board = board.write().await;
 				if let Some(ref mut board) = *board {
-					board.remove_socket(Arc::clone(&socket));
+					board.remove_socket(Arc::clone(&socket)).await;
 				}
 			}
 		}
@@ -244,21 +243,21 @@ impl Hash for AuthedSocket {
 }
 
 impl AuthedSocket {
-	pub fn send(
+	pub async fn send(
 		&self,
 		message: &packet::server::Packet,
 	) {
 		let message = ws::Message::text(serde_json::to_string(message).unwrap());
 
-		if self.auth_valid() {
+		if self.auth_valid().await {
 			self.sender.send(Ok(message));
 		} else {
 			self.close();
 		}
 	}
 
-	fn auth_valid(&self) -> bool {
-		let user = self.user.read();
+	async fn auth_valid(&self) -> bool {
+		let user = self.user.read().await;
 		match &*user {
 			AuthedUser::Authed {
 				user: _,
@@ -290,7 +289,7 @@ impl AuthedSocket {
 
 						match user {
 							Ok(user) => {
-								let mut current_user = self.user.write();
+								let mut current_user = self.user.write().await;
 								// NOTE: AuthedUser::eq tests only the subject
 								// and not the expiry
 								if *current_user == user {

@@ -1,8 +1,7 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use fragile::Fragile;
 use ouroboros::self_referencing;
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use super::*;
 use crate::{BoardDataMap, BoardRef};
@@ -56,38 +55,32 @@ pub mod path {
 			let boards = Arc::clone(&boards);
 
 			async move {
-				let board = PassableBoardTryBuilder {
+				PassableBoardAsyncSendTryBuilder {
 					boards,
-					lock_builder: |boards| Ok(boards.read()),
-					board_builder: |lock| lock.get(&id).ok_or(()),
-				}
-				.try_build();
-
-				board.map_err(|_| warp::reject::not_found())
+					lock_builder: |boards| Box::pin(async move { Ok(boards.read().await) }),
+					board_builder: |lock| Box::pin(async move { lock.get(&id).ok_or(()) }),
+				}.try_build().await
+				.map_err(|_| warp::reject::not_found())
 			}
 		})
 	}
 
 	pub fn prepare_delete(
 		boards: &BoardDataMap
-	) -> impl Filter<Extract = (Fragile<PendingDelete>,), Error = Rejection> + Clone {
+	) -> impl Filter<Extract = (PendingDelete,), Error = Rejection> + Clone {
 		let boards = Arc::clone(boards);
 		warp::path::param().and_then(move |board_id: usize| {
 			let boards = Arc::clone(&boards);
 
 			async move {
-				let writable = PendingDeleteBuilder {
+				let writable = Box::pin(PendingDeleteAsyncSendBuilder {
 					board_id,
 					boards,
-					lock_builder: |boards| boards.write(),
-				}
-				.build();
+					lock_builder: |boards| Box::pin(async move { boards.write().await }),
+				}.build()).await;
 
-				if writable
-					.borrow_lock()
-					.contains_key(&board_id)
-				{
-					Ok(Fragile::new(writable))
+				if writable.borrow_lock().contains_key(&board_id) {
+					Ok(writable)
 				} else {
 					Err(warp::reject::not_found())
 				}
