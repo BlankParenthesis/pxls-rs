@@ -768,14 +768,17 @@ impl Board {
 		]);
 
 		let compare = if reverse {
-			Expr::lt(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
+			Expr::gt(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
 		} else {
-			Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
+			Expr::lte(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
 		};
 
+		let order = if reverse { Order::Asc } else { Order::Desc };
+
 		placement::Entity::find()
-			.filter(placement::Column::Board.eq(self.id).and(compare))
-			.order_by(column_timestamp_id_pair, Order::Desc)
+			.filter(placement::Column::Board.eq(self.id))
+			.filter(compare)
+			.order_by(column_timestamp_id_pair, order)
 			.limit(limit as u64)
 			.all(connection).await
 	}

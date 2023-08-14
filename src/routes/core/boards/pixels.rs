@@ -46,9 +46,9 @@ pub fn list(
 
 			json(&Page {
 				previous: previous_placements
-					.get(0)
+					.last()
 					.map(|placement| {
-						page_uri(board.id, placement.timestamp as u32, placement.id, limit)
+						page_uri(board.id, placement.timestamp as u32, placement.id, previous_placements.len())
 					}),
 				items: &placements[..placements.len().clamp(0, limit)],
 				next: (placements.len() > limit)
