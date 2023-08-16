@@ -6,7 +6,6 @@ use super::col;
 enum Board {
 	Table,
 	Id,
-	#[iden = "created_at"]
 	Shape,
 	#[iden = "shape_new"]
 	ShapeNew,
