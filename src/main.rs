@@ -12,10 +12,11 @@ mod objects;
 mod routes;
 //mod socket;
 
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use access::permissions::PermissionsError;
-use sea_orm::{Database, DbErr};
+use sea_orm::{Database, DbErr, ConnectOptions};
 use filters::header::authorization::BearerError;
 use futures_util::future;
 use http::{Method, StatusCode};
@@ -60,7 +61,12 @@ impl<T: Send + Sync + Reply> Reply for DatabaseError<T> {
 
 #[tokio::main]
 async fn main() {
-	let db = Arc::new(Database::connect(CONFIG.database_url.to_string()).await
+	let mut connect_options = ConnectOptions::new(CONFIG.database_url.to_string());
+	connect_options
+		.connect_timeout(Duration::from_secs(2))
+		.acquire_timeout(Duration::from_secs(2));
+
+	let db = Arc::new(Database::connect(connect_options).await
 		.expect("Failed to connect to database"));
 
 	Migrator::up(db.as_ref(), None).await.expect("Failed to run migrations");
