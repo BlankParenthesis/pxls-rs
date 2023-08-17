@@ -15,10 +15,11 @@ mod routes;
 use std::{collections::HashMap, sync::Arc};
 
 use access::permissions::PermissionsError;
-use sea_orm::Database;
+use sea_orm::{Database, DbErr};
 use filters::header::authorization::BearerError;
 use futures_util::future;
 use http::{Method, StatusCode};
+use thiserror::Error;
 //use tokio::sync::RwLock;
 use tokio::sync::RwLock;
 use warp::{Filter, Rejection, Reply};
@@ -37,6 +38,25 @@ use crate::config::CONFIG;
 // maybe-there, maybe-not solutions (like below).
 type BoardRef = Arc<RwLock<Option<Board>>>;
 pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
+
+#[derive(Error, Debug)]
+pub enum DatabaseError<T> {
+    #[error(transparent)]
+	DbErr(DbErr),
+    #[error(transparent)]
+	Other(#[from] T),
+}
+
+impl<T: Send + Sync + Reply> Reply for DatabaseError<T> {
+    fn into_response(self) -> warp::reply::Response {
+		match self {
+			DatabaseError::DbErr(_) => {
+				StatusCode::INTERNAL_SERVER_ERROR.into_response()
+			},
+			DatabaseError::Other(other) => other.into_response(),
+		}
+    }
+}
 
 #[tokio::main]
 async fn main() {

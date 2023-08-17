@@ -24,7 +24,8 @@ pub fn get_colors(
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.read().await;
-			let mut colors_data = board.as_ref().unwrap() // TODO: bad unwrap?
+			let mut colors_data = board.as_ref()
+				.expect("Board went missing when getting color data")
 				.read(SectorBuffer::Colors, connection.as_ref()).await;
 
 			range.respond_with(&mut colors_data).await
@@ -52,7 +53,8 @@ pub fn get_timestamps(
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.read().await;
-			let mut timestamp_data = board.as_ref().unwrap() // TODO: bad unwrap?
+			let mut timestamp_data = board.as_ref()
+				.expect("Board went missing when getting timestamp data")
 				.read(SectorBuffer::Timestamps, connection.as_ref()).await;
 				
 			range.respond_with(&mut timestamp_data).await
@@ -80,7 +82,8 @@ pub fn get_mask(
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.read().await;
-			let mut mask_data = board.as_ref().unwrap() // TODO: bad unwrap?
+			let mut mask_data = board.as_ref()
+				.expect("Board went missing when getting mask data")
 				.read(SectorBuffer::Mask, connection.as_ref()).await;
 
 			range.respond_with(&mut mask_data).await
@@ -108,7 +111,8 @@ pub fn get_initial(
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.read().await;
-			let mut initial_data = board.as_ref().unwrap() // TODO: bad unwrap?
+			let mut initial_data = board.as_ref()
+				.expect("Board went missing when getting initial data")
 				.read(SectorBuffer::Initial, connection.as_ref()).await;
 
 			range.respond_with(&mut initial_data).await
@@ -131,7 +135,8 @@ pub fn patch_initial(
 		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.write().await;
-			let patch_result = board.as_ref().unwrap() // TODO: bad unwrap?
+			let patch_result = board.as_ref()
+				.expect("Board went missing when patching initial data")
 				.try_patch_initial(&patch, connection.as_ref()).await;
 
 			match patch_result {
@@ -157,7 +162,8 @@ pub fn patch_mask(
 		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.write().await;
-			let patch_result = board.as_ref().unwrap() // TODO: bad unwrap?
+			let patch_result = board.as_ref()
+				.expect("Board went missing when patching mask data")
 				.try_patch_mask(&patch, connection.as_ref()).await;
 
 			match patch_result {

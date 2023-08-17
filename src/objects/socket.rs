@@ -129,7 +129,7 @@ impl UnauthedSocket {
 				let mut board = board.write().await;
 				if let Some(ref mut board) = *board {
 					board.insert_socket(Arc::clone(&socket), connection.as_ref()).await
-						.unwrap(); // TODO: bad unwrap?
+						.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
 				}
 			}
 

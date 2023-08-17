@@ -54,7 +54,8 @@ pub fn list(boards: BoardDataMap) -> impl Filter<Extract = (impl Reply,), Error 
 				let mut items = Vec::with_capacity(limit);
 				for board in pages.next().unwrap_or_default() {
 					let board = board.read().await;
-					let reference = Reference::from(board.deref().as_ref().unwrap());
+					let board = board.deref().as_ref().expect("Board went missing during listing");
+					let reference = Reference::from(board);
 					items.push(serde_json::to_value(reference).unwrap());
 				}
 
@@ -101,16 +102,30 @@ pub fn get(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, user, connection: Arc<Connection>| async move {
 			let board = board.read().await;
-			let board = board.as_ref().unwrap();
+			let board = board.as_ref().expect("Board wend missing when getting info");
 			let mut response = json(&board.info).into_response();
 
 			if let AuthedUser::Authed { user, .. } = user {
-				let cooldown_info = board
-					.user_cooldown_info(&user, connection.as_ref()).await
-					.unwrap(); // TODO: bad unwrap?
+				let cooldown_info = board.user_cooldown_info(
+					&user,
+					connection.as_ref(),
+				).await;
 
-				for (key, value) in cooldown_info.into_headers() {
-					response = reply::with_header(response, key, value).into_response();
+				match cooldown_info {
+					Ok(cooldown_info) => {
+						for (key, value) in cooldown_info.into_headers() {
+							response = reply::with_header(response, key, value)
+								.into_response();
+						}
+					},
+					Err(_) => {
+						// Indicate there was an error, but keep the body since
+						// we have the data and are only missing the cooldown.
+						response = reply::with_status(
+							response,
+							StatusCode::INTERNAL_SERVER_ERROR,
+						).into_response()
+					},
 				}
 			}
 
@@ -131,14 +146,23 @@ pub fn post(
 		.then(move |data: BoardInfoPost, _user, connection: Arc<Connection>| {
 			let boards = Arc::clone(&boards);
 			async move {
-				let board = Board::create(data, connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
+				let board = Board::create(data, connection.as_ref()).await;
+
+				let board = match board {
+					Ok(board) => board,
+					Err(_) => {
+						return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+					}
+				};
+
 				let id = board.id as usize;
 
 				let mut boards = boards.write().await;
 				boards.insert(id, Arc::new(RwLock::new(Some(board))));
 
-				let board = boards.get(&id).unwrap().read().await;
-				let board = board.as_ref().unwrap();
+				let board = boards.get(&id).expect("Board went missing from list during creation")
+					.read().await;
+				let board = board.as_ref().expect("Board went missing during creation");
 
 				let mut response = json(&Reference::from(board)).into_response();
 				response = reply::with_status(response, StatusCode::CREATED).into_response();
@@ -167,14 +191,24 @@ pub fn patch(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, patch: BoardInfoPatch, _user, connection: Arc<Connection>| async move {
 			let mut board = board.write().await;
-			let board = board.as_mut().unwrap();
+			let board = board.as_mut().expect("Board went missing when patching");
 
-			board.update_info(patch, connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
-
-			let mut response = json(&Reference::from(&*board)).into_response();
-			response = reply::with_status(response, StatusCode::CREATED).into_response();
-			response = reply::with_header(response, header::LOCATION, http::Uri::from(&*board).to_string()).into_response();
-			response
+			match board.update_info(patch, connection.as_ref()).await {
+				Ok(()) => {
+					let mut response = json(&Reference::from(&*board)).into_response();
+					response = reply::with_status(
+						response,
+						StatusCode::CREATED,
+					).into_response();
+					response = reply::with_header(
+						response,
+						header::LOCATION,
+						http::Uri::from(&*board).to_string(),
+					).into_response();
+					response
+				},
+				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+			}
 		})
 }
 
@@ -191,9 +225,11 @@ pub fn delete(
 		.then(move |mut deletion: PendingDelete, _user: AuthedUser, connection: Arc<Connection>| async move {
 			let board = deletion.perform();
 			let mut board = board.write().await;
-			let board = board.take().unwrap();
-			board.delete(connection.as_ref()).await.unwrap(); // TODO: bad unwrap?
-			StatusCode::NO_CONTENT.into_response()
+			let board = board.take().expect("Board went missing during deletion");
+			match board.delete(connection.as_ref()).await {
+				Ok(()) => StatusCode::NO_CONTENT.into_response(),
+				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+			}
 		})
 }
 

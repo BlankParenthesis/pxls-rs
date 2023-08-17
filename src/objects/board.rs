@@ -25,7 +25,7 @@ use crate::{
 	objects::{
 		packet, AuthedSocket, AuthedUser, Color, Extension, Palette, Reference, SectorBuffer,
 		SectorCache, SectorCacheAccess, Shape, User, UserCount, VecShape, color::replace_palette,
-	}, database::{DbResult, entities::*},
+	}, database::{DbResult, entities::*}, DatabaseError,
 };
 
 use super::sector_cache::AsyncWrite;
@@ -657,7 +657,7 @@ impl Board {
 		position: u64,
 		color: u8,
 		connection: &Connection,
-	) -> Result<placement::Model, PlaceError> {
+	) -> Result<placement::Model, DatabaseError<PlaceError>> {
 		// TODO: I hate most things about how this is written. Redo it and/or move
 		// stuff.
 
@@ -668,7 +668,7 @@ impl Board {
 			.ok_or(PlaceError::OutOfBounds)?;
 
 		if !self.info.palette.contains_key(&(color as u32)) {
-			return Err(PlaceError::InvalidColor);
+			return Err(PlaceError::InvalidColor.into());
 		}
 		
 		let mut sector = self
@@ -687,16 +687,15 @@ impl Board {
 		}?;
 
 		if sector.colors[sector_offset] == color {
-			return Err(PlaceError::NoOp);
+			return Err(PlaceError::NoOp.into());
 		}
 
 		let timestamp = self.current_timestamp();
-		let cooldown_info = self
-			.user_cooldown_info(user, connection).await
-			.unwrap(); // TODO: bad unwrap >:(
+		let cooldown_info = self.user_cooldown_info(user, connection).await
+			.map_err(DatabaseError::DbErr)?;
 
 		if cooldown_info.pixels_available == 0 {
-			return Err(PlaceError::Cooldown);
+			return Err(PlaceError::Cooldown.into());
 		}
 
 		let new_placement = placement::Entity::insert(
@@ -740,7 +739,7 @@ impl Board {
 		if let Some(user_id) = user.id.clone() {
 			let cooldown_info = self
 				.user_cooldown_info(user, connection).await
-				.unwrap(); // TODO: another bad unwrap >>>:(
+				.map_err(DatabaseError::DbErr)?;
 
 			self.connections
 				.set_user_cooldown(user_id, cooldown_info);

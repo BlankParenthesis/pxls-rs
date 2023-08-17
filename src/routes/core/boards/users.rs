@@ -15,8 +15,10 @@ pub fn get(
 		.and(database::connection(database_pool))
 		.then(|board: PassableBoard, _user, connection: Arc<Connection>| async move {
 			let board = board.read().await;
-			let board = board.as_ref().unwrap();
-			// TODO: bad unwrap?
-			json(&board.user_count(connection.as_ref()).await.unwrap()).into_response()
+			let board = board.as_ref().expect("Board went missing when getting user count");
+			match board.user_count(connection.as_ref()).await {
+				Ok(user_count) => json(&user_count).into_response(),
+				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+			}
 		})
 }
