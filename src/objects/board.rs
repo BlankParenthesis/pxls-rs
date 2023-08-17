@@ -768,12 +768,12 @@ impl Board {
 		]);
 
 		let compare = if reverse {
-			Expr::gt(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
+			Expr::lt(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
 		} else {
-			Expr::lte(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
+			Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
 		};
 
-		let order = if reverse { Order::Asc } else { Order::Desc };
+		let order = if reverse { Order::Desc } else { Order::Asc };
 
 		placement::Entity::find()
 			.filter(placement::Column::Board.eq(self.id))
