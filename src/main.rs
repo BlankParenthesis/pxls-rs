@@ -172,7 +172,13 @@ async fn main() {
 		.and(routes.clone())
 		.with(warp::compression::gzip());
 
-	warp::serve(gzip_routes.or(routes))
-		.run(([127, 0, 0, 1], CONFIG.port))
-		.await;
+	let binding = ([0, 0, 0, 0], CONFIG.port);
+	let exit_signal = async {
+		tokio::signal::ctrl_c().await.expect("ctrl+c interrupt error");
+	};
+
+	let (_, server) = warp::serve(gzip_routes.or(routes))
+		.bind_with_graceful_shutdown(binding, exit_signal);
+
+	server.await
 }
