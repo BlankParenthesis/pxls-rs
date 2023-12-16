@@ -6,6 +6,7 @@ use sea_orm::{TransactionTrait, ConnectionTrait};
 
 use tokio::sync::*;
 
+use crate::DatabaseError;
 use crate::{
 	database::DbResult,
 	objects::{BoardSector, SectorBuffer},
@@ -13,20 +14,24 @@ use crate::{
 
 #[async_trait]
 pub trait AsyncRead {
+	type Error;
+
 	async fn read(
 		&mut self,
 		output: &mut [u8],
-	) -> std::result::Result<usize, Error>;
+	) -> std::result::Result<usize, Self::Error>;
 }
 
 #[async_trait]
 pub trait AsyncWrite {
+	type Error;
+
 	async fn write(
 		&mut self,
 		input: &[u8],
-	) -> std::result::Result<usize, std::io::Error>;
+	) -> std::result::Result<usize, Self::Error>;
 
-	async fn flush(&mut self) -> std::result::Result<(), std::io::Error>;
+	async fn flush(&mut self) -> std::result::Result<(), Self::Error>;
 }
 
 pub struct SectorCache {
@@ -101,24 +106,23 @@ impl SectorCache {
 		&self,
 		sector_index: usize,
 		connection: &Connection,
-	) -> Option<RwLockReadGuard<BoardSector>> {
+	) -> DbResult<Option<RwLockReadGuard<BoardSector>>> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.read().await;
 			if option.is_some() {
-				Some(RwLockReadGuard::map(option, |o| o.as_ref().unwrap()))
+				Ok(Some(RwLockReadGuard::map(option, |o| o.as_ref().unwrap())))
 			} else {
 				drop(option);
 
-				let sector = self.fill_sector(sector_index, connection)
-					.await.unwrap();
+				let sector = self.fill_sector(sector_index, connection).await?;
 
-				Some(RwLockReadGuard::map(
+				Ok(Some(RwLockReadGuard::map(
 					RwLockWriteGuard::downgrade(sector),
 					|o| o.as_ref().unwrap(),
-				))
+				)))
 			}
 		} else {
-			None
+			Ok(None)
 		}
 	}
 
@@ -227,10 +231,12 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> Seek for SectorCacheAcc
 
 #[async_trait]
 impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncRead for SectorCacheAccess<'l, Connection> {
+	type Error = DatabaseError<std::io::Error>;
+
 	async fn read(
 		&mut self,
 		mut output: &mut [u8],
-	) -> std::result::Result<usize, Error> {
+	) -> std::result::Result<usize, Self::Error> {
 		let mut written = 0;
 		let total_size = self.len();
 		let sector_size = self.sector_size();
@@ -240,10 +246,10 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncRead for SectorCac
 
 			let offset = self.cursor % sector_size;
 
-			let sector = self
-				.sectors
-				.read_sector(sector_index, self.connection)
-				.await.unwrap();
+			let sector = self.sectors
+				.read_sector(sector_index, self.connection).await
+				.map_err(DatabaseError::DbErr)?
+				.unwrap();
 
 			let mut buf = &match self.buffer {
 				SectorBuffer::Colors => &sector.colors,
@@ -269,16 +275,19 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncRead for SectorCac
 	
 #[async_trait]
 impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorCacheAccess<'l, Connection> {
+	type Error = DatabaseError<std::io::Error>;
+
 	async fn write(
 		&mut self,
 		mut input: &[u8],
-	) -> std::result::Result<usize, std::io::Error> {
+	) -> std::result::Result<usize, Self::Error> {
 		let total_size = self.len();
 		let sector_size = self.sector_size();
 
 		let mut written = 0;
 
-		let transaction = self.connection.begin().await.unwrap(); // TODO: bad unwrap
+		let transaction = self.connection.begin().await
+			.map_err(DatabaseError::DbErr)?;
 
 		while !input.is_empty() && (0..total_size).contains(&self.cursor) {
 			let sector_index = self.cursor / sector_size;
@@ -298,7 +307,7 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorCa
 				SectorBuffer::Mask => &mut sector.mask,
 			}[offset..];
 
-			let write_len: usize = input.read(buf).unwrap();
+			let write_len: usize = input.read(buf)?;
 
 			if write_len == 0 {
 				break;
@@ -307,7 +316,8 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorCa
 			written += write_len;
 			self.cursor += write_len;
 
-			sector.save(&transaction, Some(&self.buffer)).await.unwrap(); // TODO: bad unwrap
+			sector.save(&transaction, Some(&self.buffer)).await
+				.map_err(DatabaseError::DbErr)?;
 
 			if self.buffer == SectorBuffer::Initial {
 				drop(sector);
@@ -315,11 +325,12 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorCa
 			}
 		}
 
-		transaction.commit().await.unwrap(); // TODO: bad unwrap
-		Ok(written)
+		transaction.commit().await
+			.map(|_| written)
+			.map_err(DatabaseError::DbErr)
 	}
 
-	async fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
+	async fn flush(&mut self) -> std::result::Result<(), Self::Error> {
 		Ok(())
 	}
 }

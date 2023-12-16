@@ -6,12 +6,13 @@ use std::{
 };
 
 use rand::{self, Rng};
+use thiserror::Error;
 
 use crate::objects::sector_cache::{AsyncRead, Len};
 
 use super::*;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum RangeIndexError {
 	UnknownUnit,
 	TooLarge(usize),
@@ -81,22 +82,42 @@ struct DataRange {
 	range: OpsRange<usize>,
 }
 
-async fn data_ranges<D>(
+#[derive(Error, Debug)]
+enum RangeOrReadError<E> {
+    #[error(transparent)]
+	RangeErr(RangeIndexError),
+    #[error(transparent)]
+	ReadErr(#[from] E),
+}
+
+impl<E: Send> Reply for RangeOrReadError<E> {
+	fn into_response(self) -> reply::Response {
+		match self {
+			RangeOrReadError::RangeErr(e) => e.into_response(),
+			RangeOrReadError::ReadErr(_) => Response::builder()
+				.status(StatusCode::INTERNAL_SERVER_ERROR)
+				.body("".into())
+				.unwrap(),
+		}
+	}
+}
+
+async fn data_ranges<D, E>(
 	data: &mut D,
 	unit: &str,
 	ranges: &[HttpRange],
-) -> Result<Vec<DataRange>, RangeIndexError>
+) -> Result<Vec<DataRange>, RangeOrReadError<E>>
 where
-	D: AsyncRead + Seek + Len,
+	D: AsyncRead<Error = E> + Seek + Len,
 {
 	if !unit.eq("bytes") {
-		return Err(RangeIndexError::UnknownUnit);
+		return Err(RangeOrReadError::RangeErr(RangeIndexError::UnknownUnit));
 	}
 
-	let mut ranges = ranges
-		.iter()
+	let mut ranges = ranges.iter()
 		.map(|http_range| http_range.with_length(data.len()))
-		.collect::<Result<Vec<_>, _>>()?;
+		.collect::<Result<Vec<_>, _>>()
+		.map_err(RangeOrReadError::RangeErr)?;
 
 	ranges.sort_by_key(|range| range.start);
 
@@ -135,7 +156,7 @@ where
 		.unwrap();
 	
 		// TODO: assert correct read_size
-		let read_size = data.read(&mut subdata).await.unwrap(); // TODO: bad unwrap
+		let read_size = data.read(&mut subdata).await?;
 
 		ranges.push(DataRange {
 			data: subdata,
@@ -272,12 +293,13 @@ impl TryFrom<&str> for Range {
 }
 
 impl Range {
-	pub async fn respond_with<D>(
+	pub async fn respond_with<D, E>(
 		&self,
 		data: &mut D,
 	) -> reply::Response
 	where
-		D: AsyncRead + Seek + Len,
+		D: AsyncRead<Error = E> + Seek + Len,
+		E: Send,
 	{
 		match self {
 			Self::Multi { unit, ranges } => {
@@ -295,7 +317,7 @@ impl Range {
 							.body(merged.into())
 							.unwrap()
 					},
-					Err(error) => error.into_response(),
+					Err(e) => e.into_response(),
 				}
 			},
 			Self::Single { unit, range } => {
@@ -320,7 +342,13 @@ impl Range {
 						.unwrap();
 
 						// TODO: assert correct read_size
-						let read_size = data.read(&mut buffer).await.unwrap(); // TODO: bad unwrap
+						let read_size = match data.read(&mut buffer).await {
+							Ok(size) => size,
+							Err(_) => return Response::builder()
+								.status(StatusCode::INTERNAL_SERVER_ERROR)
+								.body("".into())
+								.unwrap(),
+						};
 
 						let mut response = buffer.into_response();
 						response = reply::with_status(response, StatusCode::PARTIAL_CONTENT)
@@ -347,7 +375,13 @@ impl Range {
 				let mut buffer = vec![0; length];
 
 				// TODO: assert correct read_size
-				let read_size = data.read(&mut buffer).await.unwrap(); // TODO: bad unwrap
+				let read_size = match data.read(&mut buffer).await {
+					Ok(size) => size,
+					Err(_) => return Response::builder()
+						.status(StatusCode::INTERNAL_SERVER_ERROR)
+						.body("".into())
+						.unwrap(),
+				};
 
 				Response::builder()
 					.header(header::CONTENT_TYPE, "application/octet-stream")
