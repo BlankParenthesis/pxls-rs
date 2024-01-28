@@ -870,37 +870,40 @@ impl Board {
 		placement: Option<&placement::Model>,
 		connection: &Connection,
 	) -> DbResult<Vec<SystemTime>> {
-		// this is pretty ugly
-		// TODO: generalize for more cooldown variables
-		let (activity, density) = if let Some(placement) = placement {
-			(
-				self.user_count_for_time(placement.timestamp as u32, connection).await?.active,
-				self.pixel_density_at_time(
-					placement.position as u64,
-					placement.timestamp as u32,
-					connection,
-				).await?,
-			)
+		let parameters = if let Some(placement) = placement {
+			let activity = self.user_count_for_time(
+				placement.timestamp as u32,
+				connection
+			).await?.active;
+
+			let density = self.pixel_density_at_time(
+				placement.position as u64,
+				placement.timestamp as u32,
+				connection,
+			).await?;
+
+			let timestamp = placement.timestamp as u32;
+			
+			(activity, density, timestamp)
 		} else {
-			(0, 0)
+			(0, 0, 0)
 		};
 
-		let board_time = self.info.created_at;
+		let (activity, density, timestamp) = parameters;
+
+		let base_time = self.info.created_at + timestamp as u64;
+		let base_time = Duration::from_secs(base_time);
+		let max_pixels = self.info.max_pixels_available;
+		let max_pixels = usize::try_from(max_pixels).unwrap();
+
+		const COOLDOWN: Duration = Duration::from_secs(30);
 
 		// TODO: proper cooldown
-		Ok(std::iter::repeat(30)
+		Ok(std::iter::repeat(COOLDOWN)
+			.take(max_pixels)
 			.enumerate()
-			.map(|(i, c)| u32::try_from((i + 1) * c).unwrap())
-			.zip(std::iter::repeat(
-				placement
-					.map(|p| p.timestamp as u32)
-					.unwrap_or(0),
-			))
-			.map(|(a, b)| a + b)
-			.take(usize::try_from(self.info.max_pixels_available).unwrap())
-			.map(|offset| board_time + offset as u64)
-			.map(Duration::from_secs)
-			.map(|offset| UNIX_EPOCH + offset)
+			.map(|(i, c)| c * (i + 1) as u32)
+			.map(|cooldown| UNIX_EPOCH + base_time + cooldown)
 			.collect())
 	}
 

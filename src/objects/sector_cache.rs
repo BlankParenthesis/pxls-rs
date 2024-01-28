@@ -57,6 +57,7 @@ impl SectorCache {
 		}
 	}
 
+	// TODO: maybe a better name? this fills the cache entry, not the sector itself
 	async fn fill_sector<Connection: ConnectionTrait>(
 		&self,
 		sector_index: usize,
@@ -102,6 +103,7 @@ impl SectorCache {
 		option.take()
 	}
 
+	// TODO: rename to get_sector for consistency
 	pub async fn read_sector<Connection: ConnectionTrait>(
 		&self,
 		sector_index: usize,
@@ -126,6 +128,7 @@ impl SectorCache {
 		}
 	}
 
+	// TODO: rename to get_sector_mut for consistency
 	pub async fn write_sector<Connection: ConnectionTrait>(
 		&self,
 		sector_index: usize,

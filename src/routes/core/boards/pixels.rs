@@ -123,8 +123,8 @@ pub fn post(
 			let board = board.write().await;
 			let board = board.as_ref().expect("Board went missing when creating a pixel");
 			let place_attempt = board.try_place(
-				// TODO: maybe accept option but make sure not to allow undos etc for anon
-				// users
+				// TODO: maybe accept option but make sure not to allow
+				// undos etc for anon users
 				&user,
 				position,
 				placement.color,

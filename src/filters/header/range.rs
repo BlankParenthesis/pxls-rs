@@ -219,6 +219,7 @@ fn merge_ranges(
 	joined
 }
 
+/// rfc9110 section 14
 pub enum Range {
 	Multi {
 		unit: String,
