@@ -17,8 +17,8 @@ use warp::ws;
 
 use crate::{
 	access::permissions::Permission,
-	authentication::openid::ValidationError,
-	objects::{packet, AuthedUser, Board, User},
+	authentication::{openid::ValidationError, self},
+	objects::{packet, AuthedUser, Board},
 };
 
 #[derive(Debug, EnumSetType, Enum, Deserialize, Serialize)]
@@ -118,7 +118,7 @@ impl UnauthedSocket {
 
 		let auth_attempt = tokio::select! {
 			_ = timeout => Err(AuthFailure::Timeout),
-			socket = socket.auth(&mut ws_receiver) => socket,
+			socket = socket.authenticate_socket(&mut ws_receiver) => socket,
 		};
 
 		if let Ok(socket) = auth_attempt {
@@ -128,14 +128,14 @@ impl UnauthedSocket {
 			if let Some(board) = board.upgrade() {
 				let mut board = board.write().await;
 				if let Some(ref mut board) = *board {
-					board.insert_socket(Arc::clone(&socket), connection.as_ref()).await
-						.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
+					board.insert_socket(
+						Arc::clone(&socket),
+						connection.as_ref(),
+					).await.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
 				}
 			}
 
-			socket
-				.handle_packets(&mut ws_receiver)
-				.await;
+			socket.handle_packets(&mut ws_receiver).await;
 
 			// remove socket
 			if let Some(board) = board.upgrade() {
@@ -147,14 +147,42 @@ impl UnauthedSocket {
 		}
 	}
 
-	async fn auth(
+	fn authorize_user(
+		&self,
+		authed_user: AuthedUser,
+	) -> Result<AuthedUser, AuthFailure> {
+		let actual_user = authed_user.user().unwrap_or_default();
+
+		let has_permission = self.extensions.iter()
+			.map(Permission::from)
+			.all(|permission| {
+				actual_user.permissions.contains(&permission)
+			});
+
+		if has_permission {
+			Ok(authed_user)
+		} else {
+			Err(AuthFailure::Unauthorized)
+		}
+	}
+
+	async fn authenticate_user(
+		token: Option<String>,
+	) -> Result<AuthedUser, AuthFailure> {
+		if let Some(token) = token {
+			authentication::openid::validate_token(&token).await
+				.map(AuthedUser::from)
+				.map_err(AuthFailure::ValidationError)
+		} else {
+			Ok(AuthedUser::None)
+		}
+	}
+
+	async fn authenticate_socket(
 		self,
 		receiver: &mut SplitStream<ws::WebSocket>,
 	) -> Result<AuthedSocket, AuthFailure> {
-		if !self
-			.extensions
-			.contains(Extension::Authentication)
-		{
+		if !self.extensions.contains(Extension::Authentication) {
 			return Ok(AuthedSocket {
 				uuid: Uuid::new_v4(),
 				sender: self.sender,
@@ -164,44 +192,17 @@ impl UnauthedSocket {
 		}
 
 		while let Some(Ok(msg)) = receiver.receive().await {
+			use packet::client::Packet;
 			match msg {
-				Message::Packet(packet::client::Packet::Authenticate { token }) => {
-					let user = if let Some(token) = token {
-						crate::authentication::openid::validate_token(&token)
-							.await
-							.map(AuthedUser::from)
-					} else {
-						Ok(AuthedUser::None)
-					};
-
-					return user
-						.map_err(AuthFailure::ValidationError)
-						.and_then(|user| {
-							let default_user = User::default();
-							let actual_user = Option::<&User>::from(&user)
-								.unwrap_or(&default_user);
-
-							let has_permission = self
-								.extensions
-								.iter()
-								.map(Permission::from)
-								.all(|permission| {
-									actual_user
-										.permissions
-										.contains(&permission)
-								});
-
-							if has_permission {
-								Ok(AuthedSocket {
-									uuid: Uuid::new_v4(),
-									sender: self.sender,
-									extensions: self.extensions,
-									user: RwLock::new(user),
-								})
-							} else {
-								Err(AuthFailure::Unauthorized)
-							}
-						});
+				Message::Packet(Packet::Authenticate { token }) => {
+					let user = UnauthedSocket::authenticate_user(token).await
+						.and_then(|user| self.authorize_user(user));
+					return user.map(|user| AuthedSocket {
+						uuid: Uuid::new_v4(),
+						sender: self.sender,
+						extensions: self.extensions,
+						user: RwLock::new(user),
+					})
 				},
 				Message::Packet(_) => return Err(AuthFailure::InvalidMessage),
 				Message::Invalid => return Err(AuthFailure::InvalidMessage),
@@ -247,7 +248,8 @@ impl AuthedSocket {
 		&self,
 		message: &packet::server::Packet,
 	) {
-		let message = ws::Message::text(serde_json::to_string(message).unwrap());
+		let content = serde_json::to_string(message).unwrap();
+		let message = ws::Message::text(content);
 
 		if self.auth_valid().await {
 			self.sender.send(Ok(message));
@@ -271,40 +273,37 @@ impl AuthedSocket {
 		self.sender.send(Ok(ws::Message::close()));
 	}
 
+	async fn reauthenticate(&self, token: Option<String>) {
+		if self.extensions.contains(Extension::Authentication) {
+			match UnauthedSocket::authenticate_user(token).await {
+				Ok(user) => {
+					let mut current_user = self.user.write().await;
+					// NOTE: AuthedUser::eq tests only the subject
+					// and not the expiry
+					if *current_user == user {
+						*current_user = user;
+					} else {
+						self.close();
+					}
+				},
+				Err(_) => {
+					self.close();
+				},
+			}
+		} else {
+			self.close();
+		}
+	} 
+
 	async fn handle_packets(
 		&self,
 		receiver: &mut SplitStream<ws::WebSocket>,
 	) {
 		while let Some(Ok(msg)) = receiver.receive().await {
+			use packet::client::Packet;
 			match msg {
-				Message::Packet(packet::client::Packet::Authenticate { token }) => {
-					if self.extensions.contains(Extension::Authentication) {
-						let user = if let Some(token) = token {
-							crate::authentication::openid::validate_token(&token)
-								.await
-								.map(AuthedUser::from)
-						} else {
-							Ok(AuthedUser::None)
-						};
-
-						match user {
-							Ok(user) => {
-								let mut current_user = self.user.write().await;
-								// NOTE: AuthedUser::eq tests only the subject
-								// and not the expiry
-								if *current_user == user {
-									*current_user = user;
-								} else {
-									self.close();
-								}
-							},
-							Err(_) => {
-								self.close();
-							},
-						}
-					} else {
-						self.close();
-					}
+				Message::Packet(Packet::Authenticate { token }) => {
+					self.reauthenticate(token).await;
 				},
 				Message::Invalid => {
 					self.close();

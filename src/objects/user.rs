@@ -144,3 +144,9 @@ impl Hash for AuthedUser {
 		Option::<&User>::from(self).hash(state);
 	}
 }
+
+impl AuthedUser {
+	pub fn user(&self) -> Option<&User> {
+		Option::<&User>::from(self)
+	}
+}
