@@ -64,7 +64,7 @@ impl HttpRange {
 		length: usize,
 	) -> Result<OpsRange<usize>, RangeIndexError> {
 		let range = match self {
-			Self::FromEndToLast(from_end) => length - from_end..length,
+			Self::FromEndToLast(from_end) => (length - from_end)..length,
 			Self::FromStartToLast(range) => range.start..length,
 			Self::FromStartToEnd(range) => range.clone(),
 		};
@@ -80,6 +80,7 @@ impl HttpRange {
 struct DataRange {
 	data: Vec<u8>,
 	range: OpsRange<usize>,
+	length: usize,
 }
 
 #[derive(Error, Debug)]
@@ -114,8 +115,10 @@ where
 		return Err(RangeOrReadError::RangeErr(RangeIndexError::UnknownUnit));
 	}
 
+	let length = data.len();
+
 	let mut ranges = ranges.iter()
-		.map(|http_range| http_range.with_length(data.len()))
+		.map(|http_range| http_range.with_length(length))
 		.collect::<Result<Vec<_>, _>>()
 		.map_err(RangeOrReadError::RangeErr)?;
 
@@ -130,7 +133,7 @@ where
 	let mut efficient_ranges = vec![iter.next().unwrap()];
 
 	for range in iter {
-		let mut current_range = efficient_ranges.last_mut().unwrap();
+		let current_range = efficient_ranges.last_mut().unwrap();
 		let gap = range.start.saturating_sub(current_range.end);
 
 		if gap < inbetween_threshold {
@@ -161,6 +164,7 @@ where
 		ranges.push(DataRange {
 			data: subdata,
 			range,
+			length
 		})
 	}
 
@@ -183,7 +187,7 @@ fn choose_boundary(datas: &[DataRange]) -> String {
 	// NOTE: this is probably not worth the compute cost
 	while datas
 		.iter()
-		.any(|DataRange { data, range: _ }| {
+		.any(|DataRange { data, .. }| {
 			data.windows(boundary.len())
 				.any(|d| d == boundary.as_bytes())
 		}) {
@@ -199,14 +203,14 @@ fn merge_ranges(
 ) -> Vec<u8> {
 	let mut joined = Vec::new();
 
-	for DataRange { data, range } in datas {
+	for DataRange { data, range, length } in datas {
 		joined.extend_from_slice(
 			format!(
 				"{}\r\n\
 				content-type: application/octet-stream\r\n\
 				content-range: bytes {}-{}/{}\r\n\r\n",
 				boundary,
-				range.start, range.end, data.len(), // FIXME: data.len() is probably wrong (shouldn't it be the logical size of the board?)
+				range.start, range.end, length,
 			)
 			.as_bytes(),
 		);
@@ -357,7 +361,7 @@ impl Range {
 								.into_response(),
 						};
 
-						let range = format!("bytes {}-{}/{}", range.start, range.end, length);
+						let range = format!("bytes {}-{}/{}", range.start, range.end, data.len());
 
 						Response::builder()
 							.status(StatusCode::PARTIAL_CONTENT)
