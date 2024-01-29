@@ -28,7 +28,7 @@ use crate::{
 	}, database::{DbResult, entities::*}, DatabaseError,
 };
 
-use super::sector_cache::AsyncWrite;
+use super::{sector_cache::AsyncWrite, packet::server::BoardDataCombination};
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -218,12 +218,14 @@ impl UserConnections {
 pub struct Connections {
 	by_uid: HashMap<String, Arc<RwLock<UserConnections>>>,
 	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
+	// TODO: by board data type
+	by_boarddata: EnumMap<BoardDataCombination, HashSet<Arc<AuthedSocket>>>,
 }
 
 impl Connections {
 	pub async fn insert(
 		&mut self,
-		socket: Arc<AuthedSocket>,
+		socket: &Arc<AuthedSocket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
 		let user = socket.user.read().await;
@@ -231,9 +233,9 @@ impl Connections {
 			if let Some(ref id) = user.id {
 				let entry = self.by_uid.entry(id.clone());
 				let connections = match entry {
-					Entry::Vacant(entry) =>{
+					Entry::Vacant(entry) => {
 						let new_connections = UserConnections::new(
-							Arc::clone(&socket),
+							Arc::clone(socket),
 							// SAFETY: this is only None if autheduser is None
 							cooldown_info.unwrap(),
 						).await;
@@ -243,18 +245,21 @@ impl Connections {
 					Entry::Occupied(entry) => Arc::clone(entry.get()),
 				};
 
-				connections.write().await.insert(Arc::clone(&socket));
+				connections.write().await.insert(Arc::clone(socket));
 			}
 		}
 
 		for extension in socket.extensions {
-			self.by_extension[extension].insert(Arc::clone(&socket));
+			self.by_extension[extension].insert(Arc::clone(socket));
 		}
+
+		let combination = BoardDataCombination::from(socket.extensions);
+		self.by_boarddata[combination].insert(Arc::clone(socket));
 	}
 
 	pub async fn remove(
 		&mut self,
-		socket: Arc<AuthedSocket>,
+		socket: &Arc<AuthedSocket>,
 	) {
 		let user = socket.user.read().await;
 		if let AuthedUser::Authed { user, .. } = &*user {
@@ -262,7 +267,7 @@ impl Connections {
 				let connections = self.by_uid.get(id).unwrap();
 				let mut connections = connections.write().await;
 
-				connections.remove(Arc::clone(&socket));
+				connections.remove(Arc::clone(socket));
 				if connections.is_empty() {
 					connections.cleanup();
 					drop(connections);
@@ -272,8 +277,11 @@ impl Connections {
 		}
 
 		for extension in socket.extensions {
-			self.by_extension[extension].remove(&socket);
+			self.by_extension[extension].remove(socket);
 		}
+
+		let combination = BoardDataCombination::from(socket.extensions);
+		self.by_boarddata[combination].remove(socket);
 	}
 
 	pub async fn send(
@@ -283,6 +291,22 @@ impl Connections {
 		let extension = Extension::from(&packet);
 		for connection in self.by_extension[extension].iter() {
 			connection.send(&packet).await;
+		}
+	}
+
+	pub async fn send_boarddata(
+		&self,
+		data: packet::server::BoardDataBuilder,
+	) {
+		for (combination, data) in data.build_combinations() {
+			let packet = packet::server::Packet::BoardUpdate {
+				info: None,
+				data: Some(data),
+			};
+
+			for connection in self.by_boarddata[combination].iter() {
+				connection.send(&packet).await;
+			}
 		}
 	}
 
@@ -478,20 +502,15 @@ impl Board {
 			.write(&patch.data).await
 			.map_err(|_| "write error")?;
 
-		let packet = packet::server::Packet::BoardUpdate {
-			info: None,
-			data: Some(packet::server::BoardData {
-				colors: None,
-				timestamps: None,
-				initial: Some(vec![packet::server::Change {
-					position: u64::try_from(patch.start).unwrap(),
-					values: Vec::from(&*patch.data),
-				}]),
-				mask: None,
-			}),
+		let initial = packet::server::Change {
+			position: u64::try_from(patch.start).unwrap(),
+			values: Vec::from(&*patch.data),
 		};
+		
+		let data = packet::server::BoardData::builder()
+			.initial(vec![initial]);
 
-		self.connections.send(packet).await;
+		self.connections.send_boarddata(data).await;
 
 		Ok(())
 	}
@@ -513,20 +532,15 @@ impl Board {
 			.write(&patch.data).await
 			.map_err(|_| "write error")?;
 
-		let packet = packet::server::Packet::BoardUpdate {
-			info: None,
-			data: Some(packet::server::BoardData {
-				colors: None,
-				timestamps: None,
-				initial: None,
-				mask: Some(vec![packet::server::Change {
-					position: u64::try_from(patch.start).unwrap(),
-					values: Vec::from(&*patch.data),
-				}]),
-			}),
+		let mask = packet::server::Change {
+			position: u64::try_from(patch.start).unwrap(),
+			values: Vec::from(&*patch.data),
 		};
 
-		self.connections.send(packet).await;
+		let data = packet::server::BoardData::builder()
+			.mask(vec![mask]);
+
+		self.connections.send_boarddata(data).await;
 
 		Ok(())
 	}
@@ -722,23 +736,21 @@ impl Board {
 			.as_mut()
 			.put_u32_le(timestamp);
 
-		let packet = packet::server::Packet::BoardUpdate {
-			info: None,
-			data: Some(packet::server::BoardData {
-				colors: Some(vec![packet::server::Change {
-					position,
-					values: vec![color],
-				}]),
-				timestamps: Some(vec![packet::server::Change {
-					position,
-					values: vec![timestamp],
-				}]),
-				initial: None,
-				mask: None,
-			}),
+		let color = packet::server::Change {
+			position,
+			values: vec![color],
 		};
 
-		self.connections.send(packet).await;
+		let timestamp = packet::server::Change {
+			position,
+			values: vec![timestamp],
+		};
+
+		let data = packet::server::BoardData::builder()
+			.colors(vec![color])
+			.timestamps(vec![timestamp]);
+
+		self.connections.send_boarddata(data).await;
 
 		if let Some(user_id) = user.id.clone() {
 			let cooldown_info = self
@@ -1027,7 +1039,7 @@ impl Board {
 
 	pub async fn insert_socket<Connection: ConnectionTrait>(
 		&mut self,
-		socket: Arc<AuthedSocket>,
+		socket: &Arc<AuthedSocket>,
 		connection: &Connection,
 	) -> DbResult<()> {
 		let user = socket.user.read().await;
@@ -1043,7 +1055,7 @@ impl Board {
 			None
 		};
 
-		self.connections.insert(Arc::clone(&socket), cooldown_info).await;
+		self.connections.insert(socket, cooldown_info).await;
 		socket.send(&packet::server::Packet::Ready).await;
 
 		Ok(())
@@ -1051,7 +1063,7 @@ impl Board {
 
 	pub async fn remove_socket(
 		&mut self,
-		socket: Arc<AuthedSocket>,
+		socket: &Arc<AuthedSocket>,
 	) {
 		self.connections.remove(socket).await
 	}

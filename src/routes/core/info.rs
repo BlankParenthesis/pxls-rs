@@ -25,7 +25,12 @@ lazy_static! {
 		name: Some("unnamed-newpxls-rs"),
 		version: option_env!("CARGO_PKG_VERSION").filter(|s| !s.is_empty()),
 		source: option_env!("CARGO_PKG_REPOSITORY").filter(|s| !s.is_empty()),
-		extensions: &["authentication"],
+		extensions: &[
+			"authentication",
+			"board_timestamps",
+			"board_mask",
+			"board_initial",
+		],
 	};
 }
 

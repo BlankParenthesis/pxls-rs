@@ -108,23 +108,23 @@ async fn main() {
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::data::get_initial(
+		.or(routes::board_data_initial::boards::data::get_initial(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::data::get_mask(
+		.or(routes::board_data_mask::boards::data::get_mask(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::data::get_timestamps(
+		.or(routes::board_data_timestamps::boards::data::get_timestamps(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::data::patch_initial(
+		.or(routes::board_data_initial::boards::data::patch_initial(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::data::patch_mask(
+		.or(routes::board_data_mask::boards::data::patch_mask(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))

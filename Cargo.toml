@@ -36,3 +36,4 @@ uuid = { version = "1.4.1", features = ["v4"] }
 sea-orm = { version = "0.12.2", features = ["sqlx-postgres", "runtime-tokio"] }
 sea-orm-migration = { version = "0.12.2", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 thiserror = "1.0.47"
+itertools = "0.12.1"

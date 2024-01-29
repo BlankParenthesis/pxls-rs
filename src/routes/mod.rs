@@ -10,7 +10,6 @@ use warp::{
 use crate::{
 	access::permissions::{with_permission, Permission},
 	filters::{
-		body::patch,
 		header::{
 			authorization,
 			range::{self, Range},
@@ -22,3 +21,6 @@ use crate::{
 
 pub mod auth;
 pub mod core;
+pub mod board_data_initial;
+pub mod board_data_mask;
+pub mod board_data_timestamps;

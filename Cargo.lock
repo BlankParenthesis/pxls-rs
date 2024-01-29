@@ -1256,6 +1256,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1832,6 +1841,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-serde",
+ "itertools 0.12.1",
  "jsonwebkey",
  "jsonwebtoken",
  "lazy_static",
@@ -2575,7 +2585,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c12bc9199d1db8234678b7051747c07f517cdcf019262d1847b94ec8b1aee3e"
 dependencies = [
- "itertools",
+ "itertools 0.10.5",
  "nom",
  "unicode_categories",
 ]

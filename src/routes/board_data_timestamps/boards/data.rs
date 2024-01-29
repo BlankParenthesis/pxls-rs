@@ -1,14 +1,27 @@
-use super::*;
+use std::sync::Arc;
 use sea_orm::DatabaseConnection as Connection;
 
-pub fn get_colors(
+use warp::{
+	reject::Rejection,
+	reply::Reply,
+	Filter,
+};
+
+use crate::filters::header::{authorization, range::{self, Range}};
+use crate::filters::resource::{board, database};
+use crate::objects::*;
+use crate::BoardDataMap;
+use crate::filters::resource::board::PassableBoard;
+use crate::access::permissions::{with_permission, Permission};
+
+pub fn get_timestamps(
 	boards: BoardDataMap,
 	database_pool: Arc<Connection>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
-		.and(warp::path("colors"))
+		.and(warp::path("timestamps"))
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(
@@ -22,10 +35,10 @@ pub fn get_colors(
 		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
 			// TODO: content disposition
 			let board = board.read().await;
-			let mut colors_data = board.as_ref()
-				.expect("Board went missing when getting color data")
-				.read(SectorBuffer::Colors, connection.as_ref()).await;
-
-			range.respond_with(&mut colors_data).await
+			let mut timestamp_data = board.as_ref()
+				.expect("Board went missing when getting timestamp data")
+				.read(SectorBuffer::Timestamps, connection.as_ref()).await;
+				
+			range.respond_with(&mut timestamp_data).await
 		})
 }

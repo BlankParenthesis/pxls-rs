@@ -27,6 +27,9 @@ use crate::{
 pub enum Extension {
 	Core,
 	Authentication,
+	BoardTimestamps,
+	BoardMask,
+	BoardInitial,
 }
 
 impl From<Extension> for Permission {
@@ -34,6 +37,9 @@ impl From<Extension> for Permission {
 		match extension {
 			Extension::Core => Self::SocketCore,
 			Extension::Authentication => Self::SocketAuthentication,
+			Extension::BoardTimestamps => Self::SocketCore,
+			Extension::BoardMask => Self::SocketCore,
+			Extension::BoardInitial => Self::SocketCore,
 		}
 	}
 }
@@ -129,7 +135,7 @@ impl UnauthedSocket {
 				let mut board = board.write().await;
 				if let Some(ref mut board) = *board {
 					board.insert_socket(
-						Arc::clone(&socket),
+						&socket,
 						connection.as_ref(),
 					).await.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
 				}
@@ -141,7 +147,7 @@ impl UnauthedSocket {
 			if let Some(board) = board.upgrade() {
 				let mut board = board.write().await;
 				if let Some(ref mut board) = *board {
-					board.remove_socket(Arc::clone(&socket)).await;
+					board.remove_socket(&socket).await;
 				}
 			}
 		}
