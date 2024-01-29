@@ -206,7 +206,7 @@ fn merge_ranges(
 				content-type: application/octet-stream\r\n\
 				content-range: bytes {}-{}/{}\r\n\r\n",
 				boundary,
-				range.start, range.end, data.len(),
+				range.start, range.end, data.len(), // FIXME: data.len() is probably wrong (shouldn't it be the logical size of the board?)
 			)
 			.as_bytes(),
 		);
@@ -239,45 +239,11 @@ impl TryFrom<&str> for Range {
 		let (unit, range_data) = header
 			.split_once('=')
 			.ok_or(RangeParseError::MissingUnit)?;
+		
 		let unit = String::from(unit);
-
 		let mut ranges: Vec<HttpRange> = range_data
 			.split(',')
-			.map(|range| {
-				let tuple = range
-					.split_once('-')
-					.ok_or_else(|| RangeParseError::MissingHyphenMinus(String::from(range)))?;
-				let http_range = match tuple {
-					("", "") => Err(RangeParseError::RangeEmpty),
-					("", since_end) => {
-						since_end.parse()
-							.map(HttpRange::FromEndToLast)
-							.map_err(RangeParseError::ValueParseError)
-					},
-					(start, "") => {
-						start.parse()
-							.map(|start| HttpRange::FromStartToLast(start..))
-							.map_err(RangeParseError::ValueParseError)
-					},
-					(start, end) => {
-						start.parse()
-							.and_then(|start| {
-								end.parse()
-									.map(|end| HttpRange::FromStartToEnd(start..end))
-							})
-							.map_err(RangeParseError::ValueParseError)
-					},
-				}?;
-				if let HttpRange::FromStartToEnd(range) = &http_range {
-					if range.end < range.start {
-						Err(RangeParseError::Backwards)
-					} else {
-						Ok(http_range)
-					}
-				} else {
-					Ok(http_range)
-				}
-			})
+			.map(HttpRange::try_from)
 			.collect::<Result<_, _>>()?;
 
 		match ranges.len() {
@@ -289,6 +255,47 @@ impl TryFrom<&str> for Range {
 				})
 			},
 			_ => Ok(Self::Multi { unit, ranges }),
+		}
+	}
+}
+
+impl TryFrom<&str> for HttpRange {
+	type Error = RangeParseError;
+
+	fn try_from(range: &str) -> Result<Self, Self::Error> {
+		let tuple = range
+			.split_once('-')
+			.ok_or_else(|| RangeParseError::MissingHyphenMinus(String::from(range)))?;
+		let http_range = match tuple {
+			("", "") => Err(RangeParseError::RangeEmpty),
+			("", since_end) => {
+				since_end.parse()
+					.map(HttpRange::FromEndToLast)
+					.map_err(RangeParseError::ValueParseError)
+			},
+			(start, "") => {
+				start.parse()
+					.map(|start| HttpRange::FromStartToLast(start..))
+					.map_err(RangeParseError::ValueParseError)
+			},
+			(start, end) => {
+				start.parse()
+					.and_then(|start| {
+						end.parse()
+							.map(|end| HttpRange::FromStartToEnd(start..end))
+					})
+					.map_err(RangeParseError::ValueParseError)
+			},
+		}?;
+
+		if let HttpRange::FromStartToEnd(range) = &http_range {
+			if range.end < range.start {
+				Err(RangeParseError::Backwards)
+			} else {
+				Ok(http_range)
+			}
+		} else {
+			Ok(http_range)
 		}
 	}
 }
@@ -309,20 +316,19 @@ impl Range {
 						let boundary = choose_boundary(&datas);
 						let merged = merge_ranges(&datas, &boundary);
 
+						let content_type = format!("multipart/byteranges; boundary={}", boundary);
+
 						Response::builder()
 							.status(StatusCode::PARTIAL_CONTENT)
-							.header(
-								header::CONTENT_TYPE,
-								format!("multipart/byteranges; boundary={}", boundary),
-							)
-							.body(merged.into())
-							.unwrap()
+							.header(header::CONTENT_TYPE, content_type)
+							.body(merged)
+							.into_response()
 					},
 					Err(e) => e.into_response(),
 				}
 			},
 			Self::Single { unit, range } => {
-				let result = range
+				let validate_range = range
 					.with_length(data.len())
 					.and_then(|ranges| {
 						if unit.eq("bytes") {
@@ -332,7 +338,7 @@ impl Range {
 						}
 					});
 
-				match result {
+				match validate_range {
 					Ok(range) => {
 						let length = range.end - range.start;
 						let mut buffer = vec![0; length];
@@ -347,26 +353,18 @@ impl Range {
 							Ok(size) => size,
 							Err(_) => return Response::builder()
 								.status(StatusCode::INTERNAL_SERVER_ERROR)
-								.body("".into())
-								.unwrap(),
+								.body("")
+								.into_response(),
 						};
 
-						let mut response = buffer.into_response();
-						response = reply::with_status(response, StatusCode::PARTIAL_CONTENT)
-							.into_response();
-						response = reply::with_header(
-							response,
-							header::CONTENT_TYPE,
-							"application/octet-stream",
-						)
-						.into_response();
-						response = reply::with_header(
-							response,
-							header::CONTENT_TYPE,
-							format!("bytes {}-{}/{}", range.start, range.end, length),
-						)
-						.into_response();
-						response
+						let range = format!("bytes {}-{}/{}", range.start, range.end, length);
+
+						Response::builder()
+							.status(StatusCode::PARTIAL_CONTENT)
+							.header(header::CONTENT_TYPE, "application/octet-stream")
+							.header(header::CONTENT_RANGE, range)
+							.body(buffer)
+							.into_response()
 					},
 					Err(error) => error.into_response(),
 				}
@@ -387,8 +385,8 @@ impl Range {
 				Response::builder()
 					.header(header::CONTENT_TYPE, "application/octet-stream")
 					.header(header::ACCEPT_RANGES, "bytes")
-					.body(buffer.into())
-					.unwrap()
+					.body(buffer)
+					.into_response()
 			},
 		}
 	}
@@ -408,7 +406,8 @@ pub fn default() -> impl Filter<Extract = (Range,), Error = Infallible> + Copy {
 }
 
 pub fn range() -> impl Filter<Extract = (Range,), Error = Rejection> + Copy {
-	warp::header(header::RANGE.as_str()).and_then(|header: String| async move {
+	warp::header(header::RANGE.as_str())
+	.and_then(|header: String| async move {
 		Range::try_from(header.as_str())
 			.map_err(warp::reject::custom)
 	})
