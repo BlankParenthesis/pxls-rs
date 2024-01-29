@@ -19,6 +19,8 @@ pub enum DiscoveryError {
 impl From<DiscoveryError> for StatusCode {
 	fn from(error: DiscoveryError) -> Self {
 		match error {
+			// TODO: these might be the wrong errors?
+			// we're not really a proxy or a gateway (reverse proxy)
 			DiscoveryError::InvalidResponse => StatusCode::BAD_GATEWAY,
 			DiscoveryError::InvalidConfigResponse => StatusCode::BAD_GATEWAY,
 			DiscoveryError::ContactFailed => StatusCode::GATEWAY_TIMEOUT,
@@ -75,7 +77,7 @@ impl Discovery {
 					.map(|json| {
 						json.keys
 							.into_iter()
-							.filter_map(|k| serde_json::from_value(k).ok())
+							.filter_map(|k| serde_json::from_value(k).ok()) // TODO: this silently drops parsing errors on keys
 							.collect()
 					})
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)

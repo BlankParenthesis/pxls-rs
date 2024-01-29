@@ -168,6 +168,7 @@ async fn main() {
 
 	// Temporary fix for gzip until https://github.com/seanmonstar/warp/pull/513
 	// is merged
+	// Update: still waiting… progress doesn't look good
 	let gzip_routes = filters::header::accept_encoding::gzip()
 		.and(routes.clone())
 		.with(warp::compression::gzip());
