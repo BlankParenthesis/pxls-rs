@@ -1,8 +1,8 @@
 use std::{
-	collections::{HashMap, HashSet},
+	collections::{HashMap, HashSet, hash_map::Entry},
 	convert::TryFrom,
 	io::{Seek, SeekFrom},
-	sync::{Arc, RwLock, Weak},
+	sync::{Arc, Weak},
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -16,7 +16,7 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use sea_orm::{ConnectionTrait, Set, ActiveValue::NotSet, EntityTrait, ColumnTrait, QueryFilter, QueryOrder, Order, QuerySelect, sea_query::Expr, ModelTrait, PaginatorTrait, TransactionTrait};
 use serde::{Deserialize, Serialize};
-use tokio::time::Instant;
+use tokio::{time::Instant, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -80,10 +80,12 @@ struct UserConnections {
 }
 
 impl UserConnections {
-	fn new(
+	async fn new(
 		socket: Arc<AuthedSocket>,
 		cooldown_info: CooldownInfo,
 	) -> Arc<RwLock<Self>> {
+		// NOTE: AuthedSocket hashes as the uuid, which is never mutated
+		#[allow(clippy::mutable_key_type)]
 		let mut connections = HashSet::new();
 		connections.insert(socket);
 
@@ -92,7 +94,10 @@ impl UserConnections {
 			cooldown_timer: None,
 		}));
 
-		Self::set_cooldown_info(Arc::clone(&user_connections), cooldown_info);
+		Self::set_cooldown_info(
+			Arc::clone(&user_connections),
+			cooldown_info,
+		).await;
 
 		user_connections
 	}
@@ -122,7 +127,7 @@ impl UserConnections {
 		}
 	}
 
-	fn set_cooldown_info(
+	async fn set_cooldown_info(
 		connections: Arc<RwLock<Self>>,
 		cooldown_info: CooldownInfo,
 	) {
@@ -131,12 +136,10 @@ impl UserConnections {
 
 		let cloned_token = CancellationToken::clone(&new_token);
 
-		let mut connections = connections.write().unwrap();
+		let mut connections = connections.write().await;
 
-		if let Some(cancellable) = connections
-			.cooldown_timer
-			.replace(new_token)
-		{
+		let old_timer = connections.cooldown_timer.replace(new_token);
+		if let Some(cancellable) = old_timer {
 			cancellable.cancel();
 		}
 
@@ -152,7 +155,7 @@ impl UserConnections {
 				}),
 		};
 
-		connections.send(&packet);
+		connections.send(&packet).await;
 
 		tokio::task::spawn(async move {
 			tokio::select! {
@@ -162,17 +165,14 @@ impl UserConnections {
 		});
 	}
 
-	fn send(
+	async fn send(
 		&self,
 		packet: &packet::server::Packet,
 	) {
 		let extension = Extension::from(packet);
 		for connection in &self.connections {
-			if connection
-				.extensions
-				.contains(extension)
-			{
-				connection.send(packet);
+			if connection.extensions.contains(extension) {
+				connection.send(packet).await;
 			}
 		}
 	}
@@ -203,8 +203,8 @@ impl UserConnections {
 
 			match connections.upgrade() {
 				Some(connections) => {
-					let connections = connections.write().unwrap();
-					connections.send(&packet);
+					let connections = connections.write().await;
+					connections.send(&packet).await;
 				},
 				None => {
 					return;
@@ -229,17 +229,21 @@ impl Connections {
 		let user = socket.user.read().await;
 		if let AuthedUser::Authed { user, .. } = &*user {
 			if let Some(ref id) = user.id {
-				self.by_uid
-					.entry(id.clone())
-					.and_modify(|connections| {
-						connections
-							.write()
-							.unwrap()
-							.insert(Arc::clone(&socket))
-					})
-					.or_insert_with(|| {
-						UserConnections::new(Arc::clone(&socket), cooldown_info.unwrap())
-					});
+				let entry = self.by_uid.entry(id.clone());
+				let connections = match entry {
+					Entry::Vacant(entry) =>{
+						let new_connections = UserConnections::new(
+							Arc::clone(&socket),
+							// SAFETY: this is only None if autheduser is None
+							cooldown_info.unwrap(),
+						).await;
+						entry.insert(Arc::clone(&new_connections));
+						new_connections
+					},
+					Entry::Occupied(entry) => Arc::clone(entry.get()),
+				};
+
+				connections.write().await.insert(Arc::clone(&socket));
 			}
 		}
 
@@ -256,7 +260,7 @@ impl Connections {
 		if let AuthedUser::Authed { user, .. } = &*user {
 			if let Some(ref id) = user.id {
 				let connections = self.by_uid.get(id).unwrap();
-				let mut connections = connections.write().unwrap();
+				let mut connections = connections.write().await;
 
 				connections.remove(Arc::clone(&socket));
 				if connections.is_empty() {
@@ -272,36 +276,36 @@ impl Connections {
 		}
 	}
 
-	pub fn send(
+	pub async fn send(
 		&self,
 		packet: packet::server::Packet,
 	) {
 		let extension = Extension::from(&packet);
 		for connection in self.by_extension[extension].iter() {
-			connection.send(&packet);
+			connection.send(&packet).await;
 		}
 	}
 
-	pub fn send_to_user(
+	pub async fn send_to_user(
 		&self,
 		user_id: String,
 		packet: packet::server::Packet,
 	) {
 		if let Some(connections) = self.by_uid.get(&user_id) {
-			connections
-				.read()
-				.unwrap()
-				.send(&packet);
+			connections.read().await.send(&packet).await;
 		}
 	}
 
-	pub fn set_user_cooldown(
+	pub async fn set_user_cooldown(
 		&self,
 		user_id: String,
 		cooldown_info: CooldownInfo,
 	) {
 		if let Some(connections) = self.by_uid.get(&user_id) {
-			UserConnections::set_cooldown_info(Arc::clone(connections), cooldown_info);
+			UserConnections::set_cooldown_info(
+				Arc::clone(connections),
+				cooldown_info,
+			).await;
 		}
 	}
 
@@ -487,7 +491,7 @@ impl Board {
 			}),
 		};
 
-		self.connections.send(packet);
+		self.connections.send(packet).await;
 
 		Ok(())
 	}
@@ -522,7 +526,7 @@ impl Board {
 			}),
 		};
 
-		self.connections.send(packet);
+		self.connections.send(packet).await;
 
 		Ok(())
 	}
@@ -601,7 +605,7 @@ impl Board {
 			data: None,
 		};
 
-		self.connections.send(packet);
+		self.connections.send(packet).await;
 
 		Ok(())
 	}
@@ -734,15 +738,14 @@ impl Board {
 			}),
 		};
 
-		self.connections.send(packet);
+		self.connections.send(packet).await;
 
 		if let Some(user_id) = user.id.clone() {
 			let cooldown_info = self
 				.user_cooldown_info(user, connection).await
 				.map_err(DatabaseError::DbErr)?;
 
-			self.connections
-				.set_user_cooldown(user_id, cooldown_info);
+			self.connections.set_user_cooldown(user_id, cooldown_info).await;
 		}
 
 		Ok(new_placement)
