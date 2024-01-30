@@ -37,7 +37,7 @@ use super::connections::Connections;
 use super::color::*;
 use super::sector::*;
 use super::{
-	VecShape,
+	CachedVecShape,
 	SectorBuffer,
 	Shape,
 	User,
@@ -57,7 +57,7 @@ pub enum Order {
 pub struct BoardInfo {
 	name: String,
 	created_at: u64,
-	shape: VecShape,
+	shape: CachedVecShape,
 	palette: Palette,
 	max_pixels_available: u32,
 }
@@ -65,7 +65,7 @@ pub struct BoardInfo {
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPost {
 	name: String,
-	shape: VecShape,
+	shape: CachedVecShape,
 	palette: Palette,
 	max_pixels_available: u32,
 }
@@ -73,7 +73,7 @@ pub struct BoardInfoPost {
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPatch {
 	name: Option<String>,
-	shape: Option<VecShape>,
+	shape: Option<CachedVecShape>,
 	palette: Option<Palette>,
 	max_pixels_available: Option<u32>,
 }

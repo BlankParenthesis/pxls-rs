@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use serde::{Serialize, Deserialize};
+
 pub trait Shape {
 	fn sector_size(&self) -> usize;
 	fn sector_count(&self) -> usize;
@@ -35,8 +37,6 @@ pub trait Shape {
 
 pub type VecShape = Vec<Vec<usize>>;
 
-// TODO: StructShape (or something) which stores these values on new
-// rather than recomputing them.
 impl Shape for VecShape {
 	fn sector_size(&self) -> usize {
 		self.iter()
@@ -80,4 +80,58 @@ impl Shape for VecShape {
 			None
 		}
 	}
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedVecShape {
+	sector_size: usize,
+	sector_count: usize,
+	total_size: usize,
+	dimensions: usize,
+	shape: VecShape,
+}
+
+impl Shape for CachedVecShape {
+	fn sector_size(&self) -> usize { self.sector_size }
+	fn sector_count(&self) -> usize { self.sector_count }
+	fn total_size(&self) -> usize { self.total_size }
+	fn dimensions(&self) -> usize { self.dimensions }
+
+	fn transform(from: &Self, to: &Self, position: usize,) -> usize {
+		VecShape::transform(&from.shape, &to.shape, position)
+	}
+
+	fn to_local(&self, position: usize) -> Option<(usize, usize)> {
+		self.shape.to_local(position)
+	}
+}
+
+impl From<VecShape> for CachedVecShape {
+	fn from(value: VecShape) -> Self {
+		Self {
+			sector_size: value.sector_size(),
+			sector_count: value.sector_count(),
+			total_size: value.total_size(),
+			dimensions: value.dimensions(),
+			shape: value,
+		}
+	}
+}
+
+impl Serialize for CachedVecShape {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: serde::Serializer,
+	{
+		self.shape.serialize(serializer)
+	}
+}
+
+impl<'de> Deserialize<'de> for CachedVecShape {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+	{
+        VecShape::deserialize(deserializer).map(Self::from)
+    }
 }

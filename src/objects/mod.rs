@@ -19,7 +19,7 @@ pub use color::{Color, Palette};
 pub use paginated_list::{Page, PageToken, PaginationOptions};
 pub use placement::PlacementRequest;
 pub use reference::Reference;
-pub use shape::{Shape, VecShape};
+pub use shape::{Shape, CachedVecShape, VecShape};
 pub use socket::{AuthedSocket, Extension, UnauthedSocket};
 pub use user::{AuthedUser, User};
 pub use user_count::UserCount;

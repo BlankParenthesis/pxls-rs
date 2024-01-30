@@ -5,7 +5,7 @@ use itertools::Itertools;
 use enum_map::{Enum, EnumMap};
 use enumset::{EnumSet, EnumSetType};
 
-use crate::objects::{Extension, Palette, VecShape};
+use crate::objects::{Extension, Palette, CachedVecShape};
 
 pub mod server {
 	use super::*;
@@ -20,7 +20,7 @@ pub mod server {
 	#[derive(Serialize, Debug, Clone)]
 	pub struct BoardInfo {
 		pub name: Option<String>,
-		pub shape: Option<VecShape>,
+		pub shape: Option<CachedVecShape>,
 		pub palette: Option<Palette>,
 		pub max_pixels_available: Option<u32>,
 	}
