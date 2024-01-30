@@ -1,6 +1,7 @@
 use super::*;
 
 use sea_orm::DatabaseConnection as Connection;
+use crate::objects::board::Order;
 
 pub fn list(
 	boards: BoardDataMap,
@@ -27,7 +28,7 @@ pub fn list(
 				page.timestamp,
 				page.id,
 				limit,
-				true,
+				Order::Reverse,
 				connection.as_ref(),
 			).await;
 
@@ -41,7 +42,9 @@ pub fn list(
 				page.id,
 				// Limit is +1 to get the start of the next page as the last element.
 				// This is required for paging.
-				limit + 1, false, connection.as_ref()
+				limit + 1,
+				Order::Forward,
+				connection.as_ref()
 			).await;
 
 			let placements = match placements {

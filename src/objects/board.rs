@@ -9,7 +9,20 @@ use bytes::BufMut;
 use http::{StatusCode, Uri};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use sea_orm::{ConnectionTrait, Set, ActiveValue::NotSet, EntityTrait, ColumnTrait, QueryFilter, QueryOrder, Order, QuerySelect, sea_query::Expr, ModelTrait, PaginatorTrait, TransactionTrait};
+use sea_orm::{
+	ConnectionTrait,
+	Set,
+	ActiveValue::NotSet,
+	EntityTrait,
+	ColumnTrait,
+	QueryFilter,
+	QueryOrder,
+	QuerySelect,
+	sea_query::Expr,
+	ModelTrait,
+	PaginatorTrait,
+	TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -33,6 +46,12 @@ use super::{
 	Reference,
 	CooldownInfo,
 };
+
+#[derive(Debug, Clone, Copy)]
+pub enum Order {
+	Forward,
+	Reverse,
+}
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -338,8 +357,8 @@ impl Board {
 				placement::Column::Board.eq(self.id)
 					.and(placement::Column::UserId.eq(user.id.clone())),
 			)
-			.order_by(placement::Column::Timestamp, Order::Desc)
-			.order_by(placement::Column::Id, Order::Desc)
+			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
+			.order_by(placement::Column::Id, sea_orm::Order::Desc)
 			.one(connection).await?
 			.map(|placement| placement.timestamp as u32)
 			.unwrap_or(0))
@@ -444,7 +463,7 @@ impl Board {
 		timestamp: u32,
 		id: usize,
 		limit: usize,
-		reverse: bool,
+		order: Order,
 		connection: &Connection,
 	) -> DbResult<Vec<placement::Model>> {
 		let column_timestamp_id_pair = Expr::tuple([
@@ -457,13 +476,17 @@ impl Board {
 			(id as i32).into(),
 		]);
 
-		let compare = if reverse {
-			Expr::lt(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
-		} else {
-			Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair)
+		let compare_lhs = column_timestamp_id_pair.clone();
+		let compare_rhs = value_timestamp_id_pair;
+		let compare = match order {
+			Order::Forward => Expr::lt(compare_lhs, compare_rhs),
+			Order::Reverse => Expr::gte(compare_lhs, compare_rhs),
 		};
 
-		let order = if reverse { Order::Desc } else { Order::Asc };
+		let order = match order {
+			Order::Forward => sea_orm::Order::Asc,
+			Order::Reverse => sea_orm::Order::Desc,
+		};
 
 		placement::Entity::find()
 			.filter(placement::Column::Board.eq(self.id))
@@ -483,8 +506,8 @@ impl Board {
 				placement::Column::Board.eq(self.id)
 					.and(placement::Column::Position.eq(position as i64)),
 			)
-			.order_by(placement::Column::Timestamp, Order::Desc)
-			.order_by(placement::Column::Id, Order::Desc)
+			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
+			.order_by(placement::Column::Id, sea_orm::Order::Desc)
 			.one(connection).await
 	}
 
@@ -609,8 +632,8 @@ impl Board {
 				placement::Column::Board.eq(self.id)
 					.and(placement::Column::UserId.eq(user.id.clone())),
 			)
-			.order_by(placement::Column::Timestamp, Order::Desc)
-			.order_by(placement::Column::Id, Order::Desc)
+			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
+			.order_by(placement::Column::Id, sea_orm::Order::Desc)
 			.limit(Some(limit as u64))
 			.all(connection).await?
 			.into_iter()
