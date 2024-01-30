@@ -1,34 +1,38 @@
 use std::{
-	collections::{HashMap, HashSet, hash_map::Entry},
 	convert::TryFrom,
 	io::{Seek, SeekFrom},
-	sync::{Arc, Weak},
+	sync::Arc,
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use bytes::BufMut;
-use enum_map::EnumMap;
-use http::{
-	header::{HeaderName, HeaderValue},
-	StatusCode, Uri,
-};
+use http::{StatusCode, Uri};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use sea_orm::{ConnectionTrait, Set, ActiveValue::NotSet, EntityTrait, ColumnTrait, QueryFilter, QueryOrder, Order, QuerySelect, sea_query::Expr, ModelTrait, PaginatorTrait, TransactionTrait};
 use serde::{Deserialize, Serialize};
-use tokio::{time::Instant, sync::RwLock};
-use tokio_util::sync::CancellationToken;
 use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::{
 	filters::body::patch::BinaryPatch,
-	objects::{
-		packet, AuthedSocket, AuthedUser, Color, Extension, Palette, Reference, SectorBuffer,
-		SectorCache, SectorCacheAccess, Shape, User, UserCount, VecShape, color::replace_palette,
-	}, database::{DbResult, entities::*}, DatabaseError,
+	database::{DbResult, entities::*},
+	DatabaseError,
 };
 
-use super::{sector_cache::AsyncWrite, packet::server::BoardDataCombination};
+use super::packet;
+use super::connections::Connections;
+use super::color::*;
+use super::sector_cache::*;
+use super::{
+	VecShape,
+	SectorBuffer,
+	Shape,
+	User,
+	AuthedSocket,
+	UserCount,
+	Reference,
+	CooldownInfo,
+};
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
@@ -56,365 +60,13 @@ pub struct BoardInfoPatch {
 }
 
 impl From<BoardInfoPatch> for packet::server::BoardInfo {
-	fn from(
-		BoardInfoPatch {
-			name,
-			shape,
-			palette,
-			max_pixels_available,
-		}: BoardInfoPatch
-	) -> Self {
+	fn from(info: BoardInfoPatch) -> Self {
 		Self {
-			name,
-			shape,
-			palette,
-			max_pixels_available,
+			name: info.name,
+			shape: info.shape,
+			palette: info.palette,
+			max_pixels_available: info.max_pixels_available,
 		}
-	}
-}
-
-#[derive(Debug)]
-struct UserConnections {
-	connections: HashSet<Arc<AuthedSocket>>,
-	cooldown_timer: Option<CancellationToken>,
-}
-
-impl UserConnections {
-	async fn new(
-		socket: Arc<AuthedSocket>,
-		cooldown_info: CooldownInfo,
-	) -> Arc<RwLock<Self>> {
-		// NOTE: AuthedSocket hashes as the uuid, which is never mutated
-		#[allow(clippy::mutable_key_type)]
-		let mut connections = HashSet::new();
-		connections.insert(socket);
-
-		let user_connections = Arc::new(RwLock::new(Self {
-			connections,
-			cooldown_timer: None,
-		}));
-
-		Self::set_cooldown_info(
-			Arc::clone(&user_connections),
-			cooldown_info,
-		).await;
-
-		user_connections
-	}
-
-	fn insert(
-		&mut self,
-		socket: Arc<AuthedSocket>,
-	) {
-		self.connections.insert(socket);
-	}
-
-	fn remove(
-		&mut self,
-		socket: Arc<AuthedSocket>,
-	) {
-		self.connections.remove(&socket);
-	}
-
-	fn is_empty(&self) -> bool {
-		self.connections.is_empty()
-	}
-
-	fn cleanup(&mut self) {
-		assert!(self.is_empty());
-		if let Some(timer) = self.cooldown_timer.take() {
-			timer.cancel();
-		}
-	}
-
-	async fn set_cooldown_info(
-		connections: Arc<RwLock<Self>>,
-		cooldown_info: CooldownInfo,
-	) {
-		let weak = Arc::downgrade(&connections);
-		let new_token = CancellationToken::new();
-
-		let cloned_token = CancellationToken::clone(&new_token);
-
-		let mut connections = connections.write().await;
-
-		let old_timer = connections.cooldown_timer.replace(new_token);
-		if let Some(cancellable) = old_timer {
-			cancellable.cancel();
-		}
-
-		let packet = packet::server::Packet::PixelsAvailable {
-			count: u32::try_from(cooldown_info.pixels_available).unwrap(),
-			next: cooldown_info
-				.cooldown()
-				.map(|timestamp| {
-					timestamp
-						.duration_since(UNIX_EPOCH)
-						.unwrap()
-						.as_secs()
-				}),
-		};
-
-		connections.send(&packet).await;
-
-		tokio::task::spawn(async move {
-			tokio::select! {
-				_ = cloned_token.cancelled() => (),
-				_ = Self::cooldown_timer(weak, cooldown_info) => (),
-			}
-		});
-	}
-
-	async fn send(
-		&self,
-		packet: &packet::server::Packet,
-	) {
-		let extension = Extension::from(packet);
-		for connection in &self.connections {
-			if connection.extensions.contains(extension) {
-				connection.send(packet).await;
-			}
-		}
-	}
-
-	async fn cooldown_timer(
-		connections: Weak<RwLock<Self>>,
-		mut cooldown_info: CooldownInfo,
-	) {
-		let mut next = cooldown_info.next();
-		while let Some(time) = next {
-			let instant = Instant::now()
-				+ time
-					.duration_since(SystemTime::now())
-					.unwrap_or(Duration::ZERO);
-			let count = cooldown_info.pixels_available;
-			tokio::time::sleep_until(instant).await;
-
-			next = cooldown_info.next();
-
-			let packet = packet::server::Packet::PixelsAvailable {
-				count: u32::try_from(count).unwrap(),
-				next: next.map(|time| {
-					time.duration_since(UNIX_EPOCH)
-						.unwrap()
-						.as_secs()
-				}),
-			};
-
-			match connections.upgrade() {
-				Some(connections) => {
-					let connections = connections.write().await;
-					connections.send(&packet).await;
-				},
-				None => {
-					return;
-				},
-			}
-		}
-	}
-}
-
-#[derive(Debug, Default)]
-pub struct Connections {
-	by_uid: HashMap<String, Arc<RwLock<UserConnections>>>,
-	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
-	// TODO: by board data type
-	by_boarddata: EnumMap<BoardDataCombination, HashSet<Arc<AuthedSocket>>>,
-}
-
-impl Connections {
-	pub async fn insert(
-		&mut self,
-		socket: &Arc<AuthedSocket>,
-		cooldown_info: Option<CooldownInfo>,
-	) {
-		let user = socket.user.read().await;
-		if let AuthedUser::Authed { user, .. } = &*user {
-			if let Some(ref id) = user.id {
-				let entry = self.by_uid.entry(id.clone());
-				let connections = match entry {
-					Entry::Vacant(entry) => {
-						let new_connections = UserConnections::new(
-							Arc::clone(socket),
-							// SAFETY: this is only None if autheduser is None
-							cooldown_info.unwrap(),
-						).await;
-						entry.insert(Arc::clone(&new_connections));
-						new_connections
-					},
-					Entry::Occupied(entry) => Arc::clone(entry.get()),
-				};
-
-				connections.write().await.insert(Arc::clone(socket));
-			}
-		}
-
-		for extension in socket.extensions {
-			self.by_extension[extension].insert(Arc::clone(socket));
-		}
-
-		let combination = BoardDataCombination::from(socket.extensions);
-		self.by_boarddata[combination].insert(Arc::clone(socket));
-	}
-
-	pub async fn remove(
-		&mut self,
-		socket: &Arc<AuthedSocket>,
-	) {
-		let user = socket.user.read().await;
-		if let AuthedUser::Authed { user, .. } = &*user {
-			if let Some(ref id) = user.id {
-				let connections = self.by_uid.get(id).unwrap();
-				let mut connections = connections.write().await;
-
-				connections.remove(Arc::clone(socket));
-				if connections.is_empty() {
-					connections.cleanup();
-					drop(connections);
-					self.by_uid.remove(id);
-				}
-			}
-		}
-
-		for extension in socket.extensions {
-			self.by_extension[extension].remove(socket);
-		}
-
-		let combination = BoardDataCombination::from(socket.extensions);
-		self.by_boarddata[combination].remove(socket);
-	}
-
-	pub async fn send(
-		&self,
-		packet: packet::server::Packet,
-	) {
-		let extension = Extension::from(&packet);
-		for connection in self.by_extension[extension].iter() {
-			connection.send(&packet).await;
-		}
-	}
-
-	pub async fn send_boarddata(
-		&self,
-		data: packet::server::BoardDataBuilder,
-	) {
-		for (combination, data) in data.build_combinations() {
-			let packet = packet::server::Packet::BoardUpdate {
-				info: None,
-				data: Some(data),
-			};
-
-			for connection in self.by_boarddata[combination].iter() {
-				connection.send(&packet).await;
-			}
-		}
-	}
-
-	pub async fn send_to_user(
-		&self,
-		user_id: String,
-		packet: packet::server::Packet,
-	) {
-		if let Some(connections) = self.by_uid.get(&user_id) {
-			connections.read().await.send(&packet).await;
-		}
-	}
-
-	pub async fn set_user_cooldown(
-		&self,
-		user_id: String,
-		cooldown_info: CooldownInfo,
-	) {
-		if let Some(connections) = self.by_uid.get(&user_id) {
-			UserConnections::set_cooldown_info(
-				Arc::clone(connections),
-				cooldown_info,
-			).await;
-		}
-	}
-
-	pub fn close(&mut self) {
-		// TODO: maybe send a close reason
-
-		for connections in self.by_extension.values() {
-			for connection in connections {
-				connection.close();
-			}
-		}
-	}
-}
-
-pub struct Board {
-	pub id: i32,
-	pub info: BoardInfo,
-	connections: Connections,
-	sectors: SectorCache,
-}
-
-#[derive(Clone, Debug)]
-pub struct CooldownInfo {
-	cooldowns: Vec<SystemTime>,
-	pub pixels_available: usize,
-}
-
-impl CooldownInfo {
-	fn new(
-		cooldowns: Vec<SystemTime>,
-		current_timestamp: SystemTime,
-	) -> Self {
-		let pixels_available = cooldowns
-			.iter()
-			.enumerate()
-			.take_while(|(_, cooldown)| **cooldown <= current_timestamp)
-			.last()
-			.map(|(i, _)| i + 1)
-			.unwrap_or(0);
-
-		Self {
-			cooldowns,
-			pixels_available,
-		}
-	}
-
-	pub fn into_headers(self) -> Vec<(HeaderName, HeaderValue)> {
-		let mut headers = vec![(
-			HeaderName::from_static("pxls-pixels-available"),
-			self.pixels_available.into(),
-		)];
-
-		if let Some(next_available) = self
-			.cooldowns
-			.get(self.pixels_available)
-		{
-			headers.push((
-				HeaderName::from_static("pxls-next-available"),
-				(*next_available)
-					.duration_since(UNIX_EPOCH)
-					.unwrap()
-					.as_secs()
-					.into(),
-			));
-		}
-
-		headers
-	}
-
-	pub fn cooldown(&self) -> Option<SystemTime> {
-		self.cooldowns
-			.get(self.pixels_available)
-			.map(SystemTime::clone)
-	}
-}
-
-impl Iterator for CooldownInfo {
-	type Item = SystemTime;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		let time = self.cooldown();
-		if time.is_some() {
-			self.pixels_available += 1;
-		}
-		time
 	}
 }
 
@@ -448,6 +100,30 @@ impl Reply for PlaceError {
 			Self::OutOfBounds => StatusCode::NOT_FOUND,
 		}
 		.into_response()
+	}
+}
+
+pub struct Board {
+	pub id: i32,
+	pub info: BoardInfo,
+	connections: Connections,
+	sectors: SectorCache,
+}
+
+impl From<&Board> for Uri {
+	fn from(board: &Board) -> Self {
+		format!("/boards/{}", board.id)
+			.parse::<Uri>()
+			.unwrap()
+	}
+}
+
+impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
+	fn from(board: &'l Board) -> Self {
+		Self {
+			uri: board.into(),
+			view: &board.info,
+		}
 	}
 }
 
@@ -1066,22 +742,5 @@ impl Board {
 		socket: &Arc<AuthedSocket>,
 	) {
 		self.connections.remove(socket).await
-	}
-}
-
-impl From<&Board> for Uri {
-	fn from(board: &Board) -> Self {
-		format!("/boards/{}", board.id)
-			.parse::<Uri>()
-			.unwrap()
-	}
-}
-
-impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
-	fn from(board: &'l Board) -> Self {
-		Self {
-			uri: board.into(),
-			view: &board.info,
-		}
 	}
 }

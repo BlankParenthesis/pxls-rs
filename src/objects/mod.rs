@@ -1,5 +1,7 @@
 pub mod board;
 pub mod board_sector;
+pub mod connections;
+pub mod cooldown;
 pub mod color;
 pub mod packet;
 pub mod paginated_list;
@@ -13,6 +15,7 @@ pub mod user_count;
 
 pub use board::{Board, BoardInfo, BoardInfoPatch, BoardInfoPost, MaskValue};
 pub use board_sector::{BoardSector, SectorBuffer};
+pub use cooldown::CooldownInfo;
 pub use color::{Color, Palette};
 pub use paginated_list::{Page, PageToken, PaginationOptions};
 pub use placement::PlacementRequest;
