@@ -30,6 +30,7 @@ lazy_static! {
 			"board_timestamps",
 			"board_mask",
 			"board_initial",
+			"board_lifecycle",
 		],
 	};
 }

@@ -157,7 +157,6 @@ impl UserConnections {
 pub struct Connections {
 	by_uid: HashMap<String, Arc<RwLock<UserConnections>>>,
 	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
-	// TODO: by board data type
 	by_boarddata: EnumMap<BoardDataCombination, HashSet<Arc<AuthedSocket>>>,
 }
 

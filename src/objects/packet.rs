@@ -25,6 +25,7 @@ pub mod server {
 		pub max_pixels_available: Option<u32>,
 	}
 
+	// TODO: this is the same as SectorBuffer in board_sectors — deduplicate?
 	#[derive(Debug, EnumSetType)]
 	enum DataType {
 		Colors = 0,

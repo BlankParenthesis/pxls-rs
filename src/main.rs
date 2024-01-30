@@ -88,15 +88,15 @@ async fn main() {
 			Arc::clone(&db),
 		))
 		.or(routes::core::boards::default())
-		.or(routes::core::boards::post(
+		.or(routes::board_lifecycle::boards::post(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::patch(
+		.or(routes::board_lifecycle::boards::patch(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::core::boards::delete(
+		.or(routes::board_lifecycle::boards::delete(
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
