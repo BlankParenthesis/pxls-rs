@@ -1,5 +1,4 @@
 pub mod board;
-pub mod board_sector;
 pub mod connections;
 pub mod cooldown;
 pub mod color;
@@ -7,20 +6,19 @@ pub mod packet;
 pub mod paginated_list;
 pub mod placement;
 pub mod reference;
-pub mod sector_cache;
+pub mod sector;
 pub mod shape;
 pub mod socket;
 pub mod user;
 pub mod user_count;
 
 pub use board::{Board, BoardInfo, BoardInfoPatch, BoardInfoPost, MaskValue};
-pub use board_sector::{BoardSector, SectorBuffer};
+pub use sector::{Sector, SectorBuffer, SectorCache, SectorAccessor};
 pub use cooldown::CooldownInfo;
 pub use color::{Color, Palette};
 pub use paginated_list::{Page, PageToken, PaginationOptions};
 pub use placement::PlacementRequest;
 pub use reference::Reference;
-pub use sector_cache::{SectorCache, SectorCacheAccess};
 pub use shape::{Shape, VecShape};
 pub use socket::{AuthedSocket, Extension, UnauthedSocket};
 pub use user::{AuthedUser, User};

@@ -35,7 +35,7 @@ use crate::{
 use super::packet;
 use super::connections::Connections;
 use super::color::*;
-use super::sector_cache::*;
+use super::sector::*;
 use super::{
 	VecShape,
 	SectorBuffer,
@@ -174,7 +174,7 @@ impl Board {
 		&'l self,
 		buffer: SectorBuffer,
 		connection: &'l Connection,
-	) -> SectorCacheAccess<'l, Connection> {
+	) -> SectorAccessor<'l, Connection> {
 		self.sectors.access(buffer, connection)
 	}
 

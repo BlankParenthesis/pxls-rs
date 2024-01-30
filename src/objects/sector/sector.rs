@@ -14,7 +14,18 @@ pub enum SectorBuffer {
 	Mask,
 }
 
-pub struct BoardSector {
+impl SectorBuffer {
+	pub fn size(&self) -> usize {
+		match self {
+			SectorBuffer::Colors => 1,
+			SectorBuffer::Timestamps => 4,
+			SectorBuffer::Initial => 1,
+			SectorBuffer::Mask => 1,
+		}
+	}
+}
+
+pub struct Sector {
 	board: i32,
 	index: i32,
 	pub colors: BytesMut,
@@ -24,7 +35,7 @@ pub struct BoardSector {
 	// TODO: maybe a density buffer for how many placements there have been
 }
 
-impl BoardSector {
+impl Sector {
 	pub async fn new<Connection: ConnectionTrait>(
 		board: i32,
 		index: i32,

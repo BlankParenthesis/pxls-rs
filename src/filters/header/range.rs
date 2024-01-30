@@ -8,7 +8,7 @@ use std::{
 use rand::{self, Rng};
 use thiserror::Error;
 
-use crate::objects::sector_cache::{AsyncRead, Len};
+use crate::objects::sector::{AsyncRead, Len};
 
 use super::*;
 
