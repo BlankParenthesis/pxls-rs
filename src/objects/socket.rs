@@ -37,6 +37,7 @@ impl From<Extension> for Permission {
 		match extension {
 			Extension::Core => Self::SocketCore,
 			Extension::Authentication => Self::SocketAuthentication,
+			// TODO: specific permissions?
 			Extension::BoardTimestamps => Self::SocketCore,
 			Extension::BoardMask => Self::SocketCore,
 			Extension::BoardInitial => Self::SocketCore,

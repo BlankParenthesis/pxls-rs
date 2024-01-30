@@ -22,29 +22,33 @@ pub enum Permission {
 	SocketAuthentication,
 }
 
+impl From<&Permission> for &str {
+	fn from(permission: &Permission) -> Self {
+		match permission {
+			Permission::Info => "info",
+			Permission::BoardsList => "boards.list",
+			Permission::BoardsGet => "boards.get",
+			Permission::BoardsPost => "boards.post",
+			Permission::BoardsPatch => "boards.patch",
+			Permission::BoardsDelete => "boards.delete",
+			Permission::BoardsDataGet => "boards.data.get",
+			Permission::BoardsDataPatch => "boards.data.patch",
+			Permission::BoardsUsers => "boards.users",
+			Permission::BoardsPixelsList => "boards.pixels.list",
+			Permission::BoardsPixelsGet => "boards.pixels.get",
+			Permission::BoardsPixelsPost => "boards.pixels.post",
+			Permission::SocketCore => "socket.core",
+			Permission::SocketAuthentication => "socket.authentication",
+		}
+	}
+}
+
 impl Serialize for Permission {
 	fn serialize<S: Serializer>(
 		&self,
 		serializer: S,
 	) -> Result<S::Ok, S::Error> {
-		let permission_str = match self {
-			Self::Info => "info",
-			Self::BoardsList => "boards.list",
-			Self::BoardsGet => "boards.get",
-			Self::BoardsPost => "boards.post",
-			Self::BoardsPatch => "boards.patch",
-			Self::BoardsDelete => "boards.delete",
-			Self::BoardsDataGet => "boards.data.get",
-			Self::BoardsDataPatch => "boards.data.patch",
-			Self::BoardsUsers => "boards.users",
-			Self::BoardsPixelsList => "boards.pixels.list",
-			Self::BoardsPixelsGet => "boards.pixels.get",
-			Self::BoardsPixelsPost => "boards.pixels.post",
-			Self::SocketCore => "socket.core",
-			Self::SocketAuthentication => "socket.authentication",
-		};
-
-		serializer.serialize_str(permission_str)
+		serializer.serialize_str(self.into())
 	}
 }
 
@@ -59,15 +63,13 @@ pub fn with_permission(
 	permission: Permission
 ) -> (impl Fn(AuthedUser) -> future::Ready<Result<AuthedUser, Rejection>> + Clone) {
 	move |authed| {
-		let user = Option::<&User>::from(&authed)
-			.unwrap_or_default();
+		let user = Option::<&User>::from(&authed).unwrap_or_default();
 
 		if user.permissions.contains(&permission) {
 			future::ok(authed)
 		} else {
-			future::err(warp::reject::custom(PermissionsError::MissingPermission(
-				permission,
-			)))
+			let error =PermissionsError::MissingPermission(permission);
+			future::err(warp::reject::custom(error))
 		}
 	}
 }
