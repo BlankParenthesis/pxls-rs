@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 
-mod sector;
+mod buffer;
 mod cache;
 mod access;
 
-pub use sector::{Sector, SectorBuffer};
+pub use buffer::{Sector, SectorBuffer};
 pub use cache::SectorCache;
 pub use access::SectorAccessor;
 
