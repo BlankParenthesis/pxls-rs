@@ -340,8 +340,7 @@ impl Board {
 			.exec(&transaction).await?;
 
 		board::Entity::delete_many()
-			// deliberate bug to test things
-			.filter(color::Column::Board.eq(self.id))
+			.filter(board::Column::Id.eq(self.id))
 			.exec(&transaction).await?;
 		
 		transaction.commit().await
