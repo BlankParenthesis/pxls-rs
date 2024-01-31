@@ -9,7 +9,7 @@ use enum_map::EnumMap;
 use tokio::{time::Instant, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
-use super::{packet, packet::server::BoardDataCombination};
+use super::{packet, packet::server::BoardDataCombination, socket::CloseReason};
 use super::{CooldownInfo, AuthedSocket, AuthedUser, Extension};
 
 #[derive(Debug)]
@@ -272,11 +272,9 @@ impl Connections {
 	}
 
 	pub fn close(&mut self) {
-		// TODO: maybe send a close reason
-
 		for connections in self.by_extension.values() {
 			for connection in connections {
-				connection.close();
+				connection.close(Some(CloseReason::ServerClosing));
 			}
 		}
 	}

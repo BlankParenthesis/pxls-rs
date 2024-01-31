@@ -152,19 +152,30 @@ pub fn socket(
 				let database_pool = Arc::clone(&database_pool);
 
 				if let Some(extensions) = options.extensions {
-					if !extensions.is_empty() {
-						ws.on_upgrade(move |websocket| {
-							UnauthedSocket::connect(
-								websocket,
-								extensions,
-								Arc::downgrade(&*board),
-								database_pool,
-							)
-						})
-						.into_response()
-					} else {
-						StatusCode::UNPROCESSABLE_ENTITY.into_response()
+					if extensions.is_empty() {
+						return StatusCode::UNPROCESSABLE_ENTITY.into_response();
 					}
+
+					if !extensions.contains(Extension::Authentication) {
+						let user = User::default();
+						let has_permissions = extensions.iter()
+							.map(|e| e.socket_permission())
+							.all(|p| user.permissions.contains(&p));
+
+						if !has_permissions {
+							return StatusCode::FORBIDDEN.into_response();
+						}
+					}
+
+					ws.on_upgrade(move |websocket| {
+						UnauthedSocket::connect(
+							websocket,
+							extensions,
+							Arc::downgrade(&*board),
+							database_pool,
+						)
+					})
+					.into_response()
 				} else {
 					StatusCode::UNPROCESSABLE_ENTITY.into_response()
 				}

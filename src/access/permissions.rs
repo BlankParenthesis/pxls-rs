@@ -20,6 +20,9 @@ pub enum Permission {
 	BoardsPixelsPost,
 	SocketCore,
 	SocketAuthentication,
+	SocketBoardsInitial,
+	SocketBoardsMask,
+	SocketBoardsTimestamps,
 }
 
 impl From<&Permission> for &str {
@@ -39,6 +42,9 @@ impl From<&Permission> for &str {
 			Permission::BoardsPixelsPost => "boards.pixels.post",
 			Permission::SocketCore => "socket.core",
 			Permission::SocketAuthentication => "socket.authentication",
+			Permission::SocketBoardsInitial => "socket.boards.initial",
+			Permission::SocketBoardsMask => "socket.boards.mask",
+			Permission::SocketBoardsTimestamps => "socket.boards.timestamps",
 		}
 	}
 }

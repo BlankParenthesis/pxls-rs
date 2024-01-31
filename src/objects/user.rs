@@ -16,12 +16,10 @@ pub struct User {
 
 impl User {
 	pub fn from_id(id: String) -> Self {
-		let mut permissions = HashSet::new();
+		let mut permissions = User::default().permissions;
 
 		// TODO: permissions
 		permissions.insert(Permission::BoardsPixelsPost);
-		permissions.insert(Permission::BoardsGet);
-		permissions.insert(Permission::SocketCore);
 
 		Self {
 			id: Some(id),
@@ -42,19 +40,23 @@ impl Default for &User {
 
 impl Default for User {
 	fn default() -> Self {
-		let mut permissions = HashSet::new();
-		permissions.insert(Permission::Info);
-		permissions.insert(Permission::BoardsList);
-		permissions.insert(Permission::BoardsGet);
-		permissions.insert(Permission::BoardsPost);
-		permissions.insert(Permission::BoardsPatch);
-		permissions.insert(Permission::BoardsDelete);
-		permissions.insert(Permission::BoardsDataGet);
-		permissions.insert(Permission::BoardsDataPatch);
-		permissions.insert(Permission::BoardsUsers);
-		permissions.insert(Permission::BoardsPixelsList);
-		permissions.insert(Permission::BoardsPixelsGet);
-		permissions.insert(Permission::SocketCore);
+		let permissions = HashSet::from([
+			Permission::Info,
+			Permission::BoardsList,
+			Permission::BoardsGet,
+			Permission::BoardsPost,
+			Permission::BoardsPatch,
+			Permission::BoardsDelete,
+			Permission::BoardsDataGet,
+			Permission::BoardsUsers,
+			Permission::BoardsPixelsList,
+			Permission::BoardsPixelsGet,
+			Permission::SocketCore,
+			Permission::SocketAuthentication,
+			Permission::SocketBoardsInitial,
+			Permission::SocketBoardsMask,
+			Permission::SocketBoardsTimestamps,
+		]);
 
 		Self {
 			id: None,

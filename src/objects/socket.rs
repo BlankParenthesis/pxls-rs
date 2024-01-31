@@ -32,15 +32,34 @@ pub enum Extension {
 	BoardInitial,
 }
 
-impl From<Extension> for Permission {
-	fn from(extension: Extension) -> Permission {
-		match extension {
-			Extension::Core => Self::SocketCore,
-			Extension::Authentication => Self::SocketAuthentication,
-			// TODO: specific permissions?
-			Extension::BoardTimestamps => Self::SocketCore,
-			Extension::BoardMask => Self::SocketCore,
-			Extension::BoardInitial => Self::SocketCore,
+impl Extension {
+	pub fn socket_permission(&self) -> Permission {
+		match self {
+			Extension::Core => Permission::SocketCore,
+			Extension::Authentication => Permission::SocketAuthentication,
+			Extension::BoardTimestamps => Permission::SocketBoardsTimestamps,
+			Extension::BoardMask => Permission::SocketBoardsMask,
+			Extension::BoardInitial => Permission::SocketBoardsInitial,
+		}
+	}
+}
+
+pub enum CloseReason {
+	ServerClosing,
+	InvalidPacket,
+	AuthTimeout,
+	MissingPermission,
+	InvalidToken,
+}
+
+impl From<CloseReason> for u16 {
+	fn from(reason: CloseReason) -> Self {
+		match reason {
+			CloseReason::ServerClosing => 1001,
+			CloseReason::InvalidPacket => 1008,
+			CloseReason::AuthTimeout => 4000,
+			CloseReason::MissingPermission => 4001,
+			CloseReason::InvalidToken => 4002,
 		}
 	}
 }
@@ -128,27 +147,38 @@ impl UnauthedSocket {
 			socket = socket.authenticate_socket(&mut ws_receiver) => socket,
 		};
 
-		if let Ok(socket) = auth_attempt {
-			let socket = Arc::new(socket);
+		match auth_attempt {
+			Ok(socket) => {
+				let socket = Arc::new(socket);
 
-			// add socket
-			if let Some(board) = board.upgrade() {
-				let mut board = board.write().await;
-				if let Some(ref mut board) = *board {
-					board.insert_socket(
-						&socket,
-						connection.as_ref(),
-					).await.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
+				// add socket
+				if let Some(board) = board.upgrade() {
+					let mut board = board.write().await;
+					if let Some(ref mut board) = *board {
+						board.insert_socket(
+							&socket,
+							connection.as_ref(),
+						).await.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
+					}
 				}
-			}
 
-			socket.handle_packets(&mut ws_receiver).await;
+				socket.handle_packets(&mut ws_receiver).await;
 
-			// remove socket
-			if let Some(board) = board.upgrade() {
-				let mut board = board.write().await;
-				if let Some(ref mut board) = *board {
-					board.remove_socket(&socket).await;
+				// remove socket
+				if let Some(board) = board.upgrade() {
+					let mut board = board.write().await;
+					if let Some(ref mut board) = *board {
+						board.remove_socket(&socket).await;
+					}
+				}
+			},
+			Err(e) => {
+				match e {
+					AuthFailure::Timeout => todo!("4000"),
+					AuthFailure::InvalidMessage => todo!("1003"),
+					AuthFailure::Unauthorized => todo!("4001"),
+					AuthFailure::ValidationError(_) => todo!("4002"),
+					AuthFailure::Closed => (),
 				}
 			}
 		}
@@ -161,7 +191,7 @@ impl UnauthedSocket {
 		let actual_user = authed_user.user().unwrap_or_default();
 
 		let has_permission = self.extensions.iter()
-			.map(Permission::from)
+			.map(|e| e.socket_permission())
 			.all(|permission| {
 				actual_user.permissions.contains(&permission)
 			});
@@ -261,7 +291,7 @@ impl AuthedSocket {
 		if self.auth_valid().await {
 			self.sender.send(Ok(message));
 		} else {
-			self.close();
+			self.close(Some(CloseReason::InvalidToken));
 		}
 	}
 
@@ -276,8 +306,14 @@ impl AuthedSocket {
 		}
 	}
 
-	pub fn close(&self) {
-		self.sender.send(Ok(ws::Message::close()));
+	pub fn close(&self, reason: Option<CloseReason>) {
+		let close = if let Some(reason) = reason {
+			ws::Message::close_with(reason, "")
+		} else {
+			ws::Message::close()
+		};
+
+		self.sender.send(Ok(close));
 	}
 
 	async fn reauthenticate(&self, token: Option<String>) {
@@ -290,15 +326,15 @@ impl AuthedSocket {
 					if *current_user == user {
 						*current_user = user;
 					} else {
-						self.close();
+						self.close(Some(CloseReason::InvalidToken));
 					}
 				},
 				Err(_) => {
-					self.close();
+					self.close(Some(CloseReason::InvalidToken));
 				},
 			}
 		} else {
-			self.close();
+			self.close(Some(CloseReason::InvalidPacket));
 		}
 	} 
 
@@ -313,7 +349,7 @@ impl AuthedSocket {
 					self.reauthenticate(token).await;
 				},
 				Message::Invalid => {
-					self.close();
+					self.close(Some(CloseReason::InvalidPacket));
 				},
 				Message::Close => (),
 				Message::Ping => (),
