@@ -23,13 +23,14 @@ use crate::{
 
 #[derive(Debug, EnumSetType, Enum, Deserialize, Serialize)]
 #[enumset(serialize_repr = "list")]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Extension {
 	Core,
 	Authentication,
 	BoardTimestamps,
 	BoardMask,
 	BoardInitial,
+	BoardLifecycle,
 }
 
 impl Extension {
@@ -40,6 +41,7 @@ impl Extension {
 			Extension::BoardTimestamps => Permission::SocketBoardsTimestamps,
 			Extension::BoardMask => Permission::SocketBoardsMask,
 			Extension::BoardInitial => Permission::SocketBoardsInitial,
+			Extension::BoardLifecycle => Permission::SocketBoardLifecycle,
 		}
 	}
 }

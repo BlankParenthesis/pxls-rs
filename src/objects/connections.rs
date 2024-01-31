@@ -6,10 +6,11 @@ use std::{
 };
 
 use enum_map::EnumMap;
+use enumset::EnumSet;
 use tokio::{time::Instant, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
-use super::{packet, packet::server::BoardDataCombination, socket::CloseReason};
+use super::{packet, packet::server::DataType, socket::CloseReason};
 use super::{CooldownInfo, AuthedSocket, AuthedUser, Extension};
 
 #[derive(Debug)]
@@ -157,7 +158,7 @@ impl UserConnections {
 pub struct Connections {
 	by_uid: HashMap<String, Arc<RwLock<UserConnections>>>,
 	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
-	by_boarddata: EnumMap<BoardDataCombination, HashSet<Arc<AuthedSocket>>>,
+	by_board_extensions: HashMap<EnumSet<DataType>, HashSet<Arc<AuthedSocket>>>,
 }
 
 impl Connections {
@@ -191,8 +192,13 @@ impl Connections {
 			self.by_extension[extension].insert(Arc::clone(socket));
 		}
 
-		let combination = BoardDataCombination::from(socket.extensions);
-		self.by_boarddata[combination].insert(Arc::clone(socket));
+		let combination = socket.extensions.iter()
+			.filter_map(Option::<DataType>::from)
+			.collect();
+		
+		self.by_board_extensions.entry(combination)
+			.or_insert_with(HashSet::new)
+			.insert(Arc::clone(socket));
 	}
 
 	pub async fn remove(
@@ -218,8 +224,13 @@ impl Connections {
 			self.by_extension[extension].remove(socket);
 		}
 
-		let combination = BoardDataCombination::from(socket.extensions);
-		self.by_boarddata[combination].remove(socket);
+		let combination = socket.extensions.iter()
+			.filter_map(Option::<DataType>::from)
+			.collect();
+		
+		self.by_board_extensions.entry(combination)
+			.or_insert_with(HashSet::new)
+			.remove(socket);
 	}
 
 	pub async fn send(
@@ -232,18 +243,15 @@ impl Connections {
 		}
 	}
 
-	pub async fn send_boarddata(
+	pub async fn send_board_update(
 		&self,
-		data: packet::server::BoardDataBuilder,
+		data: packet::server::BoardUpdateBuilder,
 	) {
-		for (combination, data) in data.build_combinations() {
-			let packet = packet::server::Packet::BoardUpdate {
-				info: None,
-				data: Some(data),
-			};
-
-			for connection in self.by_boarddata[combination].iter() {
-				connection.send(&packet).await;
+		for (combination, packet) in data.build_combinations() {
+			if let Some(sockets) = self.by_board_extensions.get(&combination) {
+				for connection in sockets {
+					connection.send(&packet).await;
+				}
 			}
 		}
 	}

@@ -23,6 +23,7 @@ pub enum Permission {
 	SocketBoardsInitial,
 	SocketBoardsMask,
 	SocketBoardsTimestamps,
+	SocketBoardLifecycle,
 }
 
 impl From<&Permission> for &str {
@@ -45,6 +46,7 @@ impl From<&Permission> for &str {
 			Permission::SocketBoardsInitial => "socket.boards.initial",
 			Permission::SocketBoardsMask => "socket.boards.mask",
 			Permission::SocketBoardsTimestamps => "socket.boards.timestamps",
+			Permission::SocketBoardLifecycle => "socket.boards.timestamps",
 		}
 	}
 }

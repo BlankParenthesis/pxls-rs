@@ -205,7 +205,7 @@ impl Board {
 		let data = packet::server::BoardData::builder()
 			.initial(vec![initial]);
 
-		self.connections.send_boarddata(data).await;
+		self.connections.send_board_update(data).await;
 
 		Ok(())
 	}
@@ -235,7 +235,7 @@ impl Board {
 		let data = packet::server::BoardData::builder()
 			.mask(vec![mask]);
 
-		self.connections.send_boarddata(data).await;
+		self.connections.send_board_update(data).await;
 
 		Ok(())
 	}
@@ -445,7 +445,7 @@ impl Board {
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
-		self.connections.send_boarddata(data).await;
+		self.connections.send_board_update(data).await;
 
 		if let Some(user_id) = user.id.clone() {
 			let cooldown_info = self

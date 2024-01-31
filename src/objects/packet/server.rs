@@ -1,8 +1,9 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use serde_with::skip_serializing_none;
 
 use itertools::Itertools;
-use enum_map::{Enum, EnumMap};
 use enumset::{EnumSet, EnumSetType};
 
 use crate::objects::{Extension, Palette, CachedVecShape};
@@ -22,83 +23,25 @@ pub struct BoardInfo {
 	pub max_pixels_available: Option<u32>,
 }
 
-// TODO: this is the same as SectorBuffer in board_sectors — deduplicate?
 #[derive(Debug, EnumSetType)]
-enum DataType {
-	Colors = 0,
-	Timestamps = 1,
-	Initial = 2,
-	Mask = 3,
-}
-
-#[derive(Debug, Enum, Clone, Copy, PartialEq, Eq)]
-pub enum BoardDataCombination {
+pub enum DataType {
 	Colors,
 	Timestamps,
 	Initial,
 	Mask,
-	ColorsTimestamps,
-	ColorsInitial,
-	ColorsMask,
-	TimestampsInitial,
-	TimestampsMask,
-	InitialMask,
-	ColorsTimestampsInitial,
-	ColorsTimestampsMask,
-	ColorsInitialMask,
-	TimestampsInitialMask,
-	All,
+	Info,
 }
 
-impl From<EnumSet<DataType>> for BoardDataCombination {
-	fn from(set: EnumSet<DataType>) -> Self {
-		// bit 0 is colors
-		// bit 1 is timestamps
-		// bit 2 is initial
-		// bit 3 is mask
-		// TODO: this is untested but definitely should be.
-		match set.as_u8() {
-			0b1000 => Self::Colors,
-			0b0100 => Self::Timestamps,
-			0b0010 => Self::Initial,
-			0b0001 => Self::Mask,
-			0b1100 => Self::ColorsTimestamps,
-			0b1010 => Self::ColorsInitial,
-			0b1001 => Self::ColorsMask,
-			0b0110 => Self::TimestampsInitial,
-			0b0101 => Self::TimestampsMask,
-			0b0011 => Self::InitialMask,
-			0b1110 => Self::ColorsTimestampsInitial,
-			0b1101 => Self::ColorsTimestampsMask,
-			0b1011 => Self::ColorsInitialMask,
-			0b0111 => Self::TimestampsInitialMask,
-			0b1111 => Self::All,
-			_ => panic!(),
+impl From<Extension> for Option<DataType> {
+	fn from(extension: Extension) -> Self {
+		match extension {
+			Extension::Core => Some(DataType::Colors),
+			Extension::BoardTimestamps => Some(DataType::Timestamps),
+			Extension::BoardInitial => Some(DataType::Initial),
+			Extension::BoardMask => Some(DataType::Mask),
+			Extension::BoardLifecycle => Some(DataType::Info),
+			_ => None,
 		}
-	}
-}
-
-impl From<EnumSet<Extension>> for BoardDataCombination {
-	fn from(extensions: EnumSet<Extension>) -> Self {
-		let mut data_types = EnumSet::empty();
-
-		if extensions.contains(Extension::Core) {
-			data_types.insert(DataType::Colors);
-		}
-
-		if extensions.contains(Extension::BoardTimestamps) {
-			data_types.insert(DataType::Timestamps);
-		}
-
-		if extensions.contains(Extension::BoardInitial) {
-			data_types.insert(DataType::Initial);
-		}
-
-		if extensions.contains(Extension::BoardMask) {
-			data_types.insert(DataType::Mask);
-		}
-		
-		Self::from(data_types)
 	}
 }
 
@@ -112,20 +55,28 @@ pub struct BoardData {
 }
 
 impl BoardData {
-	pub fn builder() -> BoardDataBuilder {
-		BoardDataBuilder::default()
+	pub fn builder() -> BoardUpdateBuilder {
+		BoardUpdateBuilder::default()
+	}
+
+	fn is_empty(&self) -> bool {
+		self.colors.is_none()
+		&& self.timestamps.is_none()
+		&& self.initial.is_none()
+		&& self.mask.is_none()
 	}
 }
 
 #[derive(Debug, Default)]
-pub struct BoardDataBuilder {
+pub struct BoardUpdateBuilder {
 	colors: Option<Vec<Change<u8>>>,
 	timestamps: Option<Vec<Change<u32>>>,
 	initial: Option<Vec<Change<u8>>>,
 	mask: Option<Vec<Change<u8>>>,
+	info: Option<BoardInfo>,
 }
 
-impl BoardDataBuilder {
+impl BoardUpdateBuilder {
 	pub fn new() -> Self {
 		Self::default()
 	}
@@ -150,8 +101,13 @@ impl BoardDataBuilder {
 		self
 	}
 
-	pub fn build_combinations(self) -> EnumMap<BoardDataCombination, BoardData> {
-		let mut combinations = EnumMap::default();
+	pub fn info(mut self, info: BoardInfo) -> Self {
+		assert!(self.info.replace(info).is_none());
+		self
+	}
+
+	pub fn build_combinations(self) -> HashMap<EnumSet<DataType>, Packet> {
+		let mut combinations = HashMap::new();
 
 		let colors = self.colors.map(Vec::into_boxed_slice);
 		let timestamps = self.timestamps.map(Vec::into_boxed_slice);
@@ -161,22 +117,27 @@ impl BoardDataBuilder {
 		let mut available_types = vec![];
 
 		if colors.is_some() {
-			available_types.push(DataType::Colors)
+			available_types.push(DataType::Colors);
 		}
 
 		if timestamps.is_some() {
-			available_types.push(DataType::Timestamps)
+			available_types.push(DataType::Timestamps);
 		}
 
 		if initial.is_some() {
-			available_types.push(DataType::Initial)
+			available_types.push(DataType::Initial);
 		}
 
 		if mask.is_some() {
-			available_types.push(DataType::Mask)
+			available_types.push(DataType::Mask);
+		}
+
+		if self.info.is_some() {
+			available_types.push(DataType::Info);
 		}
 
 		for combination in available_types.into_iter().powerset().skip(1) {
+			let mut info = None;
 			let mut data = BoardData::default();
 
 			for datatype in combination.iter() {
@@ -185,12 +146,14 @@ impl BoardDataBuilder {
 					DataType::Timestamps => data.timestamps = timestamps.clone(),
 					DataType::Initial => data.initial = mask.clone(),
 					DataType::Mask => data.mask = mask.clone(),
+					DataType::Info => info = self.info.clone(),
 				}
 			}
 
-			let combination = combination.into_iter().collect::<EnumSet<_>>();
-			let key = BoardDataCombination::from(combination);
-			combinations[key] = data;
+			let data = if data.is_empty() { None } else { Some(data) };
+
+			let key = combination.into_iter().collect();
+			combinations.insert(key, Packet::BoardUpdate { info, data });
 		}
 
 		combinations
