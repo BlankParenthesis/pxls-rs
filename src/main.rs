@@ -144,7 +144,7 @@ async fn main() {
 			Arc::clone(&boards),
 			Arc::clone(&db),
 		))
-		.or(routes::auth::auth::get())
+		.or(routes::authentication::authentication::get())
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

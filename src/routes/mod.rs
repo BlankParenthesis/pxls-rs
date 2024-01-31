@@ -19,7 +19,7 @@ use crate::{
 	objects::*,
 };
 
-pub mod auth;
+pub mod authentication;
 pub mod core;
 pub mod board_data_initial;
 pub mod board_data_mask;
