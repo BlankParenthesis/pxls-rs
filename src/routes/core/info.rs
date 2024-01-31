@@ -1,12 +1,12 @@
 use super::*;
 
+use serde_with::skip_serializing_none;
+
 #[derive(Serialize)]
+#[skip_serializing_none]
 pub struct ServerInfo {
-	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<&'static str>,
-	#[serde(skip_serializing_if = "Option::is_none")]
 	version: Option<&'static str>,
-	#[serde(skip_serializing_if = "Option::is_none")]
 	source: Option<&'static str>,
 	extensions: &'static [&'static str],
 }
