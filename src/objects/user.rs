@@ -51,6 +51,8 @@ impl Default for User {
 			Permission::BoardsUsers,
 			Permission::BoardsPixelsList,
 			Permission::BoardsPixelsGet,
+			Permission::UsersList,
+			Permission::UsersGet,
 			Permission::SocketCore,
 			Permission::SocketAuthentication,
 			Permission::SocketBoardsInitial,

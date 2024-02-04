@@ -25,3 +25,4 @@ pub mod board_data_initial;
 pub mod board_data_mask;
 pub mod board_data_timestamps;
 pub mod board_lifecycle;
+pub mod users;

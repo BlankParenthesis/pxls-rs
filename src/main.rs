@@ -10,12 +10,13 @@ mod config;
 mod filters;
 mod objects;
 mod routes;
-//mod socket;
+mod users;
 
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use access::permissions::PermissionsError;
+use deadpool::managed::Pool;
 use sea_orm::{Database, DbErr, ConnectOptions};
 use filters::header::authorization::BearerError;
 use futures_util::future;
@@ -28,6 +29,7 @@ use warp::{Filter, Rejection, Reply};
 use crate::database::migrations::{Migrator, MigratorTrait};
 use crate::objects::Board;
 use crate::config::CONFIG;
+use crate::users::LDAPConnectionManager;
 
 // FIXME: since we're not longer using actix, this is probably solvable?
 // NOTE: This can go back to being RwLock<Board> if we can get nice ownership
@@ -79,6 +81,13 @@ async fn main() {
 		.collect::<HashMap<_, _>>();
 
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
+
+	let ldap_url = String::from(CONFIG.users_ldap_url.as_str());
+	let users_db_manager = LDAPConnectionManager(ldap_url);
+	let users_db_pool = Pool::<LDAPConnectionManager>::builder(users_db_manager)
+		.build()
+		.expect("Failed to start LDAP connection pool");
+	let users_db_pool = Arc::new(users_db_pool);
 
 	let routes = routes::core::info::get()
 		.or(routes::core::access::get())
@@ -145,6 +154,9 @@ async fn main() {
 			Arc::clone(&db),
 		))
 		.or(routes::authentication::authentication::get())
+		.or(routes::users::users::list(&users_db_pool))
+		.or(routes::users::users::current())
+		.or(routes::users::users::get(&users_db_pool))
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

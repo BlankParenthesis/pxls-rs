@@ -31,6 +31,7 @@ lazy_static! {
 			"board_mask",
 			"board_initial",
 			"board_lifecycle",
+			"users",
 		],
 	};
 }
