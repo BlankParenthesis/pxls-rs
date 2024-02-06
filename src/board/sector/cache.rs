@@ -2,8 +2,8 @@ use sea_orm::{TransactionTrait, ConnectionTrait};
 
 use tokio::sync::*;
 use crate::{
-	database::DbResult,
-	objects::{Sector, SectorBuffer},
+	database::boards::DbResult,
+	board::sector::{Sector, SectorBuffer},
 };
 use super::SectorAccessor;
 

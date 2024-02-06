@@ -9,10 +9,10 @@ use warp::{
 
 use crate::filters::header::{authorization, range::{self, Range}};
 use crate::filters::resource::{board, database};
-use crate::objects::*;
+use crate::board::sector::*;
 use crate::BoardDataMap;
 use crate::filters::resource::board::PassableBoard;
-use crate::access::permissions::{with_permission, Permission};
+use crate::permissions::{with_permission, Permission};
 
 pub fn get_timestamps(
 	boards: BoardDataMap,

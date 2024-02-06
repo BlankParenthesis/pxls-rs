@@ -10,8 +10,14 @@ use enumset::EnumSet;
 use tokio::{time::Instant, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
-use super::{packet, packet::server::DataType, socket::CloseReason};
-use super::{CooldownInfo, AuthedSocket, AuthedUser, Extension};
+use crate::board::cooldown::CooldownInfo;
+use crate::board::user::AuthedUser;
+use crate::socket::{
+	CloseReason,
+	AuthedSocket,
+	Extension,
+	packet::{self, server::DataType}
+};
 
 #[derive(Debug)]
 struct UserConnections {

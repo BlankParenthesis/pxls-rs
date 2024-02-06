@@ -1,8 +1,8 @@
 use futures_util::future;
-use http::{header, StatusCode};
+use warp::http::{header, StatusCode};
 use warp::{reject::Reject, Filter, Rejection, Reply};
 
-use crate::{authentication::openid::ValidationError, objects::AuthedUser};
+use crate::{openid::{self, ValidationError}, board::user::AuthedUser};
 
 #[derive(Debug)]
 pub enum BearerError {
@@ -58,7 +58,7 @@ pub fn bearer() -> impl Filter<Extract = (AuthedUser,), Error = Rejection> + Cop
 }
 
 pub async fn validator(token: String) -> Result<AuthedUser, BearerError> {
-	crate::authentication::openid::validate_token(&token).await
+	openid::validate_token(&token).await
 		.map(AuthedUser::from)
 		.map_err(BearerError::ValidationError)
 }

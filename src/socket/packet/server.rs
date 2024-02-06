@@ -6,7 +6,9 @@ use serde_with::skip_serializing_none;
 use itertools::Itertools;
 use enumset::{EnumSet, EnumSetType};
 
-use crate::objects::{Extension, Palette, CachedVecShape};
+use crate::board::color::Palette;
+use crate::board::shape::CachedVecShape;
+use crate::socket::Extension;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Change<T> {

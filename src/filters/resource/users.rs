@@ -1,7 +1,7 @@
-use super::*;
 use std::sync::Arc;
+use warp::{Filter, reject::Reject, Rejection};
 
-use crate::users::LDAPConnectionManager;
+use crate::database::users::LDAPConnectionManager;
 
 type Pool = deadpool::managed::Pool<LDAPConnectionManager>;
 type Connection = deadpool::managed::Object<LDAPConnectionManager>;

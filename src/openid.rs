@@ -1,4 +1,4 @@
-use http::StatusCode;
+use warp::http::StatusCode;
 use jsonwebkey::JsonWebKey;
 use jsonwebtoken::{decode, decode_header, TokenData, Validation, Algorithm};
 use jsonwebtoken::errors::Error as JWTError;
@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
-use crate::objects::User;
+use crate::board::user::User;
 use crate::config::CONFIG;
 
 #[derive(Debug)]

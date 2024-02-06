@@ -1,22 +1,25 @@
 use std::sync::Arc;
 
-use http::{StatusCode, Uri};
-use warp::{Filter, Reply, Rejection, path::Tail};
+use warp::{
+	http::{StatusCode, Uri},
+	Filter,
+	Reply,
+	Rejection,
+	path::Tail,
+};
 
 use crate::{
-	access::permissions::{with_permission, Permission},
+	permissions::{with_permission, Permission},
 	filters::{
 		header::{
 			authorization,
 		},
 		resource::users,
 	},
-	objects::{
-		paginated_list::{PaginationOptions, Page},
-		reference::Reference,
-		user::AuthedUser
-	},
-	users::{Pool, Connection, UserFetchError},
+	filters::response::paginated_list::{PaginationOptions, Page},
+	filters::response::reference::Reference,
+	board::user::AuthedUser,
+	database::{users::{Pool, Connection, UserFetchError}, queries},
 };
 
 pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -32,7 +35,7 @@ pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Re
 				.unwrap_or(10)
 				.clamp(1, 100); // TODO: maybe raise upper limit
 			
-			let users = crate::users::list(&mut connection, page, limit).await;
+			let users = queries::list_users(&mut connection, page, limit).await;
 			match users {
 				Ok((page_token, users)) => {
 					let references = users.iter()
@@ -77,7 +80,7 @@ pub fn get(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Rej
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
 		.and(users::connection(pool))
 		.then(move |uid: String, _user, mut connection: Connection| async move {
-			let users = crate::users::get(&mut connection, uid).await;
+			let users = queries::get_user(&mut connection, uid).await;
 
 			match users {
 				Ok(user) => {

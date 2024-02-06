@@ -1,6 +1,7 @@
 use bytes::Bytes;
+use reqwest::{StatusCode, header};
+use warp::{reject::Reject, Reply, reply::Response, Filter, Rejection};
 
-use super::*;
 use crate::filters::header::content_range::{self, ContentRange};
 
 #[derive(Debug)]
@@ -16,7 +17,7 @@ pub enum InvalidPatch {
 impl Reject for InvalidPatch {}
 
 impl Reply for InvalidPatch {
-	fn into_response(self) -> reply::Response {
+	fn into_response(self) -> Response {
 		StatusCode::BAD_REQUEST.into_response()
 	}
 }

@@ -1,4 +1,4 @@
-use http::Uri;
+use warp::http::Uri;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

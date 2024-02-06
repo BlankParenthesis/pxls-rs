@@ -2,34 +2,32 @@
 extern crate lazy_static;
 
 #[macro_use]
-mod access;
-#[macro_use]
 mod database;
-mod authentication;
+mod openid;
 mod config;
 mod filters;
-mod objects;
+mod board;
 mod routes;
-mod users;
+mod socket;
+mod permissions;
 
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
-use access::permissions::PermissionsError;
+use permissions::PermissionsError;
 use deadpool::managed::Pool;
 use sea_orm::{Database, DbErr, ConnectOptions};
 use filters::header::authorization::BearerError;
 use futures_util::future;
-use http::{Method, StatusCode};
 use thiserror::Error;
-//use tokio::sync::RwLock;
 use tokio::sync::RwLock;
 use warp::{Filter, Rejection, Reply};
+use warp::http::{Method, StatusCode};
 
-use crate::database::migrations::{Migrator, MigratorTrait};
-use crate::objects::Board;
+use crate::database::boards::migrations::{Migrator, MigratorTrait};
+use crate::database::users::LDAPConnectionManager;
+use crate::board::board::Board;
 use crate::config::CONFIG;
-use crate::users::LDAPConnectionManager;
 
 // FIXME: since we're not longer using actix, this is probably solvable?
 // NOTE: This can go back to being RwLock<Board> if we can get nice ownership

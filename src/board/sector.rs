@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
-mod buffer;
-mod cache;
-mod access;
+pub mod buffer;
+pub mod cache;
+pub mod access;
 
 pub use buffer::{Sector, SectorBuffer};
 pub use cache::SectorCache;

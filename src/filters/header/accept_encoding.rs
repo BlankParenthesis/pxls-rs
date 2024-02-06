@@ -1,6 +1,5 @@
 use futures_util::future;
-
-use super::*;
+use warp::{Filter, Rejection};
 
 pub fn gzip() -> impl Filter<Extract = (), Error = Rejection> + Copy {
 	warp::header("accept-encoding")

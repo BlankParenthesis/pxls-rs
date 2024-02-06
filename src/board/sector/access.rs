@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use sea_orm::{TransactionTrait, ConnectionTrait};
 
 use crate::DatabaseError;
-use crate::objects::{SectorBuffer, SectorCache};
+use crate::board::sector::{SectorBuffer, SectorCache};
 use super::{AsyncRead, AsyncWrite, Len};
 
 pub struct SectorAccessor<'l, Connection: ConnectionTrait + TransactionTrait> {

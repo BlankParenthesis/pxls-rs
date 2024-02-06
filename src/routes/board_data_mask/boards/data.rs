@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use sea_orm::DatabaseConnection as Connection;
 
-use http::StatusCode;
 use warp::{
+	http::StatusCode,
 	reject::Rejection,
 	reply::{self, Reply},
 	Filter,
@@ -11,11 +11,11 @@ use warp::{
 use crate::filters::header::{authorization, range::{self, Range}};
 use crate::filters::body::patch;
 use crate::filters::resource::{board, database};
-use crate::objects::*;
+use crate::board::sector::SectorBuffer;
 use crate::BoardDataMap;
 use crate::filters::resource::board::PassableBoard;
 use crate::filters::body::patch::BinaryPatch;
-use crate::access::permissions::{with_permission, Permission};
+use crate::permissions::{with_permission, Permission};
 
 pub fn get_mask(
 	boards: BoardDataMap,

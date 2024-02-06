@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytes::BufMut;
-use http::{StatusCode, Uri};
+use warp::http::{StatusCode, Uri};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use sea_orm::{
@@ -28,24 +28,19 @@ use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::{
 	filters::body::patch::BinaryPatch,
-	database::{DbResult, entities::*},
+	filters::response::reference::Reference,
+	database::boards::{DbResult, entities::*},
 	DatabaseError,
+	socket::{AuthedSocket, packet},
 };
 
-use super::packet;
 use super::connections::Connections;
 use super::color::*;
 use super::sector::*;
-use super::{
-	CachedVecShape,
-	SectorBuffer,
-	Shape,
-	User,
-	AuthedSocket,
-	UserCount,
-	Reference,
-	CooldownInfo,
-};
+use super::shape::*;
+use super::user::*;
+use super::user_count::*;
+use super::cooldown::CooldownInfo;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Order {
@@ -165,7 +160,7 @@ impl Board {
 			})
 			.exec_with_returning(connection).await?;
 
-		crate::objects::color::replace_palette(&info.palette, new_board.id, connection).await?;
+		crate::board::color::replace_palette(&info.palette, new_board.id, connection).await?;
 
 		Self::load(new_board, connection).await
 	}

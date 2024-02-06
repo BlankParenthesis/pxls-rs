@@ -1,3 +1,5 @@
+pub mod packet;
+
 use core::hash::Hash;
 use std::{
 	sync::{Arc, Weak},
@@ -16,11 +18,13 @@ use uuid::Uuid;
 use warp::ws;
 
 use crate::{
-	access::permissions::Permission,
-	authentication::{openid::ValidationError, self},
-	objects::{packet, AuthedUser, Board},
+	permissions::Permission,
+	openid::{ValidationError, self},
+	board::board::Board,
+	board::user::AuthedUser,
 };
 
+// TODO: move this somewhere else
 #[derive(Debug, EnumSetType, Enum, Deserialize, Serialize)]
 #[enumset(serialize_repr = "list")]
 #[serde(rename_all = "snake_case")]
@@ -209,7 +213,7 @@ impl UnauthedSocket {
 		token: Option<String>,
 	) -> Result<AuthedUser, AuthFailure> {
 		if let Some(token) = token {
-			authentication::openid::validate_token(&token).await
+			openid::validate_token(&token).await
 				.map(AuthedUser::from)
 				.map_err(AuthFailure::ValidationError)
 		} else {

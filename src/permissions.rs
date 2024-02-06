@@ -2,7 +2,7 @@ use futures_util::future;
 use serde::{Serialize, Serializer};
 use warp::{reject::Reject, Rejection};
 
-use crate::objects::{AuthedUser, User};
+use crate::board::user::{AuthedUser, User};
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Permission {
@@ -71,6 +71,7 @@ pub enum PermissionsError {
 
 impl Reject for PermissionsError {}
 
+// TODO: move this to filters maybe
 pub fn with_permission(
 	permission: Permission
 ) -> (impl Fn(AuthedUser) -> future::Ready<Result<AuthedUser, Rejection>> + Clone) {

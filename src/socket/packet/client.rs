@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use crate::objects::Extension;
+use crate::socket::Extension;
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]

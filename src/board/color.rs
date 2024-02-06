@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sea_orm::{TransactionTrait, EntityTrait, Set, ColumnTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 
-use crate::database::{entities::*, DbResult};
+use crate::database::boards::{entities::*, DbResult};
 
 pub type Palette = HashMap<u32, Color>;
 

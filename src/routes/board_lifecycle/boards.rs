@@ -1,23 +1,24 @@
 use std::sync::Arc;
 
-use http::header;
 use tokio::sync::RwLock;
 use sea_orm::DatabaseConnection as Connection;
 
 use warp::{
+	http::{StatusCode, Uri, header},
 	reject::Rejection,
 	reply::{Reply, self, json},
 	Filter,
 };
 
-use http::StatusCode;
 use crate::{
-	access::permissions::{with_permission, Permission},
+	permissions::{with_permission, Permission},
 	filters::{
 		header::authorization,
 		resource::{board::{self, PassableBoard, PendingDelete}, database},
+		response::reference::Reference,
 	},
-	objects::*,
+	board::board::*,
+	board::user::*,
 	BoardDataMap,
 };
 
@@ -57,7 +58,7 @@ pub fn post(
 				response = reply::with_header(
 					response,
 					header::LOCATION,
-					http::Uri::from(board).to_string(),
+					Uri::from(board).to_string(),
 				)
 				.into_response();
 				response
@@ -91,7 +92,7 @@ pub fn patch(
 					response = reply::with_header(
 						response,
 						header::LOCATION,
-						http::Uri::from(&*board).to_string(),
+						Uri::from(&*board).to_string(),
 					).into_response();
 					response
 				},

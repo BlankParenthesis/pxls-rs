@@ -6,7 +6,7 @@ use std::{
 
 use jsonwebtoken::TokenData;
 
-use crate::{access::permissions::Permission, authentication::openid::Identity};
+use crate::{permissions::Permission, openid::Identity};
 
 #[derive(Debug, Clone, Eq)]
 pub struct User {
