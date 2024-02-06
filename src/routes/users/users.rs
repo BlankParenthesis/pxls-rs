@@ -45,6 +45,8 @@ pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Re
 					let page = Page {
 						items: &references[..],
 						next: page_token.map(|p| format!("/users?limit={}&page={}", limit, p)),
+						// TODO: either find some magical way to generate this or
+						// change the spec
 						previous: None,
 					};
 
