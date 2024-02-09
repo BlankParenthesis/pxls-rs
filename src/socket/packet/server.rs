@@ -7,7 +7,7 @@ use itertools::Itertools;
 use enumset::{EnumSet, EnumSetType};
 
 use crate::board::Palette;
-use crate::board::CachedVecShape;
+use crate::board::Shape;
 use crate::socket::Extension;
 
 #[derive(Serialize, Debug, Clone)]
@@ -20,7 +20,7 @@ pub struct Change<T> {
 #[skip_serializing_none]
 pub struct BoardInfo {
 	pub name: Option<String>,
-	pub shape: Option<CachedVecShape>,
+	pub shape: Option<Shape>,
 	pub palette: Option<Palette>,
 	pub max_pixels_available: Option<u32>,
 }

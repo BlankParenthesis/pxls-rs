@@ -172,6 +172,8 @@ impl Connections {
 		socket: &Arc<AuthedSocket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
+		// TODO: I think the socket is probably just silently dropped if
+		// it's uid is None — that's obviously not good.
 		if let Some(id) = socket.user_id().await {
 			let entry = self.by_uid.entry(id.clone());
 			let connections = match entry {

@@ -51,9 +51,7 @@ pub use sector::SectorBuffer;
 // that requires the function signatures here to change most likely, 
 // so decide that.
 pub use info::{BoardInfo, BoardInfoPatch, BoardInfoPost};
-// TODO: this is emblematic of how shape isn't really useful as a trait:
-// collapse that whole module into a single concrete struct perhaps
-pub use shape::{Shape, CachedVecShape};
+pub use shape::Shape;
 
 #[derive(Debug)]
 pub enum PlaceError {

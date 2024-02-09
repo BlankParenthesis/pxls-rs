@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::socket::packet;
 
-use super::{shape::CachedVecShape, color::Palette};
+use super::{shape::Shape, color::Palette};
 
 #[derive(Serialize, Debug)]
 pub struct BoardInfo {
 	pub name: String,
 	pub created_at: u64,
-	pub shape: CachedVecShape,
+	pub shape: Shape,
 	pub palette: Palette,
 	pub max_pixels_available: u32,
 }
@@ -16,7 +16,7 @@ pub struct BoardInfo {
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPost {
 	pub name: String,
-	pub shape: CachedVecShape,
+	pub shape: Shape,
 	pub palette: Palette,
 	pub max_pixels_available: u32,
 }
@@ -24,7 +24,7 @@ pub struct BoardInfoPost {
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPatch {
 	pub name: Option<String>,
-	pub shape: Option<CachedVecShape>,
+	pub shape: Option<Shape>,
 	pub palette: Option<Palette>,
 	pub max_pixels_available: Option<u32>,
 }
