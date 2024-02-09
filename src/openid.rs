@@ -28,9 +28,9 @@ impl From<DiscoveryError> for StatusCode {
 }
 
 #[derive(Deserialize)]
-pub struct Discovery {
-	pub issuer: Url,
-	pub jwks_uri: Url,
+struct Discovery {
+	issuer: Url,
+	jwks_uri: Url,
 }
 
 impl Discovery {

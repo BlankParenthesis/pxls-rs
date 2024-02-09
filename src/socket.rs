@@ -3,7 +3,7 @@ pub mod packet;
 use core::hash::Hash;
 use std::{
 	sync::{Arc, Weak},
-	time::{Duration, SystemTime},
+	time::Duration,
 };
 
 use sea_orm::DatabaseConnection as Connection;
