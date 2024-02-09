@@ -70,7 +70,7 @@ impl MigrationTrait for Migration {
 			.col(col!(Placement::Position).big_integer())
 			.col(col!(Placement::Color).small_integer())
 			.col(col!(Placement::Timestamp).integer())
-			.col(col!(Placement::UserId).text())
+			.col(ColumnDef::new(Placement::UserId).null().text())
 			.foreign_key(ForeignKey::create().from_col(Placement::Board).to_tbl(Board::Table).to_col(Board::Id))
 			.foreign_key(ForeignKey::create()
 				.from_col(Placement::Board).from_col(Placement::Color)
