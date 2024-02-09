@@ -6,7 +6,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
-use crate::board::user::User;
 use crate::config::CONFIG;
 
 #[derive(Debug)]
@@ -91,12 +90,6 @@ impl Discovery {
 pub struct Identity {
 	pub sub: String,
 	pub exp: u64,
-}
-
-impl From<Identity> for User {
-	fn from(identity: Identity) -> Self {
-		Self::from_id(identity.sub)
-	}
 }
 
 #[derive(Debug)]

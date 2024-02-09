@@ -5,7 +5,7 @@ extern crate lazy_static;
 mod database;
 mod openid;
 mod config;
-mod filters;
+mod filter;
 mod board;
 mod routes;
 mod socket;
@@ -14,19 +14,18 @@ mod permissions;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
-use permissions::PermissionsError;
 use deadpool::managed::Pool;
-use sea_orm::{Database, DbErr, ConnectOptions};
-use filters::header::authorization::BearerError;
+use sea_orm::{Database, ConnectOptions};
+use filter::header::authorization::{BearerError, PermissionsError};
 use futures_util::future;
-use thiserror::Error;
 use tokio::sync::RwLock;
 use warp::{Filter, Rejection, Reply};
 use warp::http::{Method, StatusCode};
 
 use crate::database::boards::migrations::{Migrator, MigratorTrait};
+use crate::database::boards::DatabaseError;
 use crate::database::users::LDAPConnectionManager;
-use crate::board::board::Board;
+use crate::board::Board;
 use crate::config::CONFIG;
 
 // FIXME: since we're not longer using actix, this is probably solvable?
@@ -40,25 +39,6 @@ use crate::config::CONFIG;
 type BoardRef = Arc<RwLock<Option<Board>>>;
 pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
 
-#[derive(Error, Debug)]
-pub enum DatabaseError<T> {
-    #[error(transparent)]
-	DbErr(DbErr),
-    #[error(transparent)]
-	Other(#[from] T),
-}
-
-impl<T: Send + Sync + Reply> Reply for DatabaseError<T> {
-    fn into_response(self) -> warp::reply::Response {
-		match self {
-			DatabaseError::DbErr(_) => {
-				StatusCode::INTERNAL_SERVER_ERROR.into_response()
-			},
-			DatabaseError::Other(other) => other.into_response(),
-		}
-    }
-}
-
 #[tokio::main]
 async fn main() {
 	let mut connect_options = ConnectOptions::new(CONFIG.database_url.to_string());
@@ -71,7 +51,7 @@ async fn main() {
 
 	Migrator::up(db.as_ref(), None).await.expect("Failed to run migrations");
 
-	let boards = database::queries::load_boards(db.as_ref())
+	let boards = database::query::load_boards(db.as_ref())
 		.await
 		.expect("Failed to load boards")
 		.into_iter()
@@ -179,7 +159,7 @@ async fn main() {
 	// Temporary fix for gzip until https://github.com/seanmonstar/warp/pull/513
 	// is merged
 	// Update: still waiting… progress doesn't look good
-	let gzip_routes = filters::header::accept_encoding::gzip()
+	let gzip_routes = filter::header::accept_encoding::gzip()
 		.and(routes.clone())
 		.with(warp::compression::gzip());
 
@@ -192,4 +172,39 @@ async fn main() {
 		.bind_with_graceful_shutdown(binding, exit_signal);
 
 	server.await
+}
+
+// TODO: move this elsewhere
+// it's pretty general, but I'm hesitatn to create a util/misc module just yet
+
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait AsyncRead {
+	type Error;
+
+	async fn read(
+		&mut self,
+		output: &mut [u8],
+	) -> std::result::Result<usize, Self::Error>;
+}
+
+#[async_trait]
+pub trait AsyncWrite {
+	type Error;
+
+	async fn write(
+		&mut self,
+		input: &[u8],
+	) -> std::result::Result<usize, Self::Error>;
+
+	async fn flush(&mut self) -> std::result::Result<(), Self::Error>;
+}
+
+pub trait Len {
+	fn len(&self) -> usize;
+
+	fn is_empty(&self) -> bool {
+		self.len() == 0
+	}
 }

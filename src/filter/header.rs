@@ -1,4 +1,6 @@
 pub mod accept_encoding;
+/// Note: this is actually authentication.
+/// It is named authorization because of the http header.
 pub mod authorization;
 // TODO: both range things here might need re-evaluating in structure
 pub mod content_range;

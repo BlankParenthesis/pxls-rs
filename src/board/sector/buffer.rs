@@ -1,10 +1,17 @@
 use bytes::{BytesMut, BufMut};
+use num_derive::FromPrimitive;
 use sea_orm::{sea_query::{Query, self, Expr}, Order, Set, EntityTrait, ColumnTrait, QueryFilter, Iden, ConnectionTrait};
 
 use crate::{
 	database::boards::{entities::*, DbResult},
-	board::board::MaskValue,
 };
+
+#[derive(FromPrimitive)]
+pub enum MaskValue {
+	NoPlace = 0,
+	Place = 1,
+	Adjacent = 2,
+}
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum SectorBuffer {

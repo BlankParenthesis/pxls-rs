@@ -8,14 +8,18 @@ use warp::{
 	Filter,
 };
 
-use crate::filters::header::{authorization, range::{self, Range}};
-use crate::filters::body::patch;
-use crate::filters::resource::{board, database};
-use crate::board::sector::SectorBuffer;
+
+use crate::filter::header::{
+	authorization::{self, with_permission},
+	range::{self, Range}
+};
+use crate::filter::body::patch;
+use crate::filter::resource::{board, database};
+use crate::board::SectorBuffer;
 use crate::BoardDataMap;
-use crate::filters::resource::board::PassableBoard;
-use crate::filters::body::patch::BinaryPatch;
-use crate::permissions::{with_permission, Permission};
+use crate::filter::resource::board::PassableBoard;
+use crate::filter::body::patch::BinaryPatch;
+use crate::permissions::Permission;
 
 pub fn get_mask(
 	boards: BoardDataMap,

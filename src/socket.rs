@@ -20,8 +20,8 @@ use warp::ws;
 use crate::{
 	permissions::Permission,
 	openid::{ValidationError, self},
-	board::board::Board,
-	board::user::AuthedUser,
+	board::Board,
+	filter::header::authorization::Bearer,
 };
 
 // TODO: move this somewhere else
@@ -192,33 +192,30 @@ impl UnauthedSocket {
 
 	fn authorize_user(
 		&self,
-		authed_user: AuthedUser,
-	) -> Result<AuthedUser, AuthFailure> {
-		let actual_user = authed_user.user().unwrap_or_default();
+		credentials: Option<Bearer>,
+	) -> Result<Option<Bearer>, AuthFailure> {
+		let permissions = match credentials {
+			Some(ref bearer) => bearer.permissions(),
+			None => Permission::defaults(),
+		};
 
 		let has_permission = self.extensions.iter()
 			.map(|e| e.socket_permission())
-			.all(|permission| {
-				actual_user.permissions.contains(&permission)
-			});
+			.all(|permission| permissions.contains(permission));
 
 		if has_permission {
-			Ok(authed_user)
+			Ok(credentials)
 		} else {
 			Err(AuthFailure::Unauthorized)
 		}
 	}
 
 	async fn authenticate_user(
-		token: Option<String>,
-	) -> Result<AuthedUser, AuthFailure> {
-		if let Some(token) = token {
-			openid::validate_token(&token).await
-				.map(AuthedUser::from)
-				.map_err(AuthFailure::ValidationError)
-		} else {
-			Ok(AuthedUser::None)
-		}
+		token: String,
+	) -> Result<Bearer, AuthFailure> {
+		openid::validate_token(&token).await
+			.map(Bearer::from)
+			.map_err(AuthFailure::ValidationError)
 	}
 
 	async fn authenticate_socket(
@@ -230,7 +227,7 @@ impl UnauthedSocket {
 				uuid: Uuid::new_v4(),
 				sender: self.sender,
 				extensions: self.extensions,
-				user: RwLock::new(AuthedUser::None),
+				credentials: None,
 			});
 		}
 
@@ -238,14 +235,20 @@ impl UnauthedSocket {
 			use packet::client::Packet;
 			match msg {
 				Message::Packet(Packet::Authenticate { token }) => {
-					let user = UnauthedSocket::authenticate_user(token).await
-						.and_then(|user| self.authorize_user(user));
-					return user.map(|user| AuthedSocket {
-						uuid: Uuid::new_v4(),
-						sender: self.sender,
-						extensions: self.extensions,
-						user: RwLock::new(user),
-					})
+					let credentials = match token {
+						Some(token) => {
+							Some(UnauthedSocket::authenticate_user(token).await?)
+						},
+						None => None,
+					};
+
+					return self.authorize_user(credentials)
+						.map(|credentials| AuthedSocket {
+							uuid: Uuid::new_v4(),
+							sender: self.sender,
+							extensions: self.extensions,
+							credentials: credentials.map(RwLock::new),
+						});
 				},
 				Message::Packet(_) => return Err(AuthFailure::InvalidMessage),
 				Message::Invalid => return Err(AuthFailure::InvalidMessage),
@@ -263,7 +266,7 @@ pub struct AuthedSocket {
 	uuid: Uuid,
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 	pub extensions: EnumSet<Extension>,
-	pub user: RwLock<AuthedUser>,
+	credentials: Option<RwLock<Bearer>>,
 }
 
 impl PartialEq for AuthedSocket {
@@ -287,6 +290,15 @@ impl Hash for AuthedSocket {
 }
 
 impl AuthedSocket {
+	pub async fn user_id(&self) -> Option<String> {
+		match self.credentials {
+			Some(ref lock) => {
+				Some(lock.read().await.id.clone())
+			},
+			None => None,
+		}
+	}
+
 	pub async fn send(
 		&self,
 		message: &packet::server::Packet,
@@ -302,13 +314,9 @@ impl AuthedSocket {
 	}
 
 	async fn auth_valid(&self) -> bool {
-		let user = self.user.read().await;
-		match &*user {
-			AuthedUser::Authed {
-				user: _,
-				valid_until,
-			} => SystemTime::now() < *valid_until,
-			AuthedUser::None => true,
+		match self.credentials {
+			Some(ref lock) => lock.read().await.is_valid(),
+			None => true,
 		}
 	}
 
@@ -322,25 +330,34 @@ impl AuthedSocket {
 		self.sender.send(Ok(close));
 	}
 
+	// TODO: consider returning a result and closing based on that
+	// side effects bad and all
 	async fn reauthenticate(&self, token: Option<String>) {
-		if self.extensions.contains(Extension::Authentication) {
-			match UnauthedSocket::authenticate_user(token).await {
-				Ok(user) => {
-					let mut current_user = self.user.write().await;
-					// NOTE: AuthedUser::eq tests only the subject
-					// and not the expiry
-					if *current_user == user {
-						*current_user = user;
-					} else {
-						self.close(Some(CloseReason::InvalidToken));
-					}
-				},
-				Err(_) => {
-					self.close(Some(CloseReason::InvalidToken));
-				},
-			}
-		} else {
+		if !self.extensions.contains(Extension::Authentication) {
 			self.close(Some(CloseReason::InvalidPacket));
+			return;
+		}
+
+		match (token, self.credentials.as_ref()) {
+			(Some(token), Some(credentials)) => {
+				match UnauthedSocket::authenticate_user(token).await {
+					Ok(user) => {
+						let mut credentials = credentials.write().await;
+						// NOTE: AuthedUser::eq tests only the subject
+						// and not the expiry
+						if *credentials.id == user.id {
+							*credentials = user;
+						} else {
+							self.close(Some(CloseReason::InvalidToken));
+						}
+					},
+					Err(_) => {
+						self.close(Some(CloseReason::InvalidToken));
+					},
+				}
+			},
+			(None, None) => (),
+			_ => self.close(Some(CloseReason::InvalidToken)),
 		}
 	} 
 

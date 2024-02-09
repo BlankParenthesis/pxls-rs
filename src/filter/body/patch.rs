@@ -2,7 +2,7 @@ use bytes::Bytes;
 use reqwest::{StatusCode, header};
 use warp::{reject::Reject, Reply, reply::Response, Filter, Rejection};
 
-use crate::filters::header::content_range::{self, ContentRange};
+use crate::filter::header::content_range::{self, ContentRange};
 
 #[derive(Debug)]
 pub enum InvalidPatch {

@@ -7,12 +7,16 @@ use warp::{
 	Filter,
 };
 
-use crate::filters::header::{authorization, range::{self, Range}};
-use crate::filters::resource::{board, database};
-use crate::board::sector::*;
+
+use crate::filter::header::{
+	authorization::{self, with_permission},
+	range::{self, Range}
+};
+use crate::filter::resource::{board, database};
+use crate::board::SectorBuffer;
 use crate::BoardDataMap;
-use crate::filters::resource::board::PassableBoard;
-use crate::permissions::{with_permission, Permission};
+use crate::filter::resource::board::PassableBoard;
+use crate::permissions::Permission;
 
 pub fn get_timestamps(
 	boards: BoardDataMap,

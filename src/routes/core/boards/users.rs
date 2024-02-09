@@ -6,13 +6,22 @@ use warp::{Reply, Rejection};
 use warp::Filter;
 use sea_orm::DatabaseConnection as Connection;
 
-use crate::filters::resource::{board, database};
+use crate::filter::resource::{board, database};
 use crate::{
-	permissions::{with_permission, Permission},
-	filters::header::authorization,
-	filters::resource::board::PassableBoard,
+	permissions::Permission,
+	filter::header::authorization::{self, with_permission},
+	filter::resource::board::PassableBoard,
 	BoardDataMap,
 };
+
+use serde::Serialize;
+
+#[derive(Serialize, Debug)]
+pub struct UserCount {
+	pub active: usize,
+	pub idle_timeout: u32,
+}
+
 
 pub fn get(
 	boards: BoardDataMap,
@@ -29,7 +38,10 @@ pub fn get(
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting user count");
 			match board.user_count(connection.as_ref()).await {
-				Ok(user_count) => json(&user_count).into_response(),
+				Ok(active) => {
+					let idle_timeout = board.idle_timeout();
+					json(&UserCount { active, idle_timeout }).into_response()
+				},
 				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
 			}
 		})

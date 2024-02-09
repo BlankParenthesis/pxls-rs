@@ -4,9 +4,8 @@ use std::io::Read;
 use async_trait::async_trait;
 use sea_orm::{TransactionTrait, ConnectionTrait};
 
-use crate::DatabaseError;
-use crate::board::sector::{SectorBuffer, SectorCache};
-use super::{AsyncRead, AsyncWrite, Len};
+use crate::{DatabaseError, AsyncRead, AsyncWrite, Len};
+use super::{SectorBuffer, SectorCache};
 
 pub struct SectorAccessor<'l, Connection: ConnectionTrait + TransactionTrait> {
 	cursor: usize,

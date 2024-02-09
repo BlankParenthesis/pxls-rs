@@ -9,16 +9,16 @@ use warp::{http::header, Filter};
 use warp::path::Tail;
 use sea_orm::DatabaseConnection as Connection;
 
-use crate::board::user::{AuthedUser, User};
-use crate::filters::resource::{board, database};
+use crate::filter::header::authorization::Bearer;
+use crate::filter::resource::{board, database};
 use crate::{
-	permissions::{with_permission, Permission},
-	filters::header::authorization,
-	filters::resource::board::PassableBoard,
+	permissions::Permission,
+	filter::header::authorization::{self, with_permission},
+	filter::resource::board::PassableBoard,
 	socket::{Extension, UnauthedSocket},
 	BoardDataMap,
-	filters::response::reference::Reference,
-	filters::response::paginated_list::*,
+	filter::response::reference::Reference,
+	filter::response::paginated_list::*,
 };
 
 pub mod data;
@@ -113,9 +113,9 @@ pub fn get(
 			let board = board.as_ref().expect("Board wend missing when getting info");
 			let mut response = json(&board.info).into_response();
 
-			if let AuthedUser::Authed { user, .. } = user {
+			if let Some(Bearer { id, .. }) = user {
 				let cooldown_info = board.user_cooldown_info(
-					&user,
+					&id,
 					connection.as_ref(),
 				).await;
 
@@ -166,10 +166,10 @@ pub fn socket(
 					}
 
 					if !extensions.contains(Extension::Authentication) {
-						let user = User::default();
+						let permissions = Permission::defaults();
 						let has_permissions = extensions.iter()
 							.map(|e| e.socket_permission())
-							.all(|p| user.permissions.contains(&p));
+							.all(|p| permissions.contains(p));
 
 						if !has_permissions {
 							return StatusCode::FORBIDDEN.into_response();

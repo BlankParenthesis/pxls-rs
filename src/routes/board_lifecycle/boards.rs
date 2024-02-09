@@ -11,14 +11,14 @@ use warp::{
 };
 
 use crate::{
-	permissions::{with_permission, Permission},
-	filters::{
-		header::authorization,
+	permissions::Permission,
+	filter::{
+		header::authorization::{self, with_permission, Bearer},
 		resource::{board::{self, PassableBoard, PendingDelete}, database},
 		response::reference::Reference,
 	},
-	board::board::*,
-	board::user::*,
+	board::Board,
+	board::{BoardInfoPost, BoardInfoPatch},
 	BoardDataMap,
 };
 
@@ -111,7 +111,7 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
 		.and(database::connection(database_pool))
-		.then(move |mut deletion: PendingDelete, _user: AuthedUser, connection: Arc<Connection>| async move {
+		.then(move |mut deletion: PendingDelete, _user, connection: Arc<Connection>| async move {
 			let board = deletion.perform();
 			let mut board = board.write().await;
 			let board = board.take().expect("Board went missing during deletion");

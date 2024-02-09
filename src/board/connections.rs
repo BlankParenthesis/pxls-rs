@@ -11,7 +11,6 @@ use tokio::{time::Instant, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::board::cooldown::CooldownInfo;
-use crate::board::user::AuthedUser;
 use crate::socket::{
 	CloseReason,
 	AuthedSocket,
@@ -173,25 +172,22 @@ impl Connections {
 		socket: &Arc<AuthedSocket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
-		let user = socket.user.read().await;
-		if let AuthedUser::Authed { user, .. } = &*user {
-			if let Some(ref id) = user.id {
-				let entry = self.by_uid.entry(id.clone());
-				let connections = match entry {
-					Entry::Vacant(entry) => {
-						let new_connections = UserConnections::new(
-							Arc::clone(socket),
-							// SAFETY: this is only None if autheduser is None
-							cooldown_info.unwrap(),
-						).await;
-						entry.insert(Arc::clone(&new_connections));
-						new_connections
-					},
-					Entry::Occupied(entry) => Arc::clone(entry.get()),
-				};
+		if let Some(id) = socket.user_id().await {
+			let entry = self.by_uid.entry(id.clone());
+			let connections = match entry {
+				Entry::Vacant(entry) => {
+					let new_connections = UserConnections::new(
+						Arc::clone(socket),
+						// SAFETY: this is only None if autheduser is None
+						cooldown_info.unwrap(),
+					).await;
+					entry.insert(Arc::clone(&new_connections));
+					new_connections
+				},
+				Entry::Occupied(entry) => Arc::clone(entry.get()),
+			};
 
-				connections.write().await.insert(Arc::clone(socket));
-			}
+			connections.write().await.insert(Arc::clone(socket));
 		}
 
 		for extension in socket.extensions {
@@ -211,18 +207,15 @@ impl Connections {
 		&mut self,
 		socket: &Arc<AuthedSocket>,
 	) {
-		let user = socket.user.read().await;
-		if let AuthedUser::Authed { user, .. } = &*user {
-			if let Some(ref id) = user.id {
-				let connections = self.by_uid.get(id).unwrap();
-				let mut connections = connections.write().await;
+		if let Some(id) = socket.user_id().await {
+			let connections = self.by_uid.get(&id).unwrap();
+			let mut connections = connections.write().await;
 
-				connections.remove(Arc::clone(socket));
-				if connections.is_empty() {
-					connections.cleanup();
-					drop(connections);
-					self.by_uid.remove(id);
-				}
+			connections.remove(Arc::clone(socket));
+			if connections.is_empty() {
+				connections.cleanup();
+				drop(connections);
+				self.by_uid.remove(&id);
 			}
 		}
 
@@ -274,10 +267,10 @@ impl Connections {
 
 	pub async fn set_user_cooldown(
 		&self,
-		user_id: String,
+		user_id: &str,
 		cooldown_info: CooldownInfo,
 	) {
-		if let Some(connections) = self.by_uid.get(&user_id) {
+		if let Some(connections) = self.by_uid.get(user_id) {
 			UserConnections::set_cooldown_info(
 				Arc::clone(connections),
 				cooldown_info,

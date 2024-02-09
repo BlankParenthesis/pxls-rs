@@ -6,8 +6,8 @@ use serde_with::skip_serializing_none;
 use itertools::Itertools;
 use enumset::{EnumSet, EnumSetType};
 
-use crate::board::color::Palette;
-use crate::board::shape::CachedVecShape;
+use crate::board::Palette;
+use crate::board::CachedVecShape;
 use crate::socket::Extension;
 
 #[derive(Serialize, Debug, Clone)]
@@ -25,6 +25,7 @@ pub struct BoardInfo {
 	pub max_pixels_available: Option<u32>,
 }
 
+// TODO: rename
 #[derive(Debug, EnumSetType)]
 pub enum DataType {
 	Colors,

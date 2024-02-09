@@ -4,8 +4,8 @@ use serde_with::skip_serializing_none;
 use warp::{Filter, Reply, Rejection, reply::json};
 
 use crate::{
-	filters::header::authorization,
-	permissions::{with_permission, Permission}
+	filter::header::authorization::{self, with_permission},
+	permissions::Permission,
 };
 
 #[derive(Serialize)]

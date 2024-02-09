@@ -9,17 +9,16 @@ use warp::{
 };
 
 use crate::{
-	permissions::{with_permission, Permission},
-	filters::{
+	permissions::Permission,
+	filter::{
 		header::{
-			authorization,
+			authorization::{self, with_permission},
 		},
 		resource::users,
 	},
-	filters::response::paginated_list::{PaginationOptions, Page},
-	filters::response::reference::Reference,
-	board::user::AuthedUser,
-	database::{users::{Pool, Connection, UserFetchError}, queries},
+	filter::{response::paginated_list::{PaginationOptions, Page}, header::authorization::Bearer},
+	filter::response::reference::Reference,
+	database::{users::{Pool, Connection, UserFetchError}, query},
 };
 
 pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -35,7 +34,7 @@ pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Re
 				.unwrap_or(10)
 				.clamp(1, 100); // TODO: maybe raise upper limit
 			
-			let users = queries::list_users(&mut connection, page, limit).await;
+			let users = query::list_users(&mut connection, page, limit).await;
 			match users {
 				Ok((page_token, users)) => {
 					let references = users.iter()
@@ -80,7 +79,7 @@ pub fn get(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Rej
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
 		.and(users::connection(pool))
 		.then(move |uid: String, _user, mut connection: Connection| async move {
-			let users = queries::get_user(&mut connection, uid).await;
+			let users = query::get_user(&mut connection, uid).await;
 
 			match users {
 				Ok(user) => {
@@ -109,8 +108,8 @@ pub fn current() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Cl
 		.and(warp::get())
 		// TODO: current user permissions
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
-		.then(|tail: Tail, user: AuthedUser| async move {
-			if let Some(uid) = user.user().and_then(|u| u.id.as_ref()) {
+		.then(|tail: Tail, user: Option<Bearer>| async move {
+			if let Some(uid) = user.map(|b| b.id) {
 				let location = format!("/users/{}/{}", uid, tail.as_str())
 					.parse::<Uri>().unwrap();
 				warp::redirect::temporary(location).into_response()

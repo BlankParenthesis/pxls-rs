@@ -1,8 +1,8 @@
-use sea_orm::{ConnectionTrait, EntityTrait};
+use sea_orm::{ConnectionTrait, TransactionTrait, EntityTrait, Set, ColumnTrait, QueryFilter};
 
-use crate::board::board::Board;
+use crate::board::{Board, Palette, Color};
 
-use super::boards::{entities::board, DbResult};
+use super::boards::{entities::{board, color}, DbResult};
 
 use ldap3::{
 	SearchEntry,
@@ -13,6 +13,13 @@ use ldap3::{
 use crate::config::CONFIG;
 use base64::prelude::*;
 use super::users::{Connection, User, UserFetchError};
+
+
+#[derive(Debug, Clone, Copy)]
+pub enum Order {
+	Forward,
+	Reverse,
+}
 
 pub async fn load_boards<Connection: ConnectionTrait>(
 	connection: &Connection
@@ -28,6 +35,35 @@ pub async fn load_boards<Connection: ConnectionTrait>(
 	
 	Ok(boards)
 }
+
+pub async fn replace_palette<Connection: TransactionTrait>(
+	palette: &Palette,
+	board_id: i32,
+	connection: &Connection,
+) -> DbResult<()> {
+	let transaction = connection.begin().await?;
+
+	let palette = palette.clone();
+		
+	color::Entity::delete_many()
+		.filter(color::Column::Board.eq(board_id))
+		.exec(&transaction).await?;
+
+	for (index, Color { name, value }) in palette {
+		let color = color::ActiveModel {
+			board: Set(board_id),
+			index: Set(index as i32),
+			name: Set(name.clone()),
+			value: Set(value as i32),
+		};
+
+		color::Entity::insert(color)
+			.exec(&transaction).await?;
+	}
+	
+	transaction.commit().await
+}
+
 
 pub async fn list_users(
 	connection: &mut Connection,

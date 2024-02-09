@@ -4,19 +4,19 @@ use sea_orm::DatabaseConnection as Connection;
 use warp::{Filter, Reply, Rejection};
 
 use crate::{
-	filters::{
+	filter::{
 		resource::{
 			database,
 			board::{PassableBoard, self},
 		},
 		header::{
 			range::{Range, self},
-			authorization,
+			authorization::{self, with_permission},
 		},
 	},
 	BoardDataMap,
-	permissions::{with_permission, Permission},
-	board::sector::buffer::SectorBuffer,
+	permissions::Permission,
+	board::SectorBuffer,
 };
 
 pub fn get_colors(

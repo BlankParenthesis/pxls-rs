@@ -1,10 +1,7 @@
-use futures_util::future;
+use enumset::{EnumSet, EnumSetType};
 use serde::{Serialize, Serializer};
-use warp::{reject::Reject, Rejection};
 
-use crate::board::user::{AuthedUser, User};
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+#[derive(Debug, EnumSetType)]
 pub enum Permission {
 	Info,
 	BoardsList,
@@ -26,6 +23,13 @@ pub enum Permission {
 	SocketBoardsMask,
 	SocketBoardsTimestamps,
 	SocketBoardLifecycle,
+}
+
+impl Permission {
+	pub fn defaults() -> EnumSet<Self> {
+		// TODO: match is_default above in a nicer way
+		EnumSet::all() - Self::BoardsPixelsPost
+	}
 }
 
 impl From<&Permission> for &str {
@@ -61,28 +65,5 @@ impl Serialize for Permission {
 		serializer: S,
 	) -> Result<S::Ok, S::Error> {
 		serializer.serialize_str(self.into())
-	}
-}
-
-#[derive(Debug)]
-pub enum PermissionsError {
-	MissingPermission(Permission),
-}
-
-impl Reject for PermissionsError {}
-
-// TODO: move this to filters maybe
-pub fn with_permission(
-	permission: Permission
-) -> (impl Fn(AuthedUser) -> future::Ready<Result<AuthedUser, Rejection>> + Clone) {
-	move |authed| {
-		let user = Option::<&User>::from(&authed).unwrap_or_default();
-
-		if user.permissions.contains(&permission) {
-			future::ok(authed)
-		} else {
-			let error =PermissionsError::MissingPermission(permission);
-			future::err(warp::reject::custom(error))
-		}
 	}
 }

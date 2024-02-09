@@ -5,18 +5,19 @@ use warp::reply::json;
 use warp::{Reply, Rejection};
 use warp::Filter;
 use sea_orm::DatabaseConnection as Connection;
+use serde::Deserialize;
 
-use crate::filters::resource::{board, database};
+use crate::filter::header::authorization::Bearer;
+use crate::filter::resource::{board, database};
 use crate::{
-	permissions::{with_permission, Permission},
-	filters::header::authorization,
-	filters::resource::board::PassableBoard,
+	permissions::Permission,
+	filter::header::authorization::{self, with_permission},
+	filter::resource::board::PassableBoard,
 	BoardDataMap,
 };
 
-use crate::board::board::Order;
-use crate::board::placement::PlacementRequest;
-use crate::filters::response::paginated_list::{PageToken, PaginationOptions, Page};
+use crate::database::query::Order;
+use crate::filter::response::paginated_list::{PageToken, PaginationOptions, Page};
 
 pub fn list(
 	boards: BoardDataMap,
@@ -122,6 +123,11 @@ pub fn get(
 		})
 }
 
+#[derive(Deserialize, Debug)]
+pub struct PlacementRequest {
+	pub color: u8,
+}
+
 pub fn post(
 	boards: BoardDataMap,
 	database_pool: Arc<Connection>,
@@ -135,15 +141,15 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsPost)))
 		.and(database::connection(Arc::clone(&database_pool)))
-		.then(|board: PassableBoard, position, placement: PlacementRequest, user, connection: Arc<Connection>| async move {
-			let user = Option::from(user).expect("Default user shouldn't have place permisisons");
+		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, connection: Arc<Connection>| async move {
+			let user = user.expect("Default user shouldn't have place permisisons");
 
 			let board = board.write().await;
 			let board = board.as_ref().expect("Board went missing when creating a pixel");
 			let place_attempt = board.try_place(
 				// TODO: maybe accept option but make sure not to allow
 				// undos etc for anon users
-				&user,
+				&user.id,
 				position,
 				placement.color,
 				connection.as_ref(),
@@ -157,7 +163,7 @@ pub fn post(
 					).into_response();
 
 					let cooldown_info = board.user_cooldown_info(
-						&user,
+						&user.id,
 						connection.as_ref(),
 					).await;
 
