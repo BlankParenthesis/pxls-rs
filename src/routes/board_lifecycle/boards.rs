@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use sea_orm::DatabaseConnection as Connection;
 
@@ -13,14 +14,21 @@ use warp::{
 use crate::{
 	permissions::Permission,
 	filter::{
-		header::authorization::{self, with_permission, Bearer},
+		header::authorization::{self, with_permission},
 		resource::{board::{self, PassableBoard, PendingDelete}, database},
 		response::reference::Reference,
 	},
-	board::Board,
-	board::{BoardInfoPost, BoardInfoPatch},
+	board::{Board, Palette},
 	BoardDataMap,
 };
+
+#[derive(Deserialize, Debug)]
+pub struct BoardInfoPost {
+	pub name: String,
+	pub shape: Vec<Vec<usize>>,
+	pub palette: Palette,
+	pub max_pixels_available: u32,
+}
 
 pub fn post(
 	boards: BoardDataMap,
@@ -35,7 +43,13 @@ pub fn post(
 		.then(move |data: BoardInfoPost, _user, connection: Arc<Connection>| {
 			let boards = Arc::clone(&boards);
 			async move {
-				let board = Board::create(data, connection.as_ref()).await;
+				let board = Board::create(
+					data.name,
+					data.shape,
+					data.palette,
+					data.max_pixels_available,
+					connection.as_ref(),
+				).await;
 
 				let board = match board {
 					Ok(board) => board,
@@ -66,6 +80,14 @@ pub fn post(
 		})
 }
 
+#[derive(Deserialize, Debug)]
+pub struct BoardInfoPatch {
+	pub name: Option<String>,
+	pub shape: Option<Vec<Vec<usize>>>,
+	pub palette: Option<Palette>,
+	pub max_pixels_available: Option<u32>,
+}
+
 pub fn patch(
 	boards: BoardDataMap,
 	database_pool: Arc<Connection>,
@@ -82,7 +104,15 @@ pub fn patch(
 			let mut board = board.write().await;
 			let board = board.as_mut().expect("Board went missing when patching");
 
-			match board.update_info(patch, connection.as_ref()).await {
+			let update = board.update_info(
+				patch.name,
+				patch.shape,
+				patch.palette,
+				patch.max_pixels_available,
+				connection.as_ref(),
+			);
+
+			match update.await {
 				Ok(()) => {
 					let mut response = json(&Reference::from(&*board)).into_response();
 					response = reply::with_status(

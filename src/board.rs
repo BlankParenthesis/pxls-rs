@@ -42,15 +42,12 @@ use crate::{
 };
 
 use connections::Connections;
-use sector::*;
+use sector::{SectorAccessor, SectorCache, MaskValue};
 use cooldown::CooldownInfo;
+use info::BoardInfo;
 
 pub use color::{Color, Palette};
 pub use sector::SectorBuffer;
-// TODO: the extra infos here could possibly be moved into the routes
-// that requires the function signatures here to change most likely, 
-// so decide that.
-pub use info::{BoardInfo, BoardInfoPatch, BoardInfoPost};
 pub use shape::Shape;
 
 #[derive(Debug)]
@@ -105,7 +102,10 @@ impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
 
 impl Board {
 	pub async fn create<Connection: ConnectionTrait + TransactionTrait>(
-		info: BoardInfoPost,
+		name: String,
+		shape: Vec<Vec<usize>>,
+		palette: Palette,
+		max_pixels_available: u32,
 		connection: &Connection,
 	) -> DbResult<Self> {
 		use crate::database::boards::entities::*;
@@ -117,14 +117,14 @@ impl Board {
 
 		let new_board = board::Entity::insert(board::ActiveModel {
 				id: NotSet,
-				name: Set(info.name),
+				name: Set(name),
 				created_at: Set(now as i64),
-				shape: Set(serde_json::to_value(info.shape).unwrap()),
-				max_stacked: Set(info.max_pixels_available as i32),
+				shape: Set(serde_json::to_value(shape).unwrap()),
+				max_stacked: Set(max_pixels_available as i32),
 			})
 			.exec_with_returning(connection).await?;
 
-		query::replace_palette(&info.palette, new_board.id, connection).await?;
+		query::replace_palette(&palette, new_board.id, connection).await?;
 
 		Self::load(new_board, connection).await
 	}
@@ -199,35 +199,38 @@ impl Board {
 		Ok(())
 	}
 
-	// TODO: find some way to exhaustively match info so that the compiler knows
-	// when new fields are added and can notify that this function needs updates.
 	pub async fn update_info<Connection: ConnectionTrait + TransactionTrait>(
 		&mut self,
-		info: BoardInfoPatch,
+		name: Option<String>,
+		shape: Option<Vec<Vec<usize>>>,
+		palette: Option<Palette>,
+		max_pixels_available: Option<u32>,
 		connection: &Connection,
 	) -> DbResult<()> {
 		use crate::database::boards::entities::*;
 
 		assert!(
-			info.name.is_some()
-				|| info.palette.is_some()
-				|| info.shape.is_some()
-				|| info.max_pixels_available.is_some()
+			name.is_some()
+			|| palette.is_some()
+			|| shape.is_some()
+			|| max_pixels_available.is_some()
 		);
 
+		let shape = shape.map(Shape::new);
+
 		let transaction = connection.begin().await?;
-		if let Some(ref name) = info.name {
+		if let Some(ref name) = name {
 			board::Entity::update_many()
 				.col_expr(board::Column::Name, name.into())
 				.filter(board::Column::Id.eq(self.id))
 				.exec(&transaction).await?;
 		}
 
-		if let Some(ref palette) = info.palette {
+		if let Some(ref palette) = palette {
 			query::replace_palette(palette, self.id, &transaction).await?;
 		}
 
-		if let Some(ref shape) = info.shape {
+		if let Some(ref shape) = shape {
 			board::Entity::update_many()
 				.col_expr(board::Column::Shape, serde_json::to_value(shape).unwrap().into())
 				.filter(board::Column::Id.eq(self.id))
@@ -239,7 +242,7 @@ impl Board {
 				.exec(&transaction).await?;
 		}
 
-		if let Some(max_stacked) = info.max_pixels_available {
+		if let Some(max_stacked) = max_pixels_available {
 			board::Entity::update_many()
 				.col_expr(board::Column::MaxStacked, (max_stacked as i32).into())
 				.filter(board::Column::Id.eq(self.id))
@@ -248,15 +251,15 @@ impl Board {
 		
 		transaction.commit().await?;
 
-		if let Some(ref name) = info.name {
+		if let Some(ref name) = name {
 			self.info.name = name.clone();
 		}
 
-		if let Some(ref palette) = info.palette {
+		if let Some(ref palette) = palette {
 			self.info.palette = palette.clone();
 		}
 
-		if let Some(ref shape) = info.shape {
+		if let Some(ref shape) = shape {
 			self.info.shape = shape.clone();
 
 			self.sectors = SectorCache::new(
@@ -266,12 +269,17 @@ impl Board {
 			)
 		}
 
-		if let Some(max_stacked) = info.max_pixels_available {
+		if let Some(max_stacked) = max_pixels_available {
 			self.info.max_pixels_available = max_stacked;
 		}
 
 		let packet = packet::server::Packet::BoardUpdate {
-			info: Some(info.into()),
+			info: Some(packet::server::BoardInfo {
+					name,
+					shape,
+					palette,
+					max_pixels_available,
+			}),
 			data: None,
 		};
 
