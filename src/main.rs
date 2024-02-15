@@ -19,6 +19,7 @@ use sea_orm::{Database, ConnectOptions};
 use filter::header::authorization::{BearerError, PermissionsError};
 use futures_util::future;
 use tokio::sync::RwLock;
+use warp::body::BodyDeserializeError;
 use warp::{Filter, Rejection, Reply};
 use warp::http::{Method, StatusCode};
 
@@ -140,7 +141,10 @@ async fn main() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())
 			} else if let Some(err) = rejection.find::<PermissionsError>() {
 				future::ok(StatusCode::FORBIDDEN.into_response())
+			} else if let Some(err) = rejection.find::<BodyDeserializeError>() {
+				future::ok(StatusCode::BAD_REQUEST.into_response())
 			} else {
+				eprintln!("ERROR: {:?}", rejection);
 				future::err(rejection)
 			}
 		})
