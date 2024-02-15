@@ -87,21 +87,23 @@ struct DataRange {
 }
 
 #[derive(Error, Debug)]
-enum RangeOrReadError<E> {
+enum RangeOrReadError<E: fmt::Debug> {
     #[error(transparent)]
 	RangeErr(RangeIndexError),
     #[error(transparent)]
 	ReadErr(#[from] E),
 }
 
-impl<E: Send> Reply for RangeOrReadError<E> {
+impl<E: fmt::Debug + Send> Reply for RangeOrReadError<E> {
 	fn into_response(self) -> reply::Response {
 		match self {
 			RangeOrReadError::RangeErr(e) => e.into_response(),
-			RangeOrReadError::ReadErr(_) => Response::builder()
-				.status(StatusCode::INTERNAL_SERVER_ERROR)
-				.body("".into())
-				.unwrap(),
+			RangeOrReadError::ReadErr(err) => {
+				Response::builder()
+					.status(StatusCode::INTERNAL_SERVER_ERROR)
+					.body("".into())
+					.unwrap()
+			},
 		}
 	}
 }
@@ -113,6 +115,7 @@ async fn data_ranges<D, E>(
 ) -> Result<Vec<DataRange>, RangeOrReadError<E>>
 where
 	D: AsyncRead<Error = E> + Seek + Len,
+	E: fmt::Debug,
 {
 	if !unit.eq("bytes") {
 		return Err(RangeOrReadError::RangeErr(RangeIndexError::UnknownUnit));
@@ -314,7 +317,7 @@ impl Range {
 	) -> reply::Response
 	where
 		D: AsyncRead<Error = E> + Seek + Len,
-		E: Send,
+		E: Send + fmt::Debug,
 	{
 		match self {
 			Self::Multi { unit, ranges } => {
@@ -358,10 +361,12 @@ impl Range {
 						// TODO: assert correct read_size
 						let read_size = match data.read(&mut buffer).await {
 							Ok(size) => size,
-							Err(_) => return Response::builder()
-								.status(StatusCode::INTERNAL_SERVER_ERROR)
-								.body("")
-								.into_response(),
+							Err(err) => {
+								return Response::builder()
+									.status(StatusCode::INTERNAL_SERVER_ERROR)
+									.body("")
+									.into_response()
+							},
 						};
 
 						let range = format!("bytes {}-{}/{}", range.start, range.end, data.len());
@@ -383,10 +388,12 @@ impl Range {
 				// TODO: assert correct read_size
 				let read_size = match data.read(&mut buffer).await {
 					Ok(size) => size,
-					Err(_) => return Response::builder()
-						.status(StatusCode::INTERNAL_SERVER_ERROR)
-						.body("".into())
-						.unwrap(),
+					Err(err) => {
+						return Response::builder()
+							.status(StatusCode::INTERNAL_SERVER_ERROR)
+							.body("".into())
+							.unwrap()
+					},
 				};
 
 				Response::builder()

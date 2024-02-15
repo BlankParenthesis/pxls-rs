@@ -11,11 +11,9 @@ mod routes;
 mod socket;
 mod permissions;
 
-use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
-use deadpool::managed::Pool;
-use sea_orm::{Database, ConnectOptions};
+use database::{BoardsDatabase, UsersDatabase, Database};
 use filter::header::authorization::{BearerError, PermissionsError};
 use futures_util::future;
 use tokio::sync::RwLock;
@@ -23,119 +21,107 @@ use warp::body::BodyDeserializeError;
 use warp::{Filter, Rejection, Reply};
 use warp::http::{Method, StatusCode};
 
-use crate::database::boards::migrations::{Migrator, MigratorTrait};
-use crate::database::boards::DatabaseError;
-use crate::database::users::LDAPConnectionManager;
 use crate::board::Board;
 use crate::config::CONFIG;
 
-// FIXME: since we're not longer using actix, this is probably solvable?
-// NOTE: This can go back to being RwLock<Board> if we can get nice ownership
-// between the Board, BoardServer, and BoardServerSocket. Actix makes this
-// impossible.
-// The reason for this is that if BoardServer is owned by Board, Board *must*
-// outlive it. This means that we can add a lifetime parameter to it and give it
-// a board reference directly, rather than resorting to reference counted
-// maybe-there, maybe-not solutions (like below).
+// It seems like it would be nice if this were just RwLock<Board>.
+// This cannot be done because we pass the board into the delete function to
+// dispose of the object clearly. To do that, we need to own the board fully.
+// with RwLock, we cannot take the board out of that reference (even if we
+// have a write lock) unless we own the RwLock. We don't own the RwLock since
+// it's shared behind Arc. With Option we can take the board and replace it
+// with None if we have a &mut through the RwLock.
 type BoardRef = Arc<RwLock<Option<Board>>>;
 pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
 
 #[tokio::main]
 async fn main() {
-	let mut connect_options = ConnectOptions::new(CONFIG.database_url.to_string());
-	connect_options
-		.connect_timeout(Duration::from_secs(2))
-		.acquire_timeout(Duration::from_secs(2));
+	let boards_db = BoardsDatabase::connect().await
+		.expect("Failed to connect to boards database");
+	let boards_db = Arc::new(boards_db);
+	
+	let users_db = UsersDatabase::connect().await
+		.expect("Failed to connect to users database");
+	let users_db = Arc::new(users_db);
 
-	let db = Arc::new(Database::connect(connect_options).await
-		.expect("Failed to connect to database"));
-
-	Migrator::up(db.as_ref(), None).await.expect("Failed to run migrations");
-
-	let boards = database::query::load_boards(db.as_ref())
-		.await
-		.expect("Failed to load boards")
+	let connection = boards_db.connection().await
+		.expect("Failed to get board connection when loading boards");
+	let boards = connection
+		.list_boards().await.expect("Failed to load boards (at list)")
 		.into_iter()
 		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))
 		.collect::<HashMap<_, _>>();
 
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
 
-	let ldap_url = String::from(CONFIG.users_ldap_url.as_str());
-	let users_db_manager = LDAPConnectionManager(ldap_url);
-	let users_db_pool = Pool::<LDAPConnectionManager>::builder(users_db_manager)
-		.build()
-		.expect("Failed to start LDAP connection pool");
-	let users_db_pool = Arc::new(users_db_pool);
-
 	let routes = routes::core::info::get()
 		.or(routes::core::access::get())
 		.or(routes::core::boards::list(Arc::clone(&boards)))
 		.or(routes::core::boards::get(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::default())
 		.or(routes::board_lifecycle::boards::post(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_lifecycle::boards::patch(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_lifecycle::boards::delete(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::socket(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::data::get_colors(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_data_initial::boards::data::get_initial(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_data_mask::boards::data::get_mask(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_data_timestamps::boards::data::get_timestamps(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_data_initial::boards::data::patch_initial(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::board_data_mask::boards::data::patch_mask(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::users::get(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::pixels::list(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::pixels::get(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::pixels::post(
 			Arc::clone(&boards),
-			Arc::clone(&db),
+			Arc::clone(&boards_db),
 		))
 		.or(routes::authentication::authentication::get())
-		.or(routes::users::users::list(&users_db_pool))
+		.or(routes::users::users::list(Arc::clone(&users_db)))
 		.or(routes::users::users::current())
-		.or(routes::users::users::get(&users_db_pool))
+		.or(routes::users::users::get(Arc::clone(&users_db)))
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())
@@ -179,7 +165,7 @@ async fn main() {
 }
 
 // TODO: move this elsewhere
-// it's pretty general, but I'm hesitatn to create a util/misc module just yet
+// it's pretty general, but I'm hesitant to create a util/misc module just yet
 
 use async_trait::async_trait;
 

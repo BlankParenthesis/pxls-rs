@@ -4,6 +4,7 @@ mod color;
 mod sector;
 mod shape;
 mod info;
+mod placement;
 
 use std::{
 	convert::TryFrom,
@@ -13,33 +14,16 @@ use std::{
 };
 
 use bytes::BufMut;
+use sea_orm::DbErr;
 use warp::http::{StatusCode, Uri};
 use num_traits::FromPrimitive;
-use sea_orm::{
-	ConnectionTrait,
-	Set,
-	ActiveValue::NotSet,
-	EntityTrait,
-	ColumnTrait,
-	QueryFilter,
-	QueryOrder,
-	QuerySelect,
-	sea_query::Expr,
-	ModelTrait,
-	PaginatorTrait,
-	TransactionTrait,
-};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{
-	filter::body::patch::BinaryPatch,
-	filter::response::reference::Reference,
-	database::{boards::DbResult, query},
-	database::query::Order,
-	DatabaseError,
-	AsyncWrite,
-	socket::{AuthedSocket, packet},
-};
+use crate::{filter::{body::patch::BinaryPatch, response::paginated_list::PageToken}, database::DatabaseError};
+use crate::filter::response::reference::Reference;
+use crate::AsyncWrite;
+use crate::socket::{AuthedSocket, packet};
+use crate::database::{BoardsConnection, Order};
 
 use connections::Connections;
 use sector::{SectorAccessor, SectorCache, MaskValue};
@@ -47,8 +31,9 @@ use cooldown::CooldownInfo;
 use info::BoardInfo;
 
 pub use color::{Color, Palette};
-pub use sector::SectorBuffer;
+pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
+pub use placement::Placement;
 
 #[derive(Debug)]
 pub enum PlaceError {
@@ -65,7 +50,10 @@ impl Reject for PlaceError {}
 impl Reply for PlaceError {
 	fn into_response(self) -> Response {
 		match self {
-			Self::UnknownMaskValue => StatusCode::INTERNAL_SERVER_ERROR,
+			Self::UnknownMaskValue => {
+				println!("Unknown mask value for board");
+				StatusCode::INTERNAL_SERVER_ERROR
+			},
 			Self::Unplacable => StatusCode::FORBIDDEN,
 			Self::InvalidColor => StatusCode::UNPROCESSABLE_ENTITY,
 			Self::NoOp => StatusCode::CONFLICT,
@@ -101,47 +89,50 @@ impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
 }
 
 impl Board {
-	pub async fn create<Connection: ConnectionTrait + TransactionTrait>(
+	pub fn new(
+		id: i32,
 		name: String,
-		shape: Vec<Vec<usize>>,
+		created_at: u64,
+		shape: Shape,
 		palette: Palette,
 		max_pixels_available: u32,
-		connection: &Connection,
-	) -> DbResult<Self> {
-		use crate::database::boards::entities::*;
+	) -> Self {
+		let info = BoardInfo {
+			name,
+			created_at,
+			shape,
+			palette,
+			max_pixels_available,
+		};
 
-		let now = SystemTime::now()
-			.duration_since(UNIX_EPOCH)
-			.unwrap()
-			.as_secs();
+		let sectors = SectorCache::new(
+			id,
+			info.shape.sector_count(),
+			info.shape.sector_size(),
+		);
 
-		let new_board = board::Entity::insert(board::ActiveModel {
-				id: NotSet,
-				name: Set(name),
-				created_at: Set(now as i64),
-				shape: Set(serde_json::to_value(shape).unwrap()),
-				max_stacked: Set(max_pixels_available as i32),
-			})
-			.exec_with_returning(connection).await?;
-
-		query::replace_palette(&palette, new_board.id, connection).await?;
-
-		Self::load(new_board, connection).await
+		let connections = Connections::default();
+		Self {
+			id,
+			info,
+			sectors,
+			connections
+		}
 	}
 
-	pub async fn read<'l, Connection: ConnectionTrait + TransactionTrait>(
+	pub async fn read<'l>(
 		&'l self,
 		buffer: SectorBuffer,
-		connection: &'l Connection,
-	) -> SectorAccessor<'l, Connection> {
+		connection: &'l BoardsConnection,
+	) -> SectorAccessor<'l> {
 		self.sectors.access(buffer, connection)
 	}
 
 	// TODO: proper error type
-	pub async fn try_patch_initial<Connection: ConnectionTrait + TransactionTrait>(
+	pub async fn try_patch_initial(
 		&self,
 		patch: &BinaryPatch,
-		connection: &Connection,
+		connection: &BoardsConnection,
 	) -> Result<(), &'static str> {
 		// TODO: check bounds
 		let mut sector_data = self
@@ -169,10 +160,10 @@ impl Board {
 		Ok(())
 	}
 
-	pub async fn try_patch_mask<Connection: ConnectionTrait + TransactionTrait>(
+	pub async fn try_patch_mask(
 		&self,
 		patch: &BinaryPatch,
-		connection: &Connection,
+		connection: &BoardsConnection,
 	) -> Result<(), &'static str> {
 		let mut sector_data = self
 			.sectors
@@ -199,16 +190,14 @@ impl Board {
 		Ok(())
 	}
 
-	pub async fn update_info<Connection: ConnectionTrait + TransactionTrait>(
+	pub async fn update_info(
 		&mut self,
 		name: Option<String>,
 		shape: Option<Vec<Vec<usize>>>,
 		palette: Option<Palette>,
 		max_pixels_available: Option<u32>,
-		connection: &Connection,
-	) -> DbResult<()> {
-		use crate::database::boards::entities::*;
-
+		connection: &BoardsConnection,
+	) -> Result<(), DbErr> {
 		assert!(
 			name.is_some()
 			|| palette.is_some()
@@ -216,40 +205,16 @@ impl Board {
 			|| max_pixels_available.is_some()
 		);
 
+		connection.update_board_info(
+			self.id,
+			name.clone(),
+			shape.clone(),
+			palette.clone(),
+			max_pixels_available,
+		).await?;
+
 		let shape = shape.map(Shape::new);
 
-		let transaction = connection.begin().await?;
-		if let Some(ref name) = name {
-			board::Entity::update_many()
-				.col_expr(board::Column::Name, name.into())
-				.filter(board::Column::Id.eq(self.id))
-				.exec(&transaction).await?;
-		}
-
-		if let Some(ref palette) = palette {
-			query::replace_palette(palette, self.id, &transaction).await?;
-		}
-
-		if let Some(ref shape) = shape {
-			board::Entity::update_many()
-				.col_expr(board::Column::Shape, serde_json::to_value(shape).unwrap().into())
-				.filter(board::Column::Id.eq(self.id))
-				.exec(&transaction).await?;
-
-			// TODO: try and preserve data.
-			board_sector::Entity::delete_many()
-				.filter(board_sector::Column::Board.eq(self.id))
-				.exec(&transaction).await?;
-		}
-
-		if let Some(max_stacked) = max_pixels_available {
-			board::Entity::update_many()
-				.col_expr(board::Column::MaxStacked, (max_stacked as i32).into())
-				.filter(board::Column::Id.eq(self.id))
-				.exec(&transaction).await?;
-		}
-		
-		transaction.commit().await?;
 
 		if let Some(ref name) = name {
 			self.info.name = name.clone();
@@ -288,66 +253,30 @@ impl Board {
 		Ok(())
 	}
 
-	pub async fn delete<Connection: ConnectionTrait + TransactionTrait>(
+	pub async fn delete(
 		mut self,
-		connection: &Connection,
-	) -> DbResult<()> {
-		// TODO: move queries into database module
-		// that goes for all similar functions in this file
-		use crate::database::boards::entities::*;
-
+		connection: &BoardsConnection,
+	) -> Result<(), DbErr> {
 		self.connections.close();
-
-		let transaction = connection.begin().await?;
-
-		board_sector::Entity::delete_many()
-			.filter(board_sector::Column::Board.eq(self.id))
-			.exec(&transaction).await?;
-
-		placement::Entity::delete_many()
-			.filter(placement::Column::Board.eq(self.id))
-			.exec(&transaction).await?;
-
-		color::Entity::delete_many()
-			.filter(color::Column::Board.eq(self.id))
-			.exec(&transaction).await?;
-
-		board::Entity::delete_many()
-			.filter(board::Column::Id.eq(self.id))
-			.exec(&transaction).await?;
-		
-		transaction.commit().await
+		connection.delete_board(self.id).await
 	}
 
-	pub async fn last_place_time<Connection: ConnectionTrait>(
+	pub async fn last_place_time(
 		&self,
 		user_id: &str,
-		connection: &Connection,
-	) -> DbResult<u32> {
-		use crate::database::boards::entities::*;
-
-		Ok(placement::Entity::find()
-			.filter(
-				placement::Column::Board.eq(self.id)
-					.and(placement::Column::UserId.eq(user_id.clone())),
-			)
-			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
-			.order_by(placement::Column::Id, sea_orm::Order::Desc)
-			.one(connection).await?
-			.map(|placement| placement.timestamp as u32)
-			.unwrap_or(0))
+		connection: &BoardsConnection,
+	) -> Result<u32, DbErr> {
+		connection.last_place_time(self.id, user_id.to_owned()).await
 	}
 
 	// TODO: re-evaluate anonymous placing, maybe try and implement it again
-	pub async fn try_place<Connection: ConnectionTrait>(
+	pub async fn try_place(
 		&self,
 		user_id: &str,
 		position: u64,
 		color: u8,
-		connection: &Connection,
-	) -> Result<crate::database::boards::entities::placement::Model, DatabaseError<PlaceError>> {
-		use crate::database::boards::entities::*;
-
+		connection: &BoardsConnection,
+	) -> Result<Placement, DatabaseError<PlaceError>> {
 		// TODO: I hate most things about how this is written.
 		// Redo it and/or move stuff.
 
@@ -358,11 +287,10 @@ impl Board {
 			.ok_or(PlaceError::OutOfBounds)?;
 
 		if !self.info.palette.contains_key(&(color as u32)) {
-			return Err(PlaceError::InvalidColor.into());
+			return Err(DatabaseError::Other(PlaceError::InvalidColor));
 		}
 		
-		let mut sector = self
-			.sectors
+		let mut sector = self.sectors
 			.write_sector(sector_index, connection).await
 			.expect("Failed to load sector");
 
@@ -381,25 +309,25 @@ impl Board {
 		}
 
 		let timestamp = self.current_timestamp();
-		let cooldown_info = self.user_cooldown_info(user_id, connection).await
-			.map_err(DatabaseError::DbErr)?;
+		let cooldown_info = self.user_cooldown_info(
+			user_id,
+			connection,
+		).await.map_err(DatabaseError::DbErr)?;
 
 		if cooldown_info.pixels_available == 0 {
 			return Err(PlaceError::Cooldown.into());
 		}
 
-		let new_placement = placement::Entity::insert(
-				placement::ActiveModel {
-					id: NotSet,
-					board: Set(self.id),
-					position: Set(position as i64),
-					color: Set(color as i16),
-					timestamp: Set(timestamp as i32),
-					user_id: Set(Some(user_id.to_owned())),
-				}
-			)
-			.exec_with_returning(connection).await
-			.expect("failed to insert placement");
+		// Race conditions on this are guarded by the writable sector above,
+		// so there's no need for a transaction.
+		// (Given the invariant that we are the only application writing to db)
+		let new_placement = connection.insert_placement(
+			self.id,
+			position,
+			color,
+			timestamp,
+			user_id.to_owned(),
+		).await.map_err(DatabaseError::DbErr)?;
 
 		sector.colors[sector_offset] = color;
 		let timestamp_slice =
@@ -424,108 +352,32 @@ impl Board {
 
 		self.connections.send_board_update(data).await;
 
-		let cooldown_info = self
-			.user_cooldown_info(user_id, connection).await
-			.map_err(DatabaseError::DbErr)?;
+		let cooldown_info = self.user_cooldown_info(
+			user_id,
+			connection,
+		).await.map_err(DatabaseError::DbErr)?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info).await;
 
 		Ok(new_placement)
 	}
 
-	pub async fn list_placements<Connection: ConnectionTrait>(
+	pub async fn list_placements(
 		&self,
-		timestamp: u32,
-		id: usize,
+		token: PageToken,
 		limit: usize,
 		order: Order,
-		connection: &Connection,
-	) -> DbResult<Vec<crate::database::boards::entities::placement::Model>> {
-		use crate::database::boards::entities::*;
-
-		let column_timestamp_id_pair = Expr::tuple([
-			Expr::col(placement::Column::Timestamp).into(),
-			Expr::col(placement::Column::Id).into(),
-		]);
-
-		let value_timestamp_id_pair = Expr::tuple([
-			(timestamp as i32).into(),
-			(id as i32).into(),
-		]);
-
-		let compare_lhs = column_timestamp_id_pair.clone();
-		let compare_rhs = value_timestamp_id_pair;
-		let compare = match order {
-			Order::Forward => Expr::lt(compare_lhs, compare_rhs),
-			Order::Reverse => Expr::gte(compare_lhs, compare_rhs),
-		};
-
-		let order = match order {
-			Order::Forward => sea_orm::Order::Asc,
-			Order::Reverse => sea_orm::Order::Desc,
-		};
-
-		placement::Entity::find()
-			.filter(placement::Column::Board.eq(self.id))
-			.filter(compare)
-			.order_by(column_timestamp_id_pair, order)
-			.limit(limit as u64)
-			.all(connection).await
+		connection: &BoardsConnection,
+	) -> Result<(Option<PageToken>, Vec<Placement>), DbErr> {
+		connection.list_placements(self.id, token, limit, order).await
 	}
 
-	pub async fn lookup<Connection: ConnectionTrait>(
+	pub async fn lookup(
 		&self,
 		position: u64,
-		connection: &Connection,
-	) -> DbResult<Option<crate::database::boards::entities::placement::Model>> {
-		use crate::database::boards::entities::*;
-
-		placement::Entity::find()
-			.filter(
-				placement::Column::Board.eq(self.id)
-					.and(placement::Column::Position.eq(position as i64)),
-			)
-			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
-			.order_by(placement::Column::Id, sea_orm::Order::Desc)
-			.one(connection).await
-	}
-
-	pub async fn load<Connection: ConnectionTrait>(
-		board: crate::database::boards::entities::board::Model,
-		connection: &Connection,
-	) -> DbResult<Self> {
-		use crate::database::boards::entities::*;
-
-		let id = board.id;
-
-		let palette: Palette = board.find_related(color::Entity)
-			.all(connection).await?
-			.into_iter()
-			.map(|color| (color.index as u32, Color::from(color)))
-			.collect();
-
-		let info = BoardInfo {
-			name: board.name.clone(),
-			created_at: board.created_at as u64,
-			shape: serde_json::from_value(board.shape).unwrap(),
-			palette,
-			max_pixels_available: board.max_stacked as u32,
-		};
-
-		let sectors = SectorCache::new(
-			board.id,
-			info.shape.sector_count(),
-			info.shape.sector_size(),
-		);
-
-		let connections = Connections::default();
-
-		Ok(Board {
-			id,
-			info,
-			sectors,
-			connections,
-		})
+		connection: &BoardsConnection,
+	) -> Result<Option<Placement>, DbErr> {
+		connection.get_placement(self.id, position).await
 	}
 
 	fn current_timestamp(&self) -> u32 {
@@ -542,44 +394,27 @@ impl Board {
 		.unwrap()
 	}
 
-	async fn pixel_density_at_time<Connection: ConnectionTrait>(
-		&self,
-		position: u64,
-		timestamp: u32,
-		connection: &Connection,
-	) -> DbResult<usize> {
-		use crate::database::boards::entities::*;
-
-		placement::Entity::find()
-			.filter(
-				placement::Column::Position.eq(position as i64)
-				.and(placement::Column::Timestamp.lt(timestamp as i32)),
-			)
-			.count(connection).await
-			.map(|i| i as usize)
-	}
-
 	// TODO: This should REALLY be cached.
 	// It's very heavy for how often it should be used, but values should
 	// continue to be valid until the cooldown formula itself changes.
-	async fn calculate_cooldowns<Connection: ConnectionTrait>(
+	async fn calculate_cooldowns(
 		&self,
-		placement: Option<&crate::database::boards::entities::placement::Model>,
-		connection: &Connection,
-	) -> DbResult<Vec<SystemTime>> {
+		placement: Option<&Placement>,
+		connection: &BoardsConnection,
+	) -> Result<Vec<SystemTime>, DbErr> {
 		let parameters = if let Some(placement) = placement {
 			let activity = self.user_count_for_time(
-				placement.timestamp as u32,
+				placement.timestamp,
 				connection
 			).await?;
 
-			let density = self.pixel_density_at_time(
-				placement.position as u64,
-				placement.timestamp as u32,
-				connection,
+			let density = connection.count_placements(
+				self.id,
+				placement.position,
+				placement.timestamp,
 			).await?;
 
-			let timestamp = placement.timestamp as u32;
+			let timestamp = placement.timestamp;
 			
 			(activity, density, timestamp)
 		} else {
@@ -604,39 +439,17 @@ impl Board {
 			.collect())
 	}
 
-	async fn recent_user_placements<Connection: ConnectionTrait>(
-		&self,
-		user_id: &str,
-		limit: usize,
-		connection: &Connection,
-	) -> DbResult<Vec<crate::database::boards::entities::placement::Model>> {
-		use crate::database::boards::entities::*;
-
-		Ok(placement::Entity::find()
-			.filter(
-				placement::Column::Board.eq(self.id)
-					.and(placement::Column::UserId.eq(user_id.clone())),
-			)
-			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
-			.order_by(placement::Column::Id, sea_orm::Order::Desc)
-			.limit(Some(limit as u64))
-			.all(connection).await?
-			.into_iter()
-			.rev()
-			.collect::<Vec<_>>())
-	}
-
 	// TODO: If any code here is a mess, this certainly is.
 	// The explanations don't even make sense: just make it readable.
-	pub async fn user_cooldown_info<Connection: ConnectionTrait>(
+	pub async fn user_cooldown_info(
 		&self,
 		user_id: &str,
-		connection: &Connection,
-	) -> DbResult<CooldownInfo> {
-		let placements = self.recent_user_placements(
+		connection: &BoardsConnection,
+	) -> Result<CooldownInfo, DbErr> {
+		let placements = connection.list_user_placements(
+			self.id,
 			user_id,
 			usize::try_from(self.info.max_pixels_available).unwrap(),
-			connection,
 		).await?;
 
 		let cooldowns = self.calculate_cooldowns(placements.last(), connection).await?;
@@ -692,29 +505,22 @@ impl Board {
 		Ok(info)
 	}
 
-	async fn user_count_for_time<Connection: ConnectionTrait>(
+	async fn user_count_for_time(
 		&self,
 		timestamp: u32,
-		connection: &Connection,
-	) -> DbResult<usize> {
-		use crate::database::boards::entities::*;
-		
+		connection: &BoardsConnection,
+	) -> Result<usize, DbErr> {
 		let idle_timeout = self.idle_timeout();
 		let max_time = i32::try_from(timestamp).unwrap();
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
 
-		placement::Entity::find()
-			.distinct_on([placement::Column::UserId])
-			.filter(placement::Column::Board.eq(self.id))
-			.filter(placement::Column::Timestamp.between(min_time, max_time))
-			.count(connection).await
-			.map(|count| count as usize)
+		connection.user_count_between(self.id, min_time, max_time).await
 	}
 
-	pub async fn user_count<Connection: ConnectionTrait>(
+	pub async fn user_count(
 		&self,
-		connection: &Connection,
-	) -> DbResult<usize> {
+		connection: &BoardsConnection,
+	) -> Result<usize, DbErr> {
 		self.user_count_for_time(self.current_timestamp(), connection).await
 	}
 
@@ -723,11 +529,11 @@ impl Board {
 		5 * 60
 	}
 
-	pub async fn insert_socket<Connection: ConnectionTrait>(
+	pub async fn insert_socket(
 		&mut self,
 		socket: &Arc<AuthedSocket>,
-		connection: &Connection,
-	) -> DbResult<()> {
+		connection: &BoardsConnection,
+	) -> Result<(), DbErr> {
 		let id = socket.user_id().await;
 
 		let cooldown_info = if let Some(ref user_id) = id {

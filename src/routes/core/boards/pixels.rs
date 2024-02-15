@@ -4,11 +4,11 @@ use reqwest::StatusCode;
 use warp::reply::json;
 use warp::{Reply, Rejection};
 use warp::Filter;
-use sea_orm::DatabaseConnection as Connection;
 use serde::Deserialize;
 
 use crate::filter::header::authorization::Bearer;
 use crate::filter::resource::{board, database};
+use crate::filter::response::paginated_list::{PageToken, PaginationOptions, Page};
 use crate::{
 	permissions::Permission,
 	filter::header::authorization::{self, with_permission},
@@ -16,12 +16,11 @@ use crate::{
 	BoardDataMap,
 };
 
-use crate::database::query::Order;
-use crate::filter::response::paginated_list::{PageToken, PaginationOptions, Page};
+use crate::database::{Order, BoardsDatabase, BoardsConnection};
 
 pub fn list(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -30,8 +29,8 @@ pub fn list(
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsList)))
 		.and(warp::query())
-		.and(database::connection(Arc::clone(&database_pool)))
-		.then(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, _user, options: PaginationOptions<PageToken>, connection: BoardsConnection| async move {
 			let page = options.page.unwrap_or_default();
 			let limit = options
 				.limit
@@ -40,58 +39,31 @@ pub fn list(
 
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when listing pixels");
-			let previous_placements = board.list_placements(
-				page.timestamp,
-				page.id,
-				limit,
-				Order::Reverse,
-				connection.as_ref(),
-			).await;
-
-			let previous_placements = match previous_placements {
-				Ok(placements) => placements,
-				Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-			};
 
 			let placements = board.list_placements(
-				page.timestamp,
-				page.id,
-				// Limit is +1 to get the start of the next page as the last element.
-				// This is required for paging.
-				limit + 1,
+				page,
+				limit,
 				Order::Forward,
-				connection.as_ref()
+				&connection
 			).await;
 
-			let placements = match placements {
-				Ok(placements) => placements,
-				Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+			let (next, placements) = match placements {
+				Ok((token, placements)) => {
+					let token = token.map(|token| format!(
+						"/boards/{}/pixels?page={}&limit={}",
+						board.id, token, limit
+					));
+					(token, placements)
+				},
+				Err(err) => {
+					return StatusCode::INTERNAL_SERVER_ERROR.into_response()
+				},
 			};
 
-			fn page_uri(
-				board_id: i32,
-				timestamp: u32,
-				placement_id: i64,
-				limit: usize,
-			) -> String {
-				format!(
-					"/boards/{}/pixels?page={}_{}&limit={}",
-					board_id, timestamp, placement_id, limit
-				)
-			}
-
 			json(&Page {
-				previous: previous_placements
-					.last()
-					.map(|placement| {
-						page_uri(board.id, placement.timestamp as u32, placement.id, previous_placements.len())
-					}),
-				items: &placements[..placements.len().clamp(0, limit)],
-				next: (placements.len() > limit)
-					.then(|| placements.iter().last().unwrap())
-					.map(|placement| {
-						page_uri(board.id, placement.timestamp as u32, placement.id, limit)
-					}),
+				previous: None,
+				items: placements.as_slice(),
+				next,
 			})
 			.into_response()
 		})
@@ -99,7 +71,7 @@ pub fn list(
 
 pub fn get(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -108,17 +80,19 @@ pub fn get(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsGet)))
-		.and(database::connection(Arc::clone(&database_pool)))
-		.then(|board: PassableBoard, position, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(Arc::clone(&boards_db)))
+		.then(|board: PassableBoard, position, _user, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting a pixel");
-			match board.lookup(position, connection.as_ref()).await {
+			match board.lookup(position, &connection).await {
 				Ok(placement) => {
 					placement
 						.map(|placement| json(&placement).into_response())
 						.unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
 				},
-				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+				Err(err) => {
+					StatusCode::INTERNAL_SERVER_ERROR.into_response()
+				},
 			}
 		})
 }
@@ -130,7 +104,7 @@ pub struct PlacementRequest {
 
 pub fn post(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -140,11 +114,11 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPixelsPost)))
-		.and(database::connection(Arc::clone(&database_pool)))
-		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, connection: Arc<Connection>| async move {
+		.and(database::connection(Arc::clone(&boards_db)))
+		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, connection: BoardsConnection| async move {
 			let user = user.expect("Default user shouldn't have place permisisons");
 
-			let board = board.write().await;
+			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when creating a pixel");
 			let place_attempt = board.try_place(
 				// TODO: maybe accept option but make sure not to allow
@@ -152,7 +126,7 @@ pub fn post(
 				&user.id,
 				position,
 				placement.color,
-				connection.as_ref(),
+				&connection,
 			).await;
 
 			match place_attempt {
@@ -164,7 +138,7 @@ pub fn post(
 
 					let cooldown_info = board.user_cooldown_info(
 						&user.id,
-						connection.as_ref(),
+						&connection,
 					).await;
 
 					#[allow(clippy::single_match)]
@@ -175,7 +149,7 @@ pub fn post(
 									.into_response();
 							}
 						},
-						Err(_) => {
+						Err(err) => {
 							// TODO: not sure about this.
 							// The resource *was* created, *but* the cooldown is not available.
 							// I feel like sending the CREATED status is more important,

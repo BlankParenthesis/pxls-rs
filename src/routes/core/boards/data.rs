@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection as Connection;
 use warp::{Filter, Reply, Rejection};
 
 use crate::{
@@ -17,11 +16,12 @@ use crate::{
 	BoardDataMap,
 	permissions::Permission,
 	board::SectorBuffer,
+	database::{BoardsDatabase, BoardsConnection},
 };
 
 pub fn get_colors(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -36,13 +36,13 @@ pub fn get_colors(
 				.unify(),
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, range: Range, _user, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let mut colors_data = board.as_ref()
 				.expect("Board went missing when getting color data")
-				.read(SectorBuffer::Colors, connection.as_ref()).await;
+				.read(SectorBuffer::Colors, &connection).await;
 
 			range.respond_with(&mut colors_data).await
 		})

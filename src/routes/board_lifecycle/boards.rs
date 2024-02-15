@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use tokio::sync::RwLock;
-use sea_orm::DatabaseConnection as Connection;
 
 use warp::{
 	http::{StatusCode, Uri, header},
@@ -18,8 +17,9 @@ use crate::{
 		resource::{board::{self, PassableBoard, PendingDelete}, database},
 		response::reference::Reference,
 	},
-	board::{Board, Palette},
+	board::Palette,
 	BoardDataMap,
+	database::{BoardsDatabase, BoardsConnection},
 };
 
 #[derive(Deserialize, Debug)]
@@ -32,28 +32,27 @@ pub struct BoardInfoPost {
 
 pub fn post(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPost)))
-		.and(database::connection(database_pool))
-		.then(move |data: BoardInfoPost, _user, connection: Arc<Connection>| {
+		.and(database::connection(boards_db))
+		.then(move |data: BoardInfoPost, _user, connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			async move {
-				let board = Board::create(
+				let board = connection.create_board(
 					data.name,
 					data.shape,
 					data.palette,
 					data.max_pixels_available,
-					connection.as_ref(),
 				).await;
 
 				let board = match board {
 					Ok(board) => board,
-					Err(_) => {
+					Err(err) => {
 						return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 					}
 				};
@@ -90,7 +89,7 @@ pub struct BoardInfoPatch {
 
 pub fn patch(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -99,8 +98,8 @@ pub fn patch(
 		// TODO: require application/merge-patch+json type?
 		.and(warp::body::json())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, patch: BoardInfoPatch, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, patch: BoardInfoPatch, _user, connection: BoardsConnection| async move {
 			let mut board = board.write().await;
 			let board = board.as_mut().expect("Board went missing when patching");
 
@@ -109,7 +108,7 @@ pub fn patch(
 				patch.shape,
 				patch.palette,
 				patch.max_pixels_available,
-				connection.as_ref(),
+				&connection,
 			);
 
 			match update.await {
@@ -126,28 +125,32 @@ pub fn patch(
 					).into_response();
 					response
 				},
-				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+				Err(err) => {
+					StatusCode::INTERNAL_SERVER_ERROR.into_response()
+				},
 			}
 		})
 }
 
 pub fn delete(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::prepare_delete(&boards))
 		.and(warp::path::end())
 		.and(warp::delete())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
-		.and(database::connection(database_pool))
-		.then(move |mut deletion: PendingDelete, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(move |mut deletion: PendingDelete, _user, connection: BoardsConnection| async move {
 			let board = deletion.perform();
 			let mut board = board.write().await;
 			let board = board.take().expect("Board went missing during deletion");
-			match board.delete(connection.as_ref()).await {
+			match board.delete(&connection).await {
 				Ok(()) => StatusCode::NO_CONTENT.into_response(),
-				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+				Err(err) => {
+					StatusCode::INTERNAL_SERVER_ERROR.into_response()
+				},
 			}
 		})
 }

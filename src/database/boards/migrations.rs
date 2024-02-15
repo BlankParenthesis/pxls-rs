@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-pub use sea_orm_migration::*;
+use sea_orm_migration::*;
 
 mod m0_create_boards_colors_placements;
 mod m1_advanced_shapes;

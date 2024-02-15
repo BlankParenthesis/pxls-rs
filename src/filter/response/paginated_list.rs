@@ -38,6 +38,12 @@ impl Default for PageToken {
 	}
 }
 
+impl fmt::Display for PageToken {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}_{}", self.id, self.timestamp)
+	}
+}
+
 impl<'de> Deserialize<'de> for PageToken {
 	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
 	where

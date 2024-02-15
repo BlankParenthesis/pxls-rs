@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use sea_orm::DatabaseConnection as Connection;
 
 use warp::{
 	http::StatusCode,
@@ -20,10 +19,11 @@ use crate::BoardDataMap;
 use crate::filter::resource::board::PassableBoard;
 use crate::filter::body::patch::BinaryPatch;
 use crate::permissions::Permission;
+use crate::database::{BoardsConnection, BoardsDatabase};
 
 pub fn get_mask(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -38,13 +38,13 @@ pub fn get_mask(
 				.unify(),
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, range: Range, _user, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let mut mask_data = board.as_ref()
 				.expect("Board went missing when getting mask data")
-				.read(SectorBuffer::Mask, connection.as_ref()).await;
+				.read(SectorBuffer::Mask, &connection).await;
 
 			range.respond_with(&mut mask_data).await
 		})
@@ -52,7 +52,7 @@ pub fn get_mask(
 
 pub fn patch_mask(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -62,13 +62,13 @@ pub fn patch_mask(
 		.and(warp::patch())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
 		.and(patch::bytes())
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.write().await;
 			let patch_result = board.as_ref()
 				.expect("Board went missing when patching mask data")
-				.try_patch_mask(&patch, connection.as_ref()).await;
+				.try_patch_mask(&patch, &connection).await;
 
 			match patch_result {
 				Ok(_) => StatusCode::NO_CONTENT.into_response(),

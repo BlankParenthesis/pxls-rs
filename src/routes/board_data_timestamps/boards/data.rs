@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use sea_orm::DatabaseConnection as Connection;
 
 use warp::{
 	reject::Rejection,
@@ -17,10 +16,11 @@ use crate::board::SectorBuffer;
 use crate::BoardDataMap;
 use crate::filter::resource::board::PassableBoard;
 use crate::permissions::Permission;
+use crate::database::{BoardsDatabase, BoardsConnection};
 
 pub fn get_timestamps(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -35,13 +35,13 @@ pub fn get_timestamps(
 				.unify(),
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, range: Range, _user, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let mut timestamp_data = board.as_ref()
 				.expect("Board went missing when getting timestamp data")
-				.read(SectorBuffer::Timestamps, connection.as_ref()).await;
+				.read(SectorBuffer::Timestamps, &connection).await;
 				
 			range.respond_with(&mut timestamp_data).await
 		})

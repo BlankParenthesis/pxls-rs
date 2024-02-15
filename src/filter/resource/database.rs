@@ -1,11 +1,22 @@
 use std::sync::Arc;
-use std::convert::Infallible;
 
-use warp::Filter;
-use sea_orm::DatabaseConnection as Connection;
+use warp::{Filter, reject, Rejection};
 
-pub fn connection(
-	db: Arc<Connection>
-) -> impl Filter<Extract = (Arc<Connection>,), Error = Infallible> + Clone {
-	warp::any().map(move || db.clone())
+use crate::database::Database;
+
+#[derive(Debug)]
+struct DbConnectionFailed;
+impl reject::Reject for DbConnectionFailed {}
+
+pub fn connection<T: Database>(
+	db: Arc<T>,
+) -> impl Filter<Extract = (T::Connection,), Error = Rejection> + Clone {
+	warp::any().and_then(move || {
+		let db = db.clone();
+		async move {
+			db.connection().await
+				.map_err(|_| DbConnectionFailed)
+				.map_err(reject::custom)
+		}
+	})
 }

@@ -1,8 +1,7 @@
-use sea_orm::{TransactionTrait, ConnectionTrait};
-
+use sea_orm::{DbErr, ConnectionTrait, TransactionTrait};
 use tokio::sync::*;
 use crate::{
-	database::boards::DbResult,
+	database::{BoardsConnection, BoardsConnectionGeneric},
 	board::sector::{Sector, SectorBuffer},
 };
 use super::SectorAccessor;
@@ -39,11 +38,11 @@ impl SectorCache {
 	}
 
 	// TODO: maybe a better name? this fills the cache entry, not the sector itself
-	async fn fill_sector<Connection: ConnectionTrait>(
+	async fn fill_sector<C: ConnectionTrait + TransactionTrait>(
 		&self,
 		sector_index: usize,
-		connection: &Connection,
-	) -> DbResult<RwLockWriteGuard<Option<Sector>>> {
+		connection: &BoardsConnectionGeneric<C>,
+	) -> Result<RwLockWriteGuard<Option<Sector>>, DbErr> {
 		let mut option = self
 			.sectors
 			.get(sector_index).unwrap()
@@ -85,11 +84,11 @@ impl SectorCache {
 	}
 
 	// TODO: rename to get_sector for consistency
-	pub async fn read_sector<Connection: ConnectionTrait>(
+	pub async fn read_sector(
 		&self,
 		sector_index: usize,
-		connection: &Connection,
-	) -> DbResult<Option<RwLockReadGuard<Sector>>> {
+		connection: &BoardsConnection,
+	) -> Result<Option<RwLockReadGuard<Sector>>, DbErr> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.read().await;
 			if option.is_some() {
@@ -110,10 +109,10 @@ impl SectorCache {
 	}
 
 	// TODO: rename to get_sector_mut for consistency
-	pub async fn write_sector<Connection: ConnectionTrait>(
+	pub async fn write_sector<C: ConnectionTrait + TransactionTrait>(
 		&self,
 		sector_index: usize,
-		connection: &Connection,
+		connection: &BoardsConnectionGeneric<C>,
 	) -> Option<RwLockMappedWriteGuard<Sector>> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.write().await;
@@ -132,11 +131,11 @@ impl SectorCache {
 		}
 	}
 
-	pub fn access<'l, Connection: ConnectionTrait + TransactionTrait>(
+	pub fn access<'l>(
 		&'l self,
 		buffer: SectorBuffer,
-		connection: &'l Connection,
-	) -> SectorAccessor<'l, Connection> {
+		connection: &'l BoardsConnection,
+	) -> SectorAccessor<'l> {
 		SectorAccessor::new(self, buffer, connection)
 	}
 }

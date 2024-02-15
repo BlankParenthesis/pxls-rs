@@ -4,11 +4,12 @@ use std::ops::Deref;
 use reqwest::StatusCode;
 use warp::hyper::Response;
 use warp::reply::{json, self};
+use warp::ws::Ws;
 use warp::{Reply, Rejection};
 use warp::{http::header, Filter};
 use warp::path::Tail;
-use sea_orm::DatabaseConnection as Connection;
 
+use crate::database::{BoardsDatabase, BoardsConnection};
 use crate::filter::header::authorization::Bearer;
 use crate::filter::resource::{board, database};
 use crate::{
@@ -100,15 +101,15 @@ pub fn default() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Cl
 
 pub fn get(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, user, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board wend missing when getting info");
 			let mut response = json(&board.info).into_response();
@@ -116,7 +117,7 @@ pub fn get(
 			if let Some(Bearer { id, .. }) = user {
 				let cooldown_info = board.user_cooldown_info(
 					&id,
-					connection.as_ref(),
+					&connection,
 				).await;
 
 				match cooldown_info {
@@ -126,7 +127,7 @@ pub fn get(
 								.into_response();
 						}
 					},
-					Err(_) => {
+					Err(err) => {
 						// Indicate there was an error, but keep the body since
 						// we have the data and are only missing the cooldown.
 						response = reply::with_status(
@@ -148,7 +149,7 @@ pub struct SocketOptions {
 
 pub fn socket(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -156,10 +157,9 @@ pub fn socket(
 		.and(warp::path::end())
 		.and(serde_qs::warp::query(Default::default()))
 		.and(warp::ws())
+		.and(database::connection(boards_db))
 		.map(
-			move |board: PassableBoard, options: SocketOptions, ws: warp::ws::Ws| {
-				let database_pool = Arc::clone(&database_pool);
-
+			move |board: PassableBoard, options: SocketOptions, ws: Ws, connection: BoardsConnection| {
 				if let Some(extensions) = options.extensions {
 					if extensions.is_empty() {
 						return StatusCode::UNPROCESSABLE_ENTITY.into_response();
@@ -181,7 +181,7 @@ pub fn socket(
 							websocket,
 							extensions,
 							Arc::downgrade(&*board),
-							database_pool,
+							connection,
 						)
 					})
 					.into_response()

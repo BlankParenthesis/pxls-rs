@@ -8,33 +8,30 @@ use warp::{
 	path::Tail,
 };
 
-use crate::{
-	permissions::Permission,
-	filter::{
-		header::{
-			authorization::{self, with_permission},
-		},
-		resource::users,
-	},
-	filter::{response::paginated_list::{PaginationOptions, Page}, header::authorization::Bearer},
-	filter::response::reference::Reference,
-	database::{users::{Pool, Connection, UserFetchError}, query},
-};
+use crate::filter::header::authorization::{self, with_permission, Bearer};
+use crate::filter::response::paginated_list::{PaginationOptions, Page};
+use crate::filter::response::reference::Reference;
+use crate::filter::resource::database;
 
-pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+use crate::permissions::Permission;
+use crate::database::{UsersDatabase, UsersConnection, UserFetchError};
+
+pub fn list(
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersList)))
 		.and(warp::query())
-		.and(users::connection(pool))
-		.then(move |_user, pagination: PaginationOptions<String>, mut connection: Connection| async move {
+		.and(database::connection(users_db))
+		.then(move |_user, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(10)
 				.clamp(1, 100); // TODO: maybe raise upper limit
 			
-			let users = query::list_users(&mut connection, page, limit).await;
+			let users = connection.list_users(page, limit).await;
 			match users {
 				Ok((page_token, users)) => {
 					let references = users.iter()
@@ -70,16 +67,18 @@ pub fn list(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Re
 		})
 }
 
-pub fn get(pool: &Arc<Pool>) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+pub fn get(
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
 		// TODO: current user permissions
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
-		.and(users::connection(pool))
-		.then(move |uid: String, _user, mut connection: Connection| async move {
-			let users = query::get_user(&mut connection, uid).await;
+		.and(database::connection(users_db))
+		.then(move |uid: String, _user, mut connection: UsersConnection| async move {
+			let users = connection.get_user(uid).await;
 
 			match users {
 				Ok(user) => {

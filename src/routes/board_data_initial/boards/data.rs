@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use sea_orm::DatabaseConnection as Connection;
 
 use warp::{
 	http::StatusCode,
@@ -10,8 +9,9 @@ use warp::{
 
 use crate::filter::header::{
 	authorization::{self, with_permission},
-	range::{self, Range}
+	range::{self, Range},
 };
+use crate::database::{BoardsDatabase, BoardsConnection};
 use crate::filter::body::patch;
 use crate::filter::resource::{board, database};
 use crate::board::SectorBuffer;
@@ -22,7 +22,7 @@ use crate::permissions::Permission;
 
 pub fn get_initial(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -37,13 +37,13 @@ pub fn get_initial(
 				.unify(),
 		)
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, range: Range, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, range: Range, _user, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let mut initial_data = board.as_ref()
 				.expect("Board went missing when getting initial data")
-				.read(SectorBuffer::Initial, connection.as_ref()).await;
+				.read(SectorBuffer::Initial, &connection).await;
 
 			range.respond_with(&mut initial_data).await
 		})
@@ -51,7 +51,7 @@ pub fn get_initial(
 
 pub fn patch_initial(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -61,13 +61,13 @@ pub fn patch_initial(
 		.and(warp::patch())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
 		.and(patch::bytes())
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.write().await;
 			let patch_result = board.as_ref()
 				.expect("Board went missing when patching initial data")
-				.try_patch_initial(&patch, connection.as_ref()).await;
+				.try_patch_initial(&patch, &connection).await;
 
 			match patch_result {
 				Ok(_) => StatusCode::NO_CONTENT.into_response(),

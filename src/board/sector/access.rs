@@ -2,23 +2,23 @@ use std::{convert::*, io::*};
 use std::io::Read;
 
 use async_trait::async_trait;
-use sea_orm::{TransactionTrait, ConnectionTrait};
 
-use crate::{DatabaseError, AsyncRead, AsyncWrite, Len};
+use crate::database::{BoardsConnection, DatabaseError};
+use crate::{AsyncRead, AsyncWrite, Len};
 use super::{SectorBuffer, SectorCache};
 
-pub struct SectorAccessor<'l, Connection: ConnectionTrait + TransactionTrait> {
+pub struct SectorAccessor<'l> {
 	cursor: usize,
 	buffer: SectorBuffer,
 	sectors: &'l SectorCache,
-	connection: &'l Connection,
+	connection: &'l BoardsConnection,
 }
 
-impl<'l, Connection: ConnectionTrait + TransactionTrait> SectorAccessor<'l, Connection> {
+impl<'l> SectorAccessor<'l> {
 	pub fn new(
 		sectors: &'l SectorCache,
 		buffer: SectorBuffer,
-		connection: &'l Connection,
+		connection: &'l BoardsConnection,
 	) -> Self {
 		SectorAccessor {
 			cursor: 0,
@@ -33,13 +33,13 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> SectorAccessor<'l, Conn
 	}
 }
 
-impl<'l, Connection: ConnectionTrait + TransactionTrait> Len for SectorAccessor<'l, Connection> {
+impl<'l> Len for SectorAccessor<'l> {
 	fn len(&self) -> usize {
 		self.sectors.total_sectors() * self.sector_size()
 	}
 }
 
-impl<'l, Connection: ConnectionTrait + TransactionTrait> Seek for SectorAccessor<'l, Connection> {
+impl<'l> Seek for SectorAccessor<'l> {
 	fn seek(
 		&mut self,
 		seek: SeekFrom,
@@ -74,7 +74,7 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> Seek for SectorAccessor
 }
 
 #[async_trait]
-impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncRead for SectorAccessor<'l, Connection> {
+impl<'l> AsyncRead for SectorAccessor<'l> {
 	type Error = DatabaseError<std::io::Error>;
 
 	async fn read(
@@ -118,7 +118,7 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncRead for SectorAcc
 }
 	
 #[async_trait]
-impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorAccessor<'l, Connection> {
+impl<'l> AsyncWrite for SectorAccessor<'l> {
 	type Error = DatabaseError<std::io::Error>;
 
 	async fn write(
@@ -138,11 +138,9 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorAc
 
 			let offset = self.cursor % sector_size;
 
-			let mut sector = self
-				.sectors
+			let mut sector = self.sectors
 				.write_sector(sector_index, &transaction)
-				.await
-				.unwrap();
+				.await.unwrap();
 
 			let buf = &mut match self.buffer {
 				SectorBuffer::Colors => &mut sector.colors,
@@ -160,7 +158,7 @@ impl<'l, Connection: ConnectionTrait + TransactionTrait> AsyncWrite for SectorAc
 			written += write_len;
 			self.cursor += write_len;
 
-			sector.save(&transaction, Some(&self.buffer)).await
+			sector.save(self.buffer, self.connection).await
 				.map_err(DatabaseError::DbErr)?;
 
 			if self.buffer == SectorBuffer::Initial {

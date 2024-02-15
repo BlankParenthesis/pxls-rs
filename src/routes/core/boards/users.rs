@@ -4,7 +4,6 @@ use reqwest::StatusCode;
 use warp::reply::json;
 use warp::{Reply, Rejection};
 use warp::Filter;
-use sea_orm::DatabaseConnection as Connection;
 
 use crate::filter::resource::{board, database};
 use crate::{
@@ -13,6 +12,7 @@ use crate::{
 	filter::resource::board::PassableBoard,
 	BoardDataMap,
 };
+use crate::database::{BoardsDatabase, BoardsConnection};
 
 use serde::Serialize;
 
@@ -25,7 +25,7 @@ pub struct UserCount {
 
 pub fn get(
 	boards: BoardDataMap,
-	database_pool: Arc<Connection>,
+	boards_db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -33,16 +33,18 @@ pub fn get(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorization::bearer().and_then(with_permission(Permission::BoardsUsers)))
-		.and(database::connection(database_pool))
-		.then(|board: PassableBoard, _user, connection: Arc<Connection>| async move {
+		.and(database::connection(boards_db))
+		.then(|board: PassableBoard, _user, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting user count");
-			match board.user_count(connection.as_ref()).await {
+			match board.user_count(&connection).await {
 				Ok(active) => {
 					let idle_timeout = board.idle_timeout();
 					json(&UserCount { active, idle_timeout }).into_response()
 				},
-				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+				Err(err) => {
+					StatusCode::INTERNAL_SERVER_ERROR.into_response()
+				},
 			}
 		})
 }

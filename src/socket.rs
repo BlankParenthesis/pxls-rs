@@ -6,7 +6,6 @@ use std::{
 	time::Duration,
 };
 
-use sea_orm::DatabaseConnection as Connection;
 use async_trait::async_trait;
 use enum_map::Enum;
 use enumset::{EnumSet, EnumSetType};
@@ -21,7 +20,7 @@ use crate::{
 	permissions::Permission,
 	openid::{ValidationError, self},
 	board::Board,
-	filter::header::authorization::Bearer,
+	filter::header::authorization::Bearer, database::BoardsConnection,
 };
 
 // TODO: move this somewhere else
@@ -127,7 +126,7 @@ impl UnauthedSocket {
 		websocket: ws::WebSocket,
 		extensions: EnumSet<Extension>,
 		board: Weak<RwLock<Option<Board>>>,
-		connection: Arc<Connection>,
+		connection: BoardsConnection,
 	) {
 		let (ws_sender, mut ws_receiver) = websocket.split();
 		let (sender, sender_receiver) = mpsc::unbounded_channel();
@@ -161,10 +160,8 @@ impl UnauthedSocket {
 				if let Some(board) = board.upgrade() {
 					let mut board = board.write().await;
 					if let Some(ref mut board) = *board {
-						board.insert_socket(
-							&socket,
-							connection.as_ref(),
-						).await.unwrap(); // TODO: bad unwrap? Handle by rejecting+closing connection.
+						// TODO: bad unwrap? Handle by rejecting+closing connection.
+						board.insert_socket(&socket, &connection).await.unwrap();
 					}
 				}
 
