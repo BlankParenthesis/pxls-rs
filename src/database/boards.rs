@@ -354,7 +354,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				position: Set(position as i64),
 				color: Set(color as i16),
 				timestamp: Set(timestamp as i32),
-				user_id: Set(Some(user_id)),
+				user_id: Set(user_id),
 			}
 		)
 		.exec_with_returning(&self.connection).await
@@ -375,7 +375,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.filter(
 				placement::Column::Position.eq(position as i64)
 				.and(placement::Column::Timestamp.lt(timestamp as i32))
-				.and(placement::Column::Board.eq(board_id as i32))
+				.and(placement::Column::Board.eq(board_id))
 			)
 			.count(&self.connection).await
 			.map(|i| i as usize)
