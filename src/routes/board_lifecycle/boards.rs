@@ -3,8 +3,9 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+use warp::http::Uri;
 use warp::{
-	http::{StatusCode, Uri, header},
+	http::{StatusCode, header},
 	reject::Rejection,
 	reply::{Reply, self, json},
 	Filter,

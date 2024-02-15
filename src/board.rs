@@ -490,7 +490,7 @@ impl Board {
 					self.calculate_cooldowns(Some(&pair[0]), connection).await?,
 					UNIX_EPOCH
 						+ Duration::from_secs(
-							u64::from(pair[1].timestamp as u32) + self.info.created_at,
+							u64::from(pair[1].timestamp) + self.info.created_at,
 						),
 				);
 

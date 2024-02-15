@@ -201,7 +201,7 @@ impl Connections {
 			.collect();
 		
 		self.by_board_extensions.entry(combination)
-			.or_insert_with(HashSet::new)
+			.or_default()
 			.insert(Arc::clone(socket));
 	}
 
@@ -230,7 +230,7 @@ impl Connections {
 			.collect();
 		
 		self.by_board_extensions.entry(combination)
-			.or_insert_with(HashSet::new)
+			.or_default()
 			.remove(socket);
 	}
 
