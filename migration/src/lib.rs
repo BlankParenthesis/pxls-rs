@@ -1,5 +1,5 @@
-use async_trait::async_trait;
-use sea_orm_migration::*;
+pub use sea_orm_migration::prelude::*;
+
 
 mod m0_create_boards_colors_placements;
 mod m1_advanced_shapes;
@@ -22,7 +22,7 @@ macro_rules! id {
 
 use {col, id};
 
-#[async_trait]
+#[async_trait::async_trait]
 impl MigratorTrait for Migrator {
 	fn migrations() -> Vec<Box<dyn MigrationTrait>> {
 		vec![

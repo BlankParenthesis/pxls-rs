@@ -27,10 +27,9 @@ use crate::{config::CONFIG, filter::response::paginated_list::PageToken};
 use crate::board::{Palette, Color, Board, Placement, Sector};
 
 mod entities;
-mod migrations;
 
 use entities::*;
-use migrations::Migrator;
+use migration::Migrator;
 
 use super::Order;
 
