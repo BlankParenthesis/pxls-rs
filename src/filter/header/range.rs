@@ -3,9 +3,10 @@ use std::{
 	io::Seek,
 	fmt::{self, Display, Formatter},
 	ops::{Range as OpsRange, RangeFrom as OpsRangeFrom},
+	time::SystemTime,
 };
 
-use rand::{self, Rng};
+use tinyrand::{RandRange, Wyrand, Seeded};
 use reqwest::StatusCode;
 use thiserror::Error;
 use warp::{reject::Reject, Reply, reply, Filter, Rejection};
@@ -179,9 +180,19 @@ where
 
 fn choose_boundary(datas: &[DataRange]) -> String {
 	fn random_boundary_string() -> String {
-		let random_string = rand::thread_rng()
-			.sample_iter::<char, _>(rand::distributions::Standard)
+		let seed = SystemTime::now()
+			.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default()
+			.as_millis();
+		let mut rand = Wyrand::seed(seed as u64);
+
+		let random_string = std::iter::repeat(())
 			.take(8)
+			.map(move |_| {
+				const ASCII_START: u16 = b'a' as u16;
+				const ASCII_END: u16 = b'z' as u16 + 1;
+				// get a random lowercase ascii character
+				rand.next_range(ASCII_START..ASCII_END) as u8 as char
+			})
 			.collect::<String>();
 
 		format!("--{}", random_string)

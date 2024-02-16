@@ -2339,7 +2339,6 @@ dependencies = [
  "migration",
  "num_enum",
  "ouroboros 0.18.3",
- "rand",
  "reqwest",
  "sea-orm",
  "sea-orm-migration",
@@ -2348,6 +2347,7 @@ dependencies = [
  "serde_qs",
  "serde_with",
  "thiserror",
+ "tinyrand",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -3475,6 +3475,12 @@ checksum = "eb71511c991639bb078fd5bf97757e03914361c48100d52878b8e52b46fb92cd"
 dependencies = [
  "time-core",
 ]
+
+[[package]]
+name = "tinyrand"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87ffaad2263779579369d45f65cad0647c860893d27e4543cdcc1e428d07da2c"
 
 [[package]]
 name = "tinyvec"
