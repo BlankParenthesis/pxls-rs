@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use num_derive::FromPrimitive;
+use num_enum::TryFromPrimitive;
 use sea_orm::{DbErr, ConnectionTrait, TransactionTrait};
 
 mod cache;
@@ -10,7 +10,8 @@ use crate::database::BoardsConnectionGeneric;
 pub use cache::SectorCache;
 pub use access::SectorAccessor;
 
-#[derive(FromPrimitive)]
+#[derive(TryFromPrimitive)]
+#[repr(u8)]
 pub enum MaskValue {
 	NoPlace = 0,
 	Place = 1,

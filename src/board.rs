@@ -16,7 +16,6 @@ use std::{
 use bytes::BufMut;
 use sea_orm::DbErr;
 use warp::http::{StatusCode, Uri};
-use num_traits::FromPrimitive;
 use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::{filter::{body::patch::BinaryPatch, response::paginated_list::PageToken}, database::DatabaseError};
@@ -294,7 +293,7 @@ impl Board {
 			.write_sector(sector_index, connection).await
 			.expect("Failed to load sector");
 
-		match FromPrimitive::from_u8(sector.mask[sector_offset]) {
+		match MaskValue::try_from(sector.mask[sector_offset]).ok() {
 			Some(MaskValue::Place) => Ok(()),
 			Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
 			// NOTE: there exists an old implementation in the version
