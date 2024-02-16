@@ -25,6 +25,7 @@ impl Reply for InvalidPatch {
 pub struct BinaryPatch {
 	pub start: usize,
 	pub data: Bytes,
+	// TODO: this should maybe be verified and discarded as an implicit invariant 
 	pub expected_length: Option<usize>,
 }
 

@@ -50,7 +50,7 @@ impl<'l> Seek for SectorAccessor<'l> {
 					.map(|cursor| {
 						cursor
 							.checked_add(value)
-							.expect("overflow/underflow on seek")
+							.expect("overflow/underflow on seek") // TODO: bad expect?
 					})
 					.and_then(u64::try_from)
 			},
@@ -58,7 +58,7 @@ impl<'l> Seek for SectorAccessor<'l> {
 				i64::try_from(self.len())
 					.map(|end| {
 						end.checked_sub(value)
-							.expect("overflow/underflow on seek")
+							.expect("overflow/underflow on seek") // TODO: bad expect?
 					})
 					.and_then(u64::try_from)
 			},

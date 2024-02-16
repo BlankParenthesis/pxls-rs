@@ -44,6 +44,13 @@ pub enum PlaceError {
 	OutOfBounds,
 }
 
+#[derive(Debug)]
+pub enum PatchError {
+	SeekFailed(std::io::Error),
+	WriteFailed(DatabaseError<std::io::Error>),
+	WriteOutOfBounds,
+}
+
 impl Reject for PlaceError {}
 
 impl Reply for PlaceError {
@@ -126,67 +133,65 @@ impl Board {
 	) -> SectorAccessor<'l> {
 		self.sectors.access(buffer, connection)
 	}
+	
+	async fn try_patch(
+		&self,
+		// NOTE: can only patch initial or mask
+		buffer: SectorBuffer,
+		patch: &BinaryPatch,
+		connection: &BoardsConnection,
+	) -> Result<(), PatchError> {
 
-	// TODO: proper error type
+		let end = patch.start + patch.data.len();
+		let total_pixels = self.sectors.total_size();
+		if end >= total_pixels {
+			return Err(PatchError::WriteOutOfBounds);
+		}
+
+		let mut sector_data = self
+			.sectors
+			.access(buffer, connection);
+
+		sector_data
+			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
+			.map_err(PatchError::SeekFailed)?;
+
+		sector_data
+			.write(&patch.data).await
+			.map_err(PatchError::WriteFailed)?;
+
+		let change = packet::server::Change {
+			position: u64::try_from(patch.start).unwrap(),
+			values: Vec::from(&*patch.data),
+		};
+
+		let mut packet = packet::server::BoardData::builder();
+		
+		match buffer {
+			SectorBuffer::Initial => packet = packet.initial(vec![change]),
+			SectorBuffer::Mask => packet = packet.mask(vec![change]),
+			_ => panic!("cannot patch colors/timestamps")
+		}
+		
+		self.connections.send_board_update(packet).await;
+
+		Ok(())
+	}
+
 	pub async fn try_patch_initial(
 		&self,
 		patch: &BinaryPatch,
 		connection: &BoardsConnection,
-	) -> Result<(), &'static str> {
-		// TODO: check bounds
-		let mut sector_data = self
-			.sectors
-			.access(SectorBuffer::Initial, connection);
-
-		sector_data
-			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
-			.map_err(|_| "invalid start position")?;
-
-		sector_data
-			.write(&patch.data).await
-			.map_err(|_| "write error")?;
-
-		let initial = packet::server::Change {
-			position: u64::try_from(patch.start).unwrap(),
-			values: Vec::from(&*patch.data),
-		};
-		
-		let data = packet::server::BoardData::builder()
-			.initial(vec![initial]);
-
-		self.connections.send_board_update(data).await;
-
-		Ok(())
+	) -> Result<(), PatchError> {
+		self.try_patch(SectorBuffer::Initial, patch, connection).await
 	}
 
 	pub async fn try_patch_mask(
 		&self,
 		patch: &BinaryPatch,
 		connection: &BoardsConnection,
-	) -> Result<(), &'static str> {
-		let mut sector_data = self
-			.sectors
-			.access(SectorBuffer::Mask, connection);
-
-		sector_data
-			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
-			.map_err(|_| "invalid start position")?;
-
-		sector_data
-			.write(&patch.data).await
-			.map_err(|_| "write error")?;
-
-		let mask = packet::server::Change {
-			position: u64::try_from(patch.start).unwrap(),
-			values: Vec::from(&*patch.data),
-		};
-
-		let data = packet::server::BoardData::builder()
-			.mask(vec![mask]);
-
-		self.connections.send_board_update(data).await;
-
-		Ok(())
+	) -> Result<(), PatchError> {
+		self.try_patch(SectorBuffer::Mask, patch, connection).await
 	}
 
 	pub async fn update_info(

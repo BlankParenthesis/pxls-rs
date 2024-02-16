@@ -37,6 +37,10 @@ impl SectorCache {
 		self.sector_size
 	}
 
+	pub fn total_size(&self) -> usize {
+		self.sector_size() * self.total_sectors()
+	}
+
 	// TODO: maybe a better name? this fills the cache entry, not the sector itself
 	async fn fill_sector<C: ConnectionTrait + TransactionTrait>(
 		&self,
