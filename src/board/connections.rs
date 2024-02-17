@@ -161,7 +161,7 @@ impl UserConnections {
 
 #[derive(Debug, Default)]
 pub struct Connections {
-	by_uid: HashMap<String, Arc<RwLock<UserConnections>>>,
+	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
 	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
 	by_board_extensions: HashMap<EnumSet<DataType>, HashSet<Arc<AuthedSocket>>>,
 }
@@ -172,25 +172,22 @@ impl Connections {
 		socket: &Arc<AuthedSocket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
-		// TODO: I think the socket is probably just silently dropped if
-		// it's uid is None — that's obviously not good.
-		if let Some(id) = socket.user_id().await {
-			let entry = self.by_uid.entry(id.clone());
-			let connections = match entry {
-				Entry::Vacant(entry) => {
-					let new_connections = UserConnections::new(
-						Arc::clone(socket),
-						// SAFETY: this is only None if autheduser is None
-						cooldown_info.unwrap(),
-					).await;
-					entry.insert(Arc::clone(&new_connections));
-					new_connections
-				},
-				Entry::Occupied(entry) => Arc::clone(entry.get()),
-			};
+		let id = socket.user_id().await;
+		let entry = self.by_uid.entry(id.clone());
+		let connections = match entry {
+			Entry::Vacant(entry) => {
+				let new_connections = UserConnections::new(
+					Arc::clone(socket),
+					// SAFETY: this is only None if autheduser is None
+					cooldown_info.unwrap(),
+				).await;
+				entry.insert(Arc::clone(&new_connections));
+				new_connections
+			},
+			Entry::Occupied(entry) => Arc::clone(entry.get()),
+		};
 
-			connections.write().await.insert(Arc::clone(socket));
-		}
+		connections.write().await.insert(Arc::clone(socket));
 
 		for extension in socket.extensions {
 			self.by_extension[extension].insert(Arc::clone(socket));
@@ -209,16 +206,15 @@ impl Connections {
 		&mut self,
 		socket: &Arc<AuthedSocket>,
 	) {
-		if let Some(id) = socket.user_id().await {
-			let connections = self.by_uid.get(&id).unwrap();
-			let mut connections = connections.write().await;
+		let id = socket.user_id().await;
+		let connections = self.by_uid.get(&id).unwrap();
+		let mut connections = connections.write().await;
 
-			connections.remove(Arc::clone(socket));
-			if connections.is_empty() {
-				connections.cleanup();
-				drop(connections);
-				self.by_uid.remove(&id);
-			}
+		connections.remove(Arc::clone(socket));
+		if connections.is_empty() {
+			connections.cleanup();
+			drop(connections);
+			self.by_uid.remove(&id);
 		}
 
 		for extension in socket.extensions {
@@ -262,7 +258,7 @@ impl Connections {
 		user_id: String,
 		packet: packet::server::Packet,
 	) {
-		if let Some(connections) = self.by_uid.get(&user_id) {
+		if let Some(connections) = self.by_uid.get(&Some(user_id)) {
 			connections.read().await.send(&packet).await;
 		}
 	}
@@ -272,7 +268,7 @@ impl Connections {
 		user_id: &str,
 		cooldown_info: CooldownInfo,
 	) {
-		if let Some(connections) = self.by_uid.get(user_id) {
+		if let Some(connections) = self.by_uid.get(&Some(user_id.to_owned())) {
 			UserConnections::set_cooldown_info(
 				Arc::clone(connections),
 				cooldown_info,
