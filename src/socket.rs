@@ -145,14 +145,7 @@ impl UnauthedSocket {
 
 		let socket = Self { sender, extensions };
 
-		let timeout = tokio::time::sleep(Duration::from_secs(5));
-
-		let auth_attempt = tokio::select! {
-			_ = timeout => Err(AuthFailure::Timeout),
-			socket = socket.authenticate_socket(&mut ws_receiver) => socket,
-		};
-
-		match auth_attempt {
+		match socket.authenticate_socket(&mut ws_receiver).await {
 			Ok(socket) => {
 				let socket = Arc::new(socket);
 
@@ -175,14 +168,16 @@ impl UnauthedSocket {
 					}
 				}
 			},
-			Err(e) => {
-				match e {
-					AuthFailure::Timeout => todo!("4000"),
-					AuthFailure::InvalidMessage => todo!("1003"),
-					AuthFailure::Unauthorized => todo!("4001"),
-					AuthFailure::ValidationError(_) => todo!("4002"),
-					AuthFailure::Closed => (),
-				}
+			Err((socket, e)) => {
+				let close_message = match e {
+					AuthFailure::Timeout => ws::Message::close_with(4000u16, ""),
+					AuthFailure::InvalidMessage => ws::Message::close_with(1003u16, ""),
+					AuthFailure::Unauthorized => ws::Message::close_with(4001u16, ""),
+					AuthFailure::ValidationError(_) => ws::Message::close_with(4002u16, ""),
+					AuthFailure::Closed => ws::Message::close(),
+				};
+
+				socket.sender.send(Ok(close_message));
 			}
 		}
 	}
@@ -218,7 +213,7 @@ impl UnauthedSocket {
 	async fn authenticate_socket(
 		self,
 		receiver: &mut SplitStream<ws::WebSocket>,
-	) -> Result<AuthedSocket, AuthFailure> {
+	) -> Result<AuthedSocket, (Self, AuthFailure)> {
 		if !self.extensions.contains(Extension::Authentication) {
 			return Ok(AuthedSocket {
 				uuid: Uuid::new_v4(),
@@ -227,34 +222,56 @@ impl UnauthedSocket {
 				credentials: None,
 			});
 		}
+		
+		let timeout = tokio::time::sleep(Duration::from_secs(5));
+		tokio::pin!(timeout);
 
-		while let Some(Ok(msg)) = receiver.receive().await {
+		loop {
+			let next = tokio::select! {
+				_ = &mut timeout => Err(AuthFailure::Timeout),
+				msg = receiver.receive() => {
+					match msg {
+						Some(Ok(msg)) => Ok(msg),
+						Some(Err(_)) => Err(AuthFailure::InvalidMessage),
+						None => Err(AuthFailure::Closed),
+					}
+				},
+			};
+
 			use packet::client::Packet;
-			match msg {
-				Message::Packet(Packet::Authenticate { token }) => {
+			match next {
+				Ok(Message::Packet(Packet::Authenticate { token })) => {
 					let credentials = match token {
 						Some(token) => {
-							Some(UnauthedSocket::authenticate_user(token).await?)
+							match UnauthedSocket::authenticate_user(token).await {
+								Ok(credentials) => Some(credentials),
+								Err(e) => return Err((self, e)),
+							}
 						},
 						None => None,
 					};
 
-					return self.authorize_user(credentials)
-						.map(|credentials| AuthedSocket {
-							uuid: Uuid::new_v4(),
-							sender: self.sender,
-							extensions: self.extensions,
-							credentials: credentials.map(RwLock::new),
-						});
+					match self.authorize_user(credentials) {
+						Ok(credentials) => {
+							return Ok(AuthedSocket {
+								uuid: Uuid::new_v4(),
+								sender: self.sender,
+								extensions: self.extensions,
+								credentials: credentials.map(RwLock::new),
+							});
+						},
+						Err(e) => return Err((self, e)),
+					}
 				},
-				Message::Packet(_) => return Err(AuthFailure::InvalidMessage),
-				Message::Invalid => return Err(AuthFailure::InvalidMessage),
-				Message::Close => (),
-				Message::Ping => (),
+				Ok(Message::Packet(_)) => return Err((self, AuthFailure::InvalidMessage)),
+				Ok(Message::Invalid) => return Err((self, AuthFailure::InvalidMessage)),
+				Ok(Message::Close) => (),
+				Ok(Message::Ping) => (),
+				Err(e) => return Err((self, e)),
 			}
 		}
 
-		Err(AuthFailure::Closed)
+		
 	}
 }
 

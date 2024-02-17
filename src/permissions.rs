@@ -27,7 +27,7 @@ pub enum Permission {
 
 impl Permission {
 	pub fn defaults() -> EnumSet<Self> {
-		// TODO: match is_default above in a nicer way
+		// TODO: better defaults
 		EnumSet::all() - Self::BoardsPixelsPost
 	}
 }
