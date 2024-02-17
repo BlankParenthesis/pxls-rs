@@ -69,6 +69,29 @@ impl From<CloseReason> for u16 {
 	}
 }
 
+#[derive(Debug)]
+enum AuthFailure {
+	Timeout,
+	InvalidMessage,
+	Unauthorized,
+	TokenMismatch,
+	ValidationError(ValidationError),
+	Closed,
+}
+
+impl From<AuthFailure> for Option<CloseReason> {
+	fn from(failure: AuthFailure) -> Self {
+		match failure {
+			AuthFailure::Timeout => Some(CloseReason::AuthTimeout),
+			AuthFailure::InvalidMessage => Some(CloseReason::InvalidPacket),
+			AuthFailure::Unauthorized => Some(CloseReason::MissingPermission),
+			AuthFailure::TokenMismatch => Some(CloseReason::InvalidToken),
+			AuthFailure::ValidationError(_) => Some(CloseReason::InvalidToken),
+			AuthFailure::Closed => None,
+		}
+	}
+}
+
 enum Message {
 	Close,
 	Ping,
@@ -105,15 +128,6 @@ impl MessageStream for SplitStream<ws::WebSocket> {
 		self.next().await
 			.map(|o| o.map(Message::from).map_err(|_| ()))
 	}
-}
-
-#[derive(Debug)]
-enum AuthFailure {
-	Timeout,
-	Closed,
-	InvalidMessage,
-	Unauthorized,
-	ValidationError(ValidationError),
 }
 
 pub struct UnauthedSocket {
@@ -168,16 +182,13 @@ impl UnauthedSocket {
 					}
 				}
 			},
-			Err((socket, e)) => {
-				let close_message = match e {
-					AuthFailure::Timeout => ws::Message::close_with(4000u16, ""),
-					AuthFailure::InvalidMessage => ws::Message::close_with(1003u16, ""),
-					AuthFailure::Unauthorized => ws::Message::close_with(4001u16, ""),
-					AuthFailure::ValidationError(_) => ws::Message::close_with(4002u16, ""),
-					AuthFailure::Closed => ws::Message::close(),
+			Err((socket, err)) => {
+				let message = match Option::<CloseReason>::from(err) {
+					Some(reason) => ws::Message::close_with(u16::from(reason), ""),
+					None => ws::Message::close(),
 				};
 
-				socket.sender.send(Ok(close_message));
+				socket.sender.send(Ok(message));
 			}
 		}
 	}
@@ -344,34 +355,28 @@ impl AuthedSocket {
 		self.sender.send(Ok(close));
 	}
 
-	// TODO: consider returning a result and closing based on that
-	// side effects bad and all
-	async fn reauthenticate(&self, token: Option<String>) {
+	async fn reauthenticate(
+		&self,
+		token: Option<String>,
+	) -> Result<(), AuthFailure> {
 		if !self.extensions.contains(Extension::Authentication) {
-			self.close(Some(CloseReason::InvalidPacket));
-			return;
+			return Err(AuthFailure::InvalidMessage);
 		}
 
 		match (token, self.credentials.as_ref()) {
 			(Some(token), Some(credentials)) => {
-				match UnauthedSocket::authenticate_user(token).await {
-					Ok(user) => {
-						let mut credentials = credentials.write().await;
-						// NOTE: AuthedUser::eq tests only the subject
-						// and not the expiry
-						if *credentials.id == user.id {
-							*credentials = user;
-						} else {
-							self.close(Some(CloseReason::InvalidToken));
-						}
-					},
-					Err(_) => {
-						self.close(Some(CloseReason::InvalidToken));
-					},
+				let new_credentials = UnauthedSocket::authenticate_user(token).await?;
+				let mut credentials = credentials.write().await;
+
+				if *credentials.id == new_credentials.id {
+					*credentials = new_credentials;
+					Ok(())
+				} else {
+					Err(AuthFailure::TokenMismatch)
 				}
 			},
-			(None, None) => (),
-			_ => self.close(Some(CloseReason::InvalidToken)),
+			(None, None) => Ok(()),
+			_ => Err(AuthFailure::InvalidMessage),
 		}
 	} 
 
@@ -383,7 +388,9 @@ impl AuthedSocket {
 			use packet::client::Packet;
 			match msg {
 				Message::Packet(Packet::Authenticate { token }) => {
-					self.reauthenticate(token).await;
+					if let Err(err) = self.reauthenticate(token).await {
+						self.close(err.into());
+					}
 				},
 				Message::Invalid => {
 					self.close(Some(CloseReason::InvalidPacket));
