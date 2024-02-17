@@ -306,7 +306,7 @@ impl Board {
 		}
 		
 		let mut sector = self.sectors
-			.write_sector(sector_index, connection).await
+			.get_sector_mut(sector_index, connection).await
 			.expect("Failed to load sector");
 
 		match MaskValue::try_from(sector.mask[sector_offset]).ok() {

@@ -41,8 +41,7 @@ impl SectorCache {
 		self.sector_size() * self.total_sectors()
 	}
 
-	// TODO: maybe a better name? this fills the cache entry, not the sector itself
-	async fn fill_sector<C: ConnectionTrait + TransactionTrait>(
+	async fn cache_sector<C: ConnectionTrait + TransactionTrait>(
 		&self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
@@ -87,8 +86,7 @@ impl SectorCache {
 		option.take()
 	}
 
-	// TODO: rename to get_sector for consistency
-	pub async fn read_sector(
+	pub async fn get_sector(
 		&self,
 		sector_index: usize,
 		connection: &BoardsConnection,
@@ -100,7 +98,7 @@ impl SectorCache {
 			} else {
 				drop(option);
 
-				let sector = self.fill_sector(sector_index, connection).await?;
+				let sector = self.cache_sector(sector_index, connection).await?;
 
 				Ok(Some(RwLockReadGuard::map(
 					RwLockWriteGuard::downgrade(sector),
@@ -112,8 +110,7 @@ impl SectorCache {
 		}
 	}
 
-	// TODO: rename to get_sector_mut for consistency
-	pub async fn write_sector<C: ConnectionTrait + TransactionTrait>(
+	pub async fn get_sector_mut<C: ConnectionTrait + TransactionTrait>(
 		&self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
@@ -125,7 +122,7 @@ impl SectorCache {
 			} else {
 				drop(option);
 
-				let sector = self.fill_sector(sector_index, connection)
+				let sector = self.cache_sector(sector_index, connection)
 					.await.unwrap();
 
 				Some(RwLockWriteGuard::map(sector, |o| o.as_mut().unwrap()))

@@ -91,7 +91,7 @@ impl<'l> AsyncRead for SectorAccessor<'l> {
 			let offset = self.cursor % sector_size;
 
 			let sector = self.sectors
-				.read_sector(sector_index, self.connection).await
+				.get_sector(sector_index, self.connection).await
 				.map_err(DatabaseError::DbErr)?
 				.unwrap();
 
@@ -139,7 +139,7 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 			let offset = self.cursor % sector_size;
 
 			let mut sector = self.sectors
-				.write_sector(sector_index, &transaction)
+				.get_sector_mut(sector_index, &transaction)
 				.await.unwrap();
 
 			let buf = &mut match self.buffer {
