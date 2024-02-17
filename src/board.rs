@@ -44,20 +44,13 @@ pub enum PlaceError {
 	OutOfBounds,
 }
 
-#[derive(Debug)]
-pub enum PatchError {
-	SeekFailed(std::io::Error),
-	WriteFailed(DatabaseError<std::io::Error>),
-	WriteOutOfBounds,
-}
-
 impl Reject for PlaceError {}
 
 impl Reply for PlaceError {
 	fn into_response(self) -> Response {
 		match self {
 			Self::UnknownMaskValue => {
-				println!("Unknown mask value for board");
+				eprintln!("Unknown mask value for board");
 				StatusCode::INTERNAL_SERVER_ERROR
 			},
 			Self::Unplacable => StatusCode::FORBIDDEN,
@@ -65,6 +58,24 @@ impl Reply for PlaceError {
 			Self::NoOp => StatusCode::CONFLICT,
 			Self::Cooldown => StatusCode::TOO_MANY_REQUESTS,
 			Self::OutOfBounds => StatusCode::NOT_FOUND,
+		}
+		.into_response()
+	}
+}
+
+#[derive(Debug)]
+pub enum PatchError {
+	SeekFailed(std::io::Error),
+	WriteFailed(DatabaseError<std::io::Error>),
+	WriteOutOfBounds,
+}
+
+impl Reply for PatchError {
+	fn into_response(self) -> Response {
+		match self {
+			Self::SeekFailed(_) => StatusCode::CONFLICT,
+			Self::WriteFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+			Self::WriteOutOfBounds => StatusCode::CONFLICT,
 		}
 		.into_response()
 	}
