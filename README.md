@@ -28,14 +28,13 @@ Important missing features:
 	- [ ] [site_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/site_notices.md)
 	- [ ] [user_bans](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_bans.md)
 	- [ ] [user_count](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_count.md)
-	- [ ] [users](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/users.md)
+	- [X] [users](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/users.md) (Missing routes for editing and deleting users)
 
 
 Notable other issues:
 - ~~Startup could be way too slow currently (boards are reconstructed from database placements).~~
   *Reconstruction cost can be mitigated with board sectors/chunking.*
-- A bunch of things require cleanup.
-- Some features are only half implemented.
+- Some things require cleanup.
 - There's probably a bunch of internal caching to do.
 - There's probably a bunch of external HTTP caching info that should be revealed.
 - Basically anything that's a TODO needs work.
@@ -48,7 +47,6 @@ It's not all bad, here are some of the things that are currently better than the
 - Partially transparent palette values.
 
 And from a more development perspective:
-- Database migrations.
-- Leaner database structure.
+- Database migrations and a leaner database structure.
 - Smaller server scope (no need to worry about serving client files).
 - A more sane and consistent API.
