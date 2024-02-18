@@ -8,7 +8,7 @@ use warp::reply;
 mod users;
 mod boards;
 
-pub use users::{UsersDatabase, UsersConnection, UserFetchError};
+pub use users::{UsersDatabase, UsersConnection, FetchError};
 pub use boards::BoardsDatabase;
 
 pub type BoardsConnection = boards::BoardsConnection<DatabaseConnection>;

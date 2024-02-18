@@ -1,12 +1,10 @@
 use ldap3::SearchEntry;
 use serde::Serialize;
 
-use crate::config::CONFIG;
+use crate::{config::CONFIG, permissions::Permission};
 
 #[derive(Debug)]
-pub enum UserParseError {
-	MissingUid,
-	MissingTimestamp,
+pub enum TimestampParseError {
 	IncorrectTimestampLength,
 	IncorrectTimestampSuffix,
 	IncorrectTimestampYear,
@@ -28,45 +26,50 @@ struct LDAPTimestamp {
 	second: u32,
 }
 
+impl LDAPTimestamp {
+	pub fn unix_time(&self) -> Result<i64, TimestampParseError> {
+		Ok(chrono::NaiveDate::from_ymd_opt(self.year, self.month, self.day)
+			.ok_or(TimestampParseError::InvalidDate)?
+			.and_hms_opt(self.hour, self.minute, self.second)
+			.ok_or(TimestampParseError::InvalidTime)?
+			.signed_duration_since(chrono::NaiveDateTime::UNIX_EPOCH)
+			.num_seconds())
+	}
+}
+
 impl TryFrom<&str> for LDAPTimestamp {
-	type Error = UserParseError;
+	type Error = TimestampParseError;
 
 	fn try_from(value: &str) -> Result<Self, Self::Error> {
 		if value.len() != 15 {
-			return Err(UserParseError::IncorrectTimestampLength);
+			return Err(TimestampParseError::IncorrectTimestampLength);
 		}
 		if &value[14..15] != "Z" {
-			return Err(UserParseError::IncorrectTimestampSuffix);
+			return Err(TimestampParseError::IncorrectTimestampSuffix);
 		}
 
 		let year = value[0..4].parse()
-			.map_err(|_| UserParseError::IncorrectTimestampYear)?;
+			.map_err(|_| TimestampParseError::IncorrectTimestampYear)?;
 		let month = value[4..6].parse()
-			.map_err(|_| UserParseError::IncorrectTimestampMonth)?;
+			.map_err(|_| TimestampParseError::IncorrectTimestampMonth)?;
 		let day = value[6..8].parse()
-			.map_err(|_| UserParseError::IncorrectTimestampDay)?;
+			.map_err(|_| TimestampParseError::IncorrectTimestampDay)?;
 		let hour = value[8..10].parse()
-			.map_err(|_| UserParseError::IncorrectTimestampHour)?;
+			.map_err(|_| TimestampParseError::IncorrectTimestampHour)?;
 		let minute = value[10..12].parse()
-			.map_err(|_| UserParseError::IncorrectTimestampMinute)?;
+			.map_err(|_| TimestampParseError::IncorrectTimestampMinute)?;
 		let second = value[12..14].parse()
-			.map_err(|_| UserParseError::IncorrectTimestampSecond)?;
+			.map_err(|_| TimestampParseError::IncorrectTimestampSecond)?;
 
 		Ok(Self { year, month, day, hour, minute, second })
 	}
 }
 
-impl TryFrom<LDAPTimestamp> for u64 {
-	type Error = UserParseError;
-
-	fn try_from(value: LDAPTimestamp) -> Result<Self, Self::Error> {
-		Ok(chrono::NaiveDate::from_ymd_opt(value.year, value.month, value.day)
-			.ok_or(UserParseError::InvalidDate)?
-			.and_hms_opt(value.hour, value.minute, value.second)
-			.ok_or(UserParseError::InvalidTime)?
-			.signed_duration_since(chrono::NaiveDateTime::UNIX_EPOCH)
-			.num_seconds() as u64)
-	}
+#[derive(Debug)]
+pub enum UserParseError {
+	MissingId,
+	MissingTimestamp,
+	BadTimestamp(TimestampParseError),
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +77,21 @@ pub struct User {
 	#[serde(skip_serializing)]
 	pub id: String,
 	pub name: String,
-	pub created_at: u64,
+	pub created_at: i64,
+}
+
+lazy_static! {
+	static ref USER_FIELDS: [&'static str; 3] = [
+		&CONFIG.users_ldap_id_field,
+		&CONFIG.users_ldap_username_field,
+		"createTimestamp"
+	];
+}
+
+impl User {
+	pub fn search_fields() -> [&'static str; 3] {
+		*USER_FIELDS
+	}
 }
 
 impl TryFrom<SearchEntry> for User {
@@ -83,17 +100,20 @@ impl TryFrom<SearchEntry> for User {
 	fn try_from(value: SearchEntry) -> Result<Self, Self::Error> {
 		let id = value.attrs.get(&CONFIG.users_ldap_id_field)
 			.and_then(|v| v.first())
-			.ok_or(UserParseError::MissingUid)?
+			.ok_or(UserParseError::MissingId)?
 			.to_owned();
 		let name = value.attrs.get(&CONFIG.users_ldap_username_field)
 			.and_then(|v| v.first())
-			.ok_or(UserParseError::MissingUid)?
+			.ok_or(UserParseError::MissingId)?
 			.to_owned();
 		let created_at = value.attrs.get("createTimestamp")
 			.and_then(|v| v.first())
 			.ok_or(UserParseError::MissingTimestamp)
-			.and_then(|s| LDAPTimestamp::try_from(s.as_str()))
-			.and_then(u64::try_from)?;
+			.and_then(|s| {
+				LDAPTimestamp::try_from(s.as_str())
+					.and_then(|t| t.unix_time())
+					.map_err(UserParseError::BadTimestamp)
+			})?;
 
 		Ok(User{ id, name, created_at })
 	}

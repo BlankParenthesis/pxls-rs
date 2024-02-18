@@ -14,7 +14,7 @@ use crate::filter::response::reference::Reference;
 use crate::filter::resource::database;
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, UserFetchError};
+use crate::database::{UsersDatabase, UsersConnection, FetchError};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -51,7 +51,7 @@ pub fn list(
 
 					warp::reply::json(&page).into_response()
 				},
-				Err(UserFetchError::InvalidPage) => {
+				Err(FetchError::InvalidPage) => {
 					warp::reply::with_status(
 						"",
 						StatusCode::BAD_REQUEST
@@ -78,13 +78,13 @@ pub fn get(
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
 		.and(database::connection(users_db))
 		.then(move |uid: String, _user, mut connection: UsersConnection| async move {
-			let users = connection.get_user(uid).await;
+			let users = connection.get_user(&uid).await;
 
 			match users {
 				Ok(user) => {
 					warp::reply::json(&user).into_response()
 				},
-				Err(UserFetchError::MissingUser) => {
+				Err(FetchError::NoItems) => {
 					warp::reply::with_status(
 						"",
 						StatusCode::NOT_FOUND

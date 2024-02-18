@@ -20,13 +20,13 @@ use crate::config::CONFIG;
 
 
 #[derive(Debug)]
-pub enum UserFetchError {
-	ParseError(UserParseError),
+pub enum FetchError<E> {
+	ParseError(E),
 	LdapError(LdapError),
 	MissingPagerData,
 	InvalidPage,
-	MissingUser,
-	AmbiguousUser,
+	NoItems,
+	AmbiguousItems,
 }
 
 pub struct UsersDatabase {
@@ -65,12 +65,12 @@ impl UsersConnection {
 		&mut self,
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<User>), UserFetchError> {
+	) -> Result<(PageToken, Vec<User>), FetchError<UserParseError>> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
 				.unwrap_or(Ok(vec![]))
-				.map_err(|_| UserFetchError::InvalidPage)?,
+				.map_err(|_| FetchError::InvalidPage)?,
 		};
 
 		let filter = format!("({}=*)", CONFIG.users_ldap_id_field);
@@ -79,26 +79,22 @@ impl UsersConnection {
 				&CONFIG.users_ldap_base,
 				Scope::OneLevel,
 				filter.as_str(),
-				[
-					&CONFIG.users_ldap_id_field,
-					&CONFIG.users_ldap_username_field,
-					"createTimestamp"
-				],
+				User::search_fields(),
 			).await
-			.map_err(UserFetchError::LdapError)?
+			.map_err(FetchError::LdapError)?
 			.success()
 			// a bit presumptuous, but should be correct enough
-			.map_err(|_| UserFetchError::InvalidPage)?;
+			.map_err(|_| FetchError::InvalidPage)?;
 
 		let page_data = status.ctrls.iter()
 			.find(|Control(t, _)| matches!(t, Some(ControlType::PagedResults)))
 			.map(|Control(_, d)| d.parse::<PagedResults>())
-			.ok_or(UserFetchError::MissingPagerData)?;
+			.ok_or(FetchError::MissingPagerData)?;
 
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(User::try_from)
-			.map(|r| r.map_err(UserFetchError::ParseError))
+			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
 		
 		if page_data.cookie.is_empty() {
@@ -111,26 +107,22 @@ impl UsersConnection {
 
 	pub async fn get_user(
 		&mut self,
-		uid: String,
-	) -> Result<User, UserFetchError> {
-		let filter = format!("({}={})", CONFIG.users_ldap_id_field, ldap_escape(uid));
+		id: &str,
+	) -> Result<User, FetchError<UserParseError>> {
+		let filter = format!("({}={})", CONFIG.users_ldap_id_field, ldap_escape(id));
 		let (results, _) = self.connection
 			.search(
 				&CONFIG.users_ldap_base,
 				Scope::OneLevel,
 				filter.as_str(),
-				[
-					&CONFIG.users_ldap_id_field,
-					&CONFIG.users_ldap_username_field,
-					"createTimestamp"
-				],
+				User::search_fields(),
 			).await
-			.map_err(UserFetchError::LdapError)?
+			.map_err(FetchError::LdapError)?
 			.success()
-			.map_err(UserFetchError::LdapError)?;
+			.map_err(FetchError::LdapError)?;
 
 		match results.len() {
-			0 => Err(UserFetchError::MissingUser),
+			0 => Err(FetchError::NoItems),
 			1 => {
 				let result = results.into_iter()
 					.next()
@@ -138,9 +130,9 @@ impl UsersConnection {
 					.unwrap();
 
 				User::try_from(result)
-					.map_err(UserFetchError::ParseError)
+					.map_err(FetchError::ParseError)
 			},
-			_ => Err(UserFetchError::AmbiguousUser),
+			_ => Err(FetchError::AmbiguousItems),
 		}
 	}
 }
