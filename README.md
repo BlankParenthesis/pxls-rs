@@ -7,7 +7,7 @@ An unfinished server implementation of [PxlsNetworking](https://github.com/Blank
 Important missing features:
 - ~~Websocket authorization isn't compatible with the browser API specification.~~
 - ~~No cooldown notifications.~~
-- No permissions management.
+- ~~No permissions management.~~
 - Several important extensions are not yet implemented.
   
   A full list of which extensions are implemented:
@@ -24,7 +24,7 @@ Important missing features:
 	- [ ] [list_filtering](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/list_filtering.md)
 	- [ ] [placement_statistics](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/placement_statistics.md)
 	- [ ] [reports](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/reports.md)
-	- [ ] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/roles.md)
+	- [X] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/roles.md) (Missing routes for editing and deleting roles)
 	- [ ] [site_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/site_notices.md)
 	- [ ] [user_bans](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_bans.md)
 	- [ ] [user_count](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_count.md)
