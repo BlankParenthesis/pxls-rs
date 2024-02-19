@@ -5,14 +5,12 @@ use warp::reply::json;
 use warp::{Reply, Rejection};
 use warp::Filter;
 
-use crate::filter::resource::{board, database};
-use crate::{
-	permissions::Permission,
-	filter::header::authorization::{self, with_permission},
-	filter::resource::board::PassableBoard,
-	BoardDataMap,
-};
-use crate::database::{BoardsDatabase, BoardsConnection};
+use crate::filter::header::authorization::authorized;
+use crate::filter::resource::board::{self, PassableBoard};
+use crate::filter::resource::database;
+use crate::permissions::Permission;
+use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::BoardDataMap;
 
 use serde::Serialize;
 
@@ -26,15 +24,16 @@ pub struct UserCount {
 pub fn get(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("users"))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsUsers)))
+		.and(authorized(users_db, &[Permission::BoardsUsers]))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, _user, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, _, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting user count");
 			match board.user_count(&connection).await {

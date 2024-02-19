@@ -1,18 +1,31 @@
-use warp::{Reply, Rejection, Filter, reply::json};
+use std::sync::Arc;
 
-use crate::{filter::header::authorization::{self, Bearer}, permissions::Permission};
+use warp::reject::Rejection;
+use warp::{Reply, Filter, reply::json};
 
-pub fn get() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+use crate::filter::header::authorization::{Bearer, authorized, UsersDBError};
+use crate::permissions::Permission;
+use crate::database::{UsersConnection, UsersDatabase};
+
+pub fn get(
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("access")
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer())
-		.map(|user: Option<Bearer>| {
+		.and(authorized(users_db, &[]))
+		.and_then(|user: Option<Bearer>, mut connection: UsersConnection| async move {
 			let permissions = match user {
-				Some(bearer) => bearer.permissions(),
+				Some(user) => {
+					connection.user_permissions(&user.id).await
+						.map_err(UsersDBError::Raw)
+						.map_err(Rejection::from)?
+				},
 				None => Permission::defaults(),
 			};
 			
-			json(&permissions)
+			let data = json(&permissions.into_iter().collect::<Vec<_>>());
+
+			Ok::<_, Rejection>(data)
 		})
 }

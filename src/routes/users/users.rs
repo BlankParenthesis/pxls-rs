@@ -8,11 +8,9 @@ use warp::{
 	path::Tail,
 };
 
-use crate::filter::header::authorization::{self, with_permission, Bearer};
 use crate::filter::response::paginated_list::{PaginationOptions, Page};
 use crate::filter::response::reference::Reference;
-use crate::filter::resource::database;
-
+use crate::filter::header::authorization::{Bearer, authorized};
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, FetchError};
 
@@ -22,10 +20,9 @@ pub fn list(
 	warp::path("users")
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer().and_then(with_permission(Permission::UsersList)))
 		.and(warp::query())
-		.and(database::connection(users_db))
-		.then(move |_user, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
+		.and(authorized(users_db, &[Permission::UsersList]))
+		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(10)
@@ -74,10 +71,8 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		// TODO: current user permissions
-		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
-		.and(database::connection(users_db))
-		.then(move |uid: String, _user, mut connection: UsersConnection| async move {
+		.and(authorized(users_db, &[Permission::UsersGet]))
+		.then(move |uid: String, _, mut connection: UsersConnection| async move {
 			match connection.get_user(&uid).await {
 				Ok(user) => {
 					warp::reply::json(&user).into_response()
@@ -98,14 +93,16 @@ pub fn get(
 		})
 }
 
-pub fn current() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+pub fn current(
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path("current"))
 		.and(warp::path::tail())
 		.and(warp::get())
 		// TODO: current user permissions
-		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
-		.then(|tail: Tail, user: Option<Bearer>| async move {
+		.and(authorized(users_db, &[Permission::UsersList]))
+		.then(|tail: Tail, user: Option<Bearer>, _| async move {
 			if let Some(uid) = user.map(|b| b.id) {
 				let location = format!("/users/{}/{}", uid, tail.as_str())
 					.parse::<Uri>().unwrap();

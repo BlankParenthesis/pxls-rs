@@ -7,10 +7,9 @@ use warp::{
 	Rejection,
 };
 
-use crate::filter::header::authorization::{self, with_permission};
+use crate::filter::header::authorization::authorized;
 use crate::filter::response::paginated_list::{PaginationOptions, Page};
 use crate::filter::response::reference::Reference;
-use crate::filter::resource::database;
 
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, FetchError};
@@ -23,12 +22,9 @@ pub fn roles(
 		.and(warp::path("roles"))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer()
-			.and_then(with_permission(Permission::UsersGet))
-			.and_then(with_permission(Permission::UsersRolesGet)))
 		.and(warp::query())
-		.and(database::connection(users_db))
-		.then(move |uid: String,_user, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
+		.and(authorized(users_db, &[Permission::UsersGet, Permission::UsersRolesGet]))
+		.then(move |uid: String, pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(10)

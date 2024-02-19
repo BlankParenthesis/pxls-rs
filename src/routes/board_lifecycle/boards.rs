@@ -11,17 +11,14 @@ use warp::{
 	Filter,
 };
 
-use crate::{
-	permissions::Permission,
-	filter::{
-		header::authorization::{self, with_permission},
-		resource::{board::{self, PassableBoard, PendingDelete}, database},
-		response::reference::Reference,
-	},
-	board::Palette,
-	BoardDataMap,
-	database::{BoardsDatabase, BoardsConnection},
-};
+use crate::BoardDataMap;
+use crate::board::Palette;
+use crate::filter::header::authorization::authorized;
+use crate::filter::resource::board::{self, PassableBoard, PendingDelete};
+use crate::filter::resource::database;
+use crate::filter::response::reference::Reference;
+use crate::permissions::Permission;
+use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPost {
@@ -34,14 +31,15 @@ pub struct BoardInfoPost {
 pub fn post(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPost)))
+		.and(authorized(users_db, &[Permission::BoardsPost]))
 		.and(database::connection(boards_db))
-		.then(move |data: BoardInfoPost, _user, connection: BoardsConnection| {
+		.then(move |data: BoardInfoPost, _, _, connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let board = connection.create_board(
@@ -91,6 +89,7 @@ pub struct BoardInfoPatch {
 pub fn patch(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -98,9 +97,9 @@ pub fn patch(
 		.and(warp::patch())
 		// TODO: require application/merge-patch+json type?
 		.and(warp::body::json())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsPatch)))
+		.and(authorized(users_db, &[Permission::BoardsPatch]))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, patch: BoardInfoPatch, _user, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, patch: BoardInfoPatch, _, _, connection: BoardsConnection| async move {
 			let mut board = board.write().await;
 			let board = board.as_mut().expect("Board went missing when patching");
 
@@ -136,14 +135,15 @@ pub fn patch(
 pub fn delete(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::prepare_delete(&boards))
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDelete)))
+		.and(authorized(users_db, &[Permission::BoardsDelete]))
 		.and(database::connection(boards_db))
-		.then(move |mut deletion: PendingDelete, _user, connection: BoardsConnection| async move {
+		.then(move |mut deletion: PendingDelete, _, _, connection: BoardsConnection| async move {
 			let board = deletion.perform();
 			let mut board = board.write().await;
 			let board = board.take().expect("Board went missing during deletion");

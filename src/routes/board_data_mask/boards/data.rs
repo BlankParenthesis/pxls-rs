@@ -8,10 +8,8 @@ use warp::{
 };
 
 
-use crate::filter::header::{
-	authorization::{self, with_permission},
-	range::{self, Range}
-};
+use crate::filter::header::authorization::authorized;
+use crate::filter::header::range::{self, Range};
 use crate::filter::body::patch;
 use crate::filter::resource::{board, database};
 use crate::board::SectorBuffer;
@@ -19,11 +17,12 @@ use crate::BoardDataMap;
 use crate::filter::resource::board::PassableBoard;
 use crate::filter::body::patch::BinaryPatch;
 use crate::permissions::Permission;
-use crate::database::{BoardsConnection, BoardsDatabase};
+use crate::database::{BoardsConnection, BoardsDatabase, UsersDatabase};
 
 pub fn get_mask(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -37,9 +36,9 @@ pub fn get_mask(
 				.or(range::default())
 				.unify(),
 		)
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
+		.and(authorized(users_db, &[Permission::BoardsDataGet]))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, range: Range, _user, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let mut mask_data = board.as_ref()
@@ -53,6 +52,7 @@ pub fn get_mask(
 pub fn patch_mask(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -60,10 +60,10 @@ pub fn patch_mask(
 		.and(warp::path("mask"))
 		.and(warp::path::end())
 		.and(warp::patch())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataPatch)))
 		.and(patch::bytes())
+		.and(authorized(users_db, &[Permission::BoardsDataPatch]))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, _user, patch: BinaryPatch, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, patch: BinaryPatch, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.write().await;
 			let patch_result = board.as_ref()

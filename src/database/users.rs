@@ -1,5 +1,6 @@
 use base64::prelude::*;
 use deadpool::managed::PoolError;
+use enumset::EnumSet;
 use ldap3::{
 	LdapError,
 	controls::{PagedResults, Control, ControlType},
@@ -16,7 +17,7 @@ use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
 
-use crate::config::CONFIG;
+use crate::{config::CONFIG, permissions::Permission};
 
 
 #[derive(Debug)]
@@ -260,5 +261,37 @@ impl UsersConnection {
 			},
 			_ => Err(FetchError::AmbiguousItems),
 		}
+	}
+
+	pub async fn user_permissions(
+		&mut self,
+		id: &str,
+	) -> Result<EnumSet<Permission>, LdapError> {
+		let user_dn = format!(
+			"{}={},ou={},{}",
+			CONFIG.ldap_users_id_field,
+			ldap_escape(id),
+			CONFIG.ldap_users_ou,
+			CONFIG.ldap_base,
+		);
+		let filter = format!("(member={})", user_dn);
+		let (results, _) = self.connection
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_roles_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				filter.as_str(),
+				["pxlsspacePermission"],
+			).await?
+			.success()?;
+
+		Ok(results.into_iter().flat_map(|result| {
+			let permissions = SearchEntry::construct(result);
+			permissions.attrs.get("pxlsspacePermission")
+				.cloned()
+				.unwrap_or_default()
+				.into_iter()
+				// NOTE: silently drops invalid permissions
+				.filter_map(|v| Permission::try_from(v.as_str()).ok())
+		}).collect())
 	}
 }

@@ -2,26 +2,19 @@ use std::sync::Arc;
 
 use warp::{Filter, Reply, Rejection};
 
-use crate::{
-	filter::{
-		resource::{
-			database,
-			board::{PassableBoard, self},
-		},
-		header::{
-			range::{Range, self},
-			authorization::{self, with_permission},
-		},
-	},
-	BoardDataMap,
-	permissions::Permission,
-	board::SectorBuffer,
-	database::{BoardsDatabase, BoardsConnection},
-};
+use crate::BoardDataMap;
+use crate::filter::header::authorization::authorized;
+use crate::filter::header::range::{self, Range};
+use crate::filter::resource::board::{self, PassableBoard};
+use crate::filter::resource::database;
+use crate::permissions::Permission;
+use crate::board::SectorBuffer;
+use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 
 pub fn get_colors(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -35,9 +28,9 @@ pub fn get_colors(
 				.or(range::default())
 				.unify(),
 		)
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsDataGet)))
+		.and(authorized(users_db, &[Permission::BoardsPixelsList]))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, range: Range, _user, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let mut colors_data = board.as_ref()

@@ -9,12 +9,11 @@ use warp::{Reply, Rejection};
 use warp::{http::header, Filter};
 use warp::path::Tail;
 
-use crate::database::{BoardsDatabase, BoardsConnection};
-use crate::filter::header::authorization::Bearer;
+use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::{board, database};
 use crate::{
 	permissions::Permission,
-	filter::header::authorization::{self, with_permission},
 	filter::resource::board::PassableBoard,
 	socket::{Extension, UnauthedSocket},
 	BoardDataMap,
@@ -26,13 +25,16 @@ pub mod data;
 pub mod pixels;
 pub mod users;
 
-pub fn list(boards: BoardDataMap) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+pub fn list(
+	boards: BoardDataMap,
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsList)))
 		.and(warp::query())
-		.then(move |_user, pagination: PaginationOptions<usize>| {
+		.and(authorized(users_db, &[Permission::BoardsList]))
+		.then(move |pagination: PaginationOptions<usize>, _, _| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let page = pagination.page.unwrap_or(0);
@@ -102,14 +104,15 @@ pub fn default() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Cl
 pub fn get(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer().and_then(with_permission(Permission::BoardsGet)))
+		.and(authorized(users_db, &[Permission::BoardsGet]))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, user, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, user, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board wend missing when getting info");
 			let mut response = json(&board.info).into_response();
@@ -150,46 +153,47 @@ pub struct SocketOptions {
 pub fn socket(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
+	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("socket"))
 		.and(warp::path::end())
-		.and(serde_qs::warp::query(Default::default()))
 		.and(warp::ws())
+		.and(serde_qs::warp::query(Default::default()))
 		.and(database::connection(boards_db))
-		.map(
-			move |board: PassableBoard, options: SocketOptions, ws: Ws, connection: BoardsConnection| {
-				if let Some(extensions) = options.extensions {
-					if extensions.is_empty() {
-						return StatusCode::UNPROCESSABLE_ENTITY.into_response();
-					}
-
-					if !extensions.contains(Extension::Authentication) {
-						let permissions = Permission::defaults();
-						let has_permissions = extensions.iter()
-							.map(|e| e.socket_permission())
-							.all(|p| permissions.contains(p));
-
-						if !has_permissions {
-							return StatusCode::FORBIDDEN.into_response();
-						}
-					}
-
-					ws.on_upgrade(move |websocket| {
-						UnauthedSocket::connect(
-							websocket,
-							extensions,
-							Arc::downgrade(&*board),
-							connection,
-						)
-					})
-					.into_response()
-				} else {
-					StatusCode::UNPROCESSABLE_ENTITY.into_response()
+		.map(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
+			if let Some(extensions) = options.extensions {
+				if extensions.is_empty() {
+					return StatusCode::UNPROCESSABLE_ENTITY.into_response();
 				}
-			},
-		)
+
+				if !extensions.contains(Extension::Authentication) {
+					let permissions = Permission::defaults();
+					let has_permissions = extensions.iter()
+						.map(|e| e.socket_permission())
+						.all(|p| permissions.contains(p));
+				
+					if !has_permissions {
+						return StatusCode::FORBIDDEN.into_response();
+					}
+				}
+			
+				let users_db = Arc::clone(&users_db);
+				ws.on_upgrade(move |websocket| {
+					UnauthedSocket::connect(
+						websocket,
+						extensions,
+						Arc::downgrade(&*board),
+						connection,
+						users_db,
+					)
+				})
+				.into_response()
+			} else {
+				StatusCode::UNPROCESSABLE_ENTITY.into_response()
+			}
+		})
 		.recover(|rejection: Rejection| {
 			async {
 				if let Some(err) = rejection.find::<serde_qs::Error>() {

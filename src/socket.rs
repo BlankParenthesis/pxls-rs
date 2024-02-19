@@ -20,7 +20,8 @@ use crate::{
 	permissions::Permission,
 	openid::{ValidationError, self},
 	board::Board,
-	filter::header::authorization::Bearer, database::BoardsConnection,
+	filter::header::authorization::Bearer,
+	database::{BoardsConnection, UsersDatabase, UsersConnection, Database},
 };
 
 // TODO: move this somewhere else
@@ -51,6 +52,7 @@ impl Extension {
 
 pub enum CloseReason {
 	ServerClosing,
+	ServerError,
 	InvalidPacket,
 	AuthTimeout,
 	MissingPermission,
@@ -61,6 +63,7 @@ impl From<CloseReason> for u16 {
 	fn from(reason: CloseReason) -> Self {
 		match reason {
 			CloseReason::ServerClosing => 1001,
+			CloseReason::ServerError => 1011,
 			CloseReason::InvalidPacket => 1008,
 			CloseReason::AuthTimeout => 4000,
 			CloseReason::MissingPermission => 4001,
@@ -76,6 +79,7 @@ enum AuthFailure {
 	Unauthorized,
 	TokenMismatch,
 	ValidationError(ValidationError),
+	ServerError,
 	Closed,
 }
 
@@ -87,6 +91,7 @@ impl From<AuthFailure> for Option<CloseReason> {
 			AuthFailure::Unauthorized => Some(CloseReason::MissingPermission),
 			AuthFailure::TokenMismatch => Some(CloseReason::InvalidToken),
 			AuthFailure::ValidationError(_) => Some(CloseReason::InvalidToken),
+			AuthFailure::ServerError => Some(CloseReason::ServerError),
 			AuthFailure::Closed => None,
 		}
 	}
@@ -130,9 +135,58 @@ impl MessageStream for SplitStream<ws::WebSocket> {
 	}
 }
 
+#[derive(Debug)]
+struct Authenticated(Bearer);
+
+impl Authenticated {
+	async fn authenticate(token: String) -> Result<Self, AuthFailure> {
+		openid::validate_token(&token).await
+			.map(Bearer::from)
+			.map(Self)
+			.map_err(AuthFailure::ValidationError)
+	}
+}
+
+#[derive(Debug)]
+struct Authorized(Option<Authenticated>);
+
+impl Authorized {
+	async fn authorize(
+		credentials: Option<Authenticated>,
+		permissions: &[Permission],
+		connection: &mut UsersConnection,
+	) -> Result<Self, AuthFailure> {
+		let user_permissions = match credentials {
+			Some(Authenticated(ref bearer)) => {
+				connection.user_permissions(&bearer.id).await
+					.map_err(|_| AuthFailure::ServerError)?
+			},
+			None => Permission::defaults(),
+		};
+
+		if permissions.iter().copied().all(|p| user_permissions.contains(p)) {
+			Ok(Self(credentials))
+		} else {
+			Err(AuthFailure::Unauthorized)
+		}
+	}
+
+	fn user_id(&self) -> Option<String> {
+		self.0.as_ref()
+			.map(|Authenticated(bearer)| String::from(&bearer.id))
+	}
+
+	fn is_valid(&self) -> bool {
+		self.0.as_ref()
+			.map(|Authenticated(bearer)| bearer.is_valid())
+			.unwrap_or(true)
+	}
+}
+
 pub struct UnauthedSocket {
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 	extensions: EnumSet<Extension>,
+	users_db: Arc<UsersDatabase>,
 }
 
 impl UnauthedSocket {
@@ -141,6 +195,7 @@ impl UnauthedSocket {
 		extensions: EnumSet<Extension>,
 		board: Weak<RwLock<Option<Board>>>,
 		connection: BoardsConnection,
+		users_db: Arc<UsersDatabase>,
 	) {
 		let (ws_sender, mut ws_receiver) = websocket.split();
 		let (sender, sender_receiver) = mpsc::unbounded_channel();
@@ -157,9 +212,9 @@ impl UnauthedSocket {
 				}),
 		);
 
-		let socket = Self { sender, extensions };
+		let socket = Self { sender, extensions, users_db };
 
-		match socket.authenticate_socket(&mut ws_receiver).await {
+		match socket.auth_socket(&mut ws_receiver).await {
 			Ok(socket) => {
 				let socket = Arc::new(socket);
 
@@ -193,47 +248,10 @@ impl UnauthedSocket {
 		}
 	}
 
-	fn authorize_user(
-		&self,
-		credentials: Option<Bearer>,
-	) -> Result<Option<Bearer>, AuthFailure> {
-		let permissions = match credentials {
-			Some(ref bearer) => bearer.permissions(),
-			None => Permission::defaults(),
-		};
-
-		let has_permission = self.extensions.iter()
-			.map(|e| e.socket_permission())
-			.all(|permission| permissions.contains(permission));
-
-		if has_permission {
-			Ok(credentials)
-		} else {
-			Err(AuthFailure::Unauthorized)
-		}
-	}
-
-	async fn authenticate_user(
-		token: String,
-	) -> Result<Bearer, AuthFailure> {
-		openid::validate_token(&token).await
-			.map(Bearer::from)
-			.map_err(AuthFailure::ValidationError)
-	}
-
 	async fn authenticate_socket(
-		self,
+		&self,
 		receiver: &mut SplitStream<ws::WebSocket>,
-	) -> Result<AuthedSocket, (Self, AuthFailure)> {
-		if !self.extensions.contains(Extension::Authentication) {
-			return Ok(AuthedSocket {
-				uuid: Uuid::new_v4(),
-				sender: self.sender,
-				extensions: self.extensions,
-				credentials: None,
-			});
-		}
-		
+	) -> Result<Option<Authenticated>, AuthFailure> {
 		let timeout = tokio::time::sleep(Duration::from_secs(5));
 		tokio::pin!(timeout);
 
@@ -254,44 +272,68 @@ impl UnauthedSocket {
 				Ok(Message::Packet(Packet::Authenticate { token })) => {
 					let credentials = match token {
 						Some(token) => {
-							match UnauthedSocket::authenticate_user(token).await {
-								Ok(credentials) => Some(credentials),
-								Err(e) => return Err((self, e)),
-							}
+							Some(Authenticated::authenticate(token).await?)
 						},
 						None => None,
 					};
 
-					match self.authorize_user(credentials) {
-						Ok(credentials) => {
-							return Ok(AuthedSocket {
-								uuid: Uuid::new_v4(),
-								sender: self.sender,
-								extensions: self.extensions,
-								credentials: credentials.map(RwLock::new),
-							});
-						},
-						Err(e) => return Err((self, e)),
-					}
+					return Ok(credentials);
 				},
-				Ok(Message::Packet(_)) => return Err((self, AuthFailure::InvalidMessage)),
-				Ok(Message::Invalid) => return Err((self, AuthFailure::InvalidMessage)),
+				Ok(Message::Packet(_)) => return Err(AuthFailure::InvalidMessage),
+				Ok(Message::Invalid) => return Err(AuthFailure::InvalidMessage),
 				Ok(Message::Close) => (),
 				Ok(Message::Ping) => (),
-				Err(e) => return Err((self, e)),
+				Err(e) => return Err(e),
 			}
 		}
+	}
 
+	async fn auth_socket(
+		self,
+		receiver: &mut SplitStream<ws::WebSocket>,
+	) -> Result<AuthedSocket, (Self, AuthFailure)> {
+		let anonymous = !self.extensions.contains(Extension::Authentication);
+
+		let credentials = if anonymous {
+			None
+		} else {
+			match self.authenticate_socket(receiver).await {
+				Ok(credentials) => credentials,
+				Err(err) => return Err((self, err)),
+			}
+		};
+
+		let permissions = self.extensions.iter()
+			.map(|e| e.socket_permission())
+			.collect::<Vec<_>>();
+	
+		let mut connection = match self.users_db.connection().await {
+			Ok(connection) => connection,
+			Err(err) => return Err((self, AuthFailure::ServerError)),
+		};
+
+		match Authorized::authorize(credentials, &permissions, &mut connection).await {
+			Ok(credentials) => {
+				Ok(AuthedSocket {
+					uuid: Uuid::new_v4(),
+					sender: self.sender,
+					extensions: self.extensions,
+					credentials: RwLock::new(credentials),
+					users_db: self.users_db,
+				})
+			},
+			Err(e) => Err((self, e)),
+		}
 		
 	}
 }
 
-#[derive(Debug)]
 pub struct AuthedSocket {
 	uuid: Uuid,
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 	pub extensions: EnumSet<Extension>,
-	credentials: Option<RwLock<Bearer>>,
+	credentials: RwLock<Authorized>,
+	users_db: Arc<UsersDatabase>,
 }
 
 impl PartialEq for AuthedSocket {
@@ -316,12 +358,7 @@ impl Hash for AuthedSocket {
 
 impl AuthedSocket {
 	pub async fn user_id(&self) -> Option<String> {
-		match self.credentials {
-			Some(ref lock) => {
-				Some(lock.read().await.id.clone())
-			},
-			None => None,
-		}
+		self.credentials.read().await.user_id()
 	}
 
 	pub async fn send(
@@ -339,10 +376,7 @@ impl AuthedSocket {
 	}
 
 	async fn auth_valid(&self) -> bool {
-		match self.credentials {
-			Some(ref lock) => lock.read().await.is_valid(),
-			None => true,
-		}
+		self.credentials.read().await.is_valid()
 	}
 
 	pub fn close(&self, reason: Option<CloseReason>) {
@@ -355,7 +389,7 @@ impl AuthedSocket {
 		self.sender.send(Ok(close));
 	}
 
-	async fn reauthenticate(
+	async fn reauthorize(
 		&self,
 		token: Option<String>,
 	) -> Result<(), AuthFailure> {
@@ -363,20 +397,36 @@ impl AuthedSocket {
 			return Err(AuthFailure::InvalidMessage);
 		}
 
-		match (token, self.credentials.as_ref()) {
-			(Some(token), Some(credentials)) => {
-				let new_credentials = UnauthedSocket::authenticate_user(token).await?;
-				let mut credentials = credentials.write().await;
+		let permissions = self.extensions.iter()
+			.map(|e| e.socket_permission())
+			.collect::<Vec<_>>();
 
-				if *credentials.id == new_credentials.id {
-					*credentials = new_credentials;
-					Ok(())
-				} else {
-					Err(AuthFailure::TokenMismatch)
-				}
-			},
-			(None, None) => Ok(()),
-			_ => Err(AuthFailure::InvalidMessage),
+		let mut connection = match self.users_db.connection().await {
+			Ok(connection) => connection,
+			Err(err) => return Err(AuthFailure::ServerError),
+		};
+
+		let new_credentials = match token {
+			Some(token) => Some(Authenticated::authenticate(token).await?),
+			None => None,
+		};
+
+		let new_credentials = Authorized::authorize(
+			new_credentials,
+			&permissions,
+			&mut connection,
+		).await?;
+
+		let mut credentials = self.credentials.write().await;
+
+		let old_id = credentials.user_id();
+		let new_id = new_credentials.user_id();
+		
+		if old_id == new_id {
+			*credentials = new_credentials;
+			Ok(())
+		} else {
+			Err(AuthFailure::TokenMismatch)
 		}
 	} 
 
@@ -388,7 +438,7 @@ impl AuthedSocket {
 			use packet::client::Packet;
 			match msg {
 				Message::Packet(Packet::Authenticate { token }) => {
-					if let Err(err) = self.reauthenticate(token).await {
+					if let Err(err) = self.reauthorize(token).await {
 						self.close(err.into());
 					}
 				},

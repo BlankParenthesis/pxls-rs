@@ -18,7 +18,6 @@ use crate::socket::{
 	packet::{self, server::DataType}
 };
 
-#[derive(Debug)]
 struct UserConnections {
 	connections: HashSet<Arc<AuthedSocket>>,
 	cooldown_timer: Option<CancellationToken>,
@@ -159,7 +158,7 @@ impl UserConnections {
 	}
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Connections {
 	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
 	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,

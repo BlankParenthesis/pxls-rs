@@ -1,12 +1,13 @@
+use std::sync::Arc;
+
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
 use warp::{Filter, Reply, Rejection, reply::json};
 
-use crate::{
-	filter::header::authorization::{self, with_permission},
-	permissions::Permission,
-};
+use crate::filter::header::authorization::authorized;
+use crate::permissions::Permission;
+use crate::database::UsersDatabase;
 
 #[skip_serializing_none]
 #[derive(Serialize)]
@@ -43,10 +44,15 @@ lazy_static! {
 	};
 }
 
-pub fn get() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+pub fn get(
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("info")
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer().and_then(with_permission(Permission::Info)))
-		.map(|_user| warp::reply::with_status(json(&*SERVER_INFO), StatusCode::OK).into_response())
+		.and(authorized(users_db, &[Permission::Info]))
+		.then(|_, _| async move  {
+			warp::reply::with_status(json(&*SERVER_INFO), StatusCode::OK)
+				.into_response()
+		})
 }

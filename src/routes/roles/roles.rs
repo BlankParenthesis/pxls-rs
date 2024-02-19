@@ -7,11 +7,9 @@ use warp::{
 	Rejection,
 };
 
-use crate::filter::header::authorization::{self, with_permission};
 use crate::filter::response::paginated_list::{PaginationOptions, Page};
 use crate::filter::response::reference::Reference;
-use crate::filter::resource::database;
-
+use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, FetchError};
 
@@ -21,10 +19,9 @@ pub fn list(
 	warp::path("roles")
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::bearer().and_then(with_permission(Permission::RolesList)))
 		.and(warp::query())
-		.and(database::connection(users_db))
-		.then(move |_user, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
+		.and(authorized(users_db, &[Permission::RolesList]))
+		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(10)
@@ -68,10 +65,8 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		// TODO: current user permissions
-		.and(authorization::bearer().and_then(with_permission(Permission::RolesGet)))
-		.and(database::connection(users_db))
-		.then(move |role: String, _user, mut connection: UsersConnection| async move {
+		.and(authorized(users_db, &[Permission::RolesGet]))
+		.then(move |role: String, _, mut connection: UsersConnection| async move {
 			match connection.get_role(&role).await {
 				Ok(role) => {
 					warp::reply::json(&role).into_response()

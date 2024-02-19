@@ -14,7 +14,7 @@ mod permissions;
 use std::{collections::HashMap, sync::Arc};
 
 use database::{BoardsDatabase, UsersDatabase, Database};
-use filter::header::authorization::{BearerError, PermissionsError};
+use filter::header::authorization::{BearerError, PermissionsError, UsersDBError};
 use futures_util::future;
 use tokio::sync::RwLock;
 use warp::body::BodyDeserializeError;
@@ -55,77 +55,92 @@ async fn main() {
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
 
 	let routes_core = 
-		routes::core::info::get()
-		.or(routes::core::access::get())
-		.or(routes::core::boards::list(Arc::clone(&boards)))
+		routes::core::info::get(Arc::clone(&users_db))
+		.or(routes::core::access::get(Arc::clone(&users_db)))
+		.or(routes::core::boards::list(Arc::clone(&boards), Arc::clone(&users_db)))
 		.or(routes::core::boards::get(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::default())
 		.or(routes::core::boards::socket(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::data::get_colors(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::users::get(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::pixels::list(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::pixels::get(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::pixels::post(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		));
 
 	let routes_lifecycle = 
 		routes::board_lifecycle::boards::post(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		)
 		.or(routes::board_lifecycle::boards::patch(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		))
 		.or(routes::board_lifecycle::boards::delete(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		));
 
 	let routes_data_initial = 
 		routes::board_data_initial::boards::data::get_initial(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		)
 		.or(routes::board_data_initial::boards::data::patch_initial(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		));
 
 	let routes_data_mask = 
 		routes::board_data_mask::boards::data::get_mask(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		)
 		.or(routes::board_data_mask::boards::data::patch_mask(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		));
 
 	let routes_data_timestamps = 
 		routes::board_data_timestamps::boards::data::get_timestamps(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
 		);
 
 	let routes_authentication = 
@@ -134,7 +149,7 @@ async fn main() {
 	let routes_users = 
 		routes::users::users::list(Arc::clone(&users_db))
 		.or(routes::users::users::get(Arc::clone(&users_db)))
-		.or(routes::users::users::current());
+		.or(routes::users::users::current(Arc::clone(&users_db)));
 		
 	let routes_roles =
 		routes::roles::users::roles(Arc::clone(&users_db))
@@ -157,6 +172,8 @@ async fn main() {
 				future::ok(StatusCode::FORBIDDEN.into_response())
 			} else if let Some(err) = rejection.find::<BodyDeserializeError>() {
 				future::ok(StatusCode::BAD_REQUEST.into_response())
+			} else if let Some(err) = rejection.find::<UsersDBError>() {
+				future::ok(StatusCode::INTERNAL_SERVER_ERROR.into_response())
 			} else {
 				future::err(rejection)
 			}

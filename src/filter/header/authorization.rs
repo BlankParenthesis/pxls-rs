@@ -1,14 +1,16 @@
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::sync::Arc;
 
-use enumset::EnumSet;
 use futures_util::future;
 use jsonwebtoken::TokenData;
 use warp::http::{header, StatusCode};
 use warp::{reject::Reject, Filter, Rejection, Reply};
 
 use crate::openid::Identity;
-use crate::permissions::Permission;
 use crate::openid::{self, ValidationError};
+use crate::permissions::Permission;
+use crate::database::{UsersConnection, UsersDatabase};
+use crate::filter::resource::database;
 
 #[derive(Debug)]
 pub enum BearerError {
@@ -94,30 +96,50 @@ impl From<TokenData<Identity>> for Bearer {
 }
 
 impl Bearer {
-	pub fn permissions(&self) -> EnumSet<Permission> {
-		// TODO: obtain user permissions
-		EnumSet::all()
-	}
-
 	pub fn is_valid(&self) -> bool {
 		SystemTime::now() < self.valid_until 
 	}
 }
 
-pub fn with_permission(
-	permission: Permission
-) -> (impl Fn(Option<Bearer>) -> future::Ready<Result<Option<Bearer>, Rejection>> + Clone) {
-	move |bearer| {
-		let permissions = match bearer {
-			Some(ref bearer) => bearer.permissions(),
-			None => Permission::defaults(),
-		};
 
-		if permissions.contains(permission) {
-			future::ok(bearer)
-		} else {
-			let error = PermissionsError::MissingPermission(permission);
-			future::err(warp::reject::custom(error))
-		}
-	}
+// TODO: improve database error handling consistency in general
+// (that's probably a moderate refactor)
+#[derive(Debug)]
+pub enum UsersDBError {
+	Raw(ldap3::LdapError),
+}
+
+impl Reject for UsersDBError {}
+
+pub fn authorized(
+	users_db: Arc<UsersDatabase>,
+	permissions: &'static [Permission],
+) -> impl Filter<
+	Extract = (Option<Bearer>, UsersConnection),
+	Error = Rejection
+> + Clone {
+	warp::any()
+		.and(bearer())
+		.and(database::connection(users_db))
+		.and_then(|bearer: Option<Bearer>, mut connection: UsersConnection| async {
+
+			let user_permissions = match bearer {
+				Some(ref user) => {
+					connection.user_permissions(&user.id).await
+						.map_err(UsersDBError::Raw)
+						.map_err(Rejection::from)?
+				}
+				None => Permission::defaults(),
+			};
+
+			for permission in permissions.iter().copied() {
+				if !user_permissions.contains(permission) {
+					let error = PermissionsError::MissingPermission(permission);
+					return Err(Rejection::from(error));
+				}
+			}
+
+			Ok((bearer, connection))
+		})
+		.untuple_one()
 }
