@@ -31,8 +31,7 @@ pub fn list(
 				.unwrap_or(10)
 				.clamp(1, 100); // TODO: maybe raise upper limit
 			
-			let users = connection.list_users(page, limit).await;
-			match users {
+			match connection.list_users(page, limit).await {
 				Ok((page_token, users)) => {
 					let references = users.iter()
 						.map(|u| Reference {
@@ -52,6 +51,7 @@ pub fn list(
 					warp::reply::json(&page).into_response()
 				},
 				Err(FetchError::InvalidPage) => {
+					// TODO: find all these and just to status.into_response()
 					warp::reply::with_status(
 						"",
 						StatusCode::BAD_REQUEST
@@ -78,9 +78,7 @@ pub fn get(
 		.and(authorization::bearer().and_then(with_permission(Permission::UsersGet)))
 		.and(database::connection(users_db))
 		.then(move |uid: String, _user, mut connection: UsersConnection| async move {
-			let users = connection.get_user(&uid).await;
-
-			match users {
+			match connection.get_user(&uid).await {
 				Ok(user) => {
 					warp::reply::json(&user).into_response()
 				},

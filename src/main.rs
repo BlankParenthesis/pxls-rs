@@ -54,7 +54,8 @@ async fn main() {
 
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
 
-	let routes = routes::core::info::get()
+	let routes_core = 
+		routes::core::info::get()
 		.or(routes::core::access::get())
 		.or(routes::core::boards::list(Arc::clone(&boards)))
 		.or(routes::core::boards::get(
@@ -62,43 +63,11 @@ async fn main() {
 			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::default())
-		.or(routes::board_lifecycle::boards::post(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_lifecycle::boards::patch(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_lifecycle::boards::delete(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
 		.or(routes::core::boards::socket(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 		))
 		.or(routes::core::boards::data::get_colors(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_data_initial::boards::data::get_initial(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_data_mask::boards::data::get_mask(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_data_timestamps::boards::data::get_timestamps(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_data_initial::boards::data::patch_initial(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-		))
-		.or(routes::board_data_mask::boards::data::patch_mask(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 		))
@@ -117,11 +86,70 @@ async fn main() {
 		.or(routes::core::boards::pixels::post(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
+		));
+
+	let routes_lifecycle = 
+		routes::board_lifecycle::boards::post(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		)
+		.or(routes::board_lifecycle::boards::patch(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
 		))
-		.or(routes::authentication::authentication::get())
-		.or(routes::users::users::list(Arc::clone(&users_db)))
-		.or(routes::users::users::current())
+		.or(routes::board_lifecycle::boards::delete(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		));
+
+	let routes_data_initial = 
+		routes::board_data_initial::boards::data::get_initial(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		)
+		.or(routes::board_data_initial::boards::data::patch_initial(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		));
+
+	let routes_data_mask = 
+		routes::board_data_mask::boards::data::get_mask(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		)
+		.or(routes::board_data_mask::boards::data::patch_mask(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		));
+
+	let routes_data_timestamps = 
+		routes::board_data_timestamps::boards::data::get_timestamps(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+		);
+
+	let routes_authentication = 
+		routes::authentication::authentication::get();
+
+	let routes_users = 
+		routes::users::users::list(Arc::clone(&users_db))
 		.or(routes::users::users::get(Arc::clone(&users_db)))
+		.or(routes::users::users::current());
+		
+	let routes_roles =
+		routes::roles::users::roles(Arc::clone(&users_db))
+		.or(routes::roles::roles::list(Arc::clone(&users_db)))
+		.or(routes::roles::roles::get(Arc::clone(&users_db)));
+	
+	let routes = 
+		routes_core
+		.or(routes_lifecycle)
+		.or(routes_data_initial)
+		.or(routes_data_mask)
+		.or(routes_data_timestamps)
+		.or(routes_authentication)
+		.or(routes_users)
+		.or(routes_roles)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())
@@ -130,7 +158,6 @@ async fn main() {
 			} else if let Some(err) = rejection.find::<BodyDeserializeError>() {
 				future::ok(StatusCode::BAD_REQUEST.into_response())
 			} else {
-				eprintln!("ERROR: {:?}", rejection);
 				future::err(rejection)
 			}
 		})

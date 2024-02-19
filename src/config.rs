@@ -8,10 +8,12 @@ pub struct Config {
 	pub database_url: Url,
 	pub oidc_issuer: Url,
 	pub oidc_client_id: Option<String>,
-	pub users_ldap_url: Url,
-	pub users_ldap_base: String,
-	pub users_ldap_id_field: String,
-	pub users_ldap_username_field: String,
+	pub ldap_url: Url,
+	pub ldap_base: String,
+	pub ldap_users_ou: String,
+	pub ldap_users_id_field: String,
+	pub ldap_users_username_field: String,
+	pub ldap_roles_ou: String,
 }
 
 impl Config {

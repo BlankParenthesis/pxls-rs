@@ -17,6 +17,9 @@ pub enum Permission {
 	BoardsPixelsPost,
 	UsersList,
 	UsersGet,
+	UsersRolesGet,
+	RolesList,
+	RolesGet,
 	SocketCore,
 	SocketAuthentication,
 	SocketBoardsInitial,
@@ -49,12 +52,50 @@ impl From<&Permission> for &str {
 			Permission::BoardsPixelsPost => "boards.pixels.post",
 			Permission::UsersList => "users.list",
 			Permission::UsersGet => "users.get",
+			Permission::UsersRolesGet => "users.roles.get",
+			Permission::RolesList => "roles.list",
+			Permission::RolesGet => "roles.get",
 			Permission::SocketCore => "socket.core",
 			Permission::SocketAuthentication => "socket.authentication",
 			Permission::SocketBoardsInitial => "socket.boards.initial",
 			Permission::SocketBoardsMask => "socket.boards.mask",
 			Permission::SocketBoardsTimestamps => "socket.boards.timestamps",
-			Permission::SocketBoardLifecycle => "socket.boards.timestamps",
+			Permission::SocketBoardLifecycle => "socket.boards.lifecycle",
+		}
+	}
+}
+
+impl TryFrom<&str> for Permission {
+	type Error = ();
+
+	fn try_from(value: &str) -> Result<Self, Self::Error> {
+		// TODO: find an way to exhaustively match this
+		// (might need a proc macro with custom FromStr rules)
+		match value {
+			"info" => Ok(Permission::Info),
+			"boards.list" => Ok(Permission::BoardsList),
+			"boards.get" => Ok(Permission::BoardsGet),
+			"boards.post" => Ok(Permission::BoardsPost),
+			"boards.patch" => Ok(Permission::BoardsPatch),
+			"boards.delete" => Ok(Permission::BoardsDelete),
+			"boards.data.get" => Ok(Permission::BoardsDataGet),
+			"boards.data.patch" => Ok(Permission::BoardsDataPatch),
+			"boards.users" => Ok(Permission::BoardsUsers),
+			"boards.pixels.list" => Ok(Permission::BoardsPixelsList),
+			"boards.pixels.get" => Ok(Permission::BoardsPixelsGet),
+			"boards.pixels.post" => Ok(Permission::BoardsPixelsPost),
+			"users.list" => Ok(Permission::UsersList),
+			"users.get" => Ok(Permission::UsersGet),
+			"users.roles.get" => Ok(Permission::UsersRolesGet),
+			"roles.list" => Ok(Permission::UsersList),
+			"roles.get" => Ok(Permission::RolesGet),
+			"socket.core" => Ok(Permission::SocketCore),
+			"socket.authentication" => Ok(Permission::SocketAuthentication),
+			"socket.boards.initial" => Ok(Permission::SocketBoardsInitial),
+			"socket.boards.mask" => Ok(Permission::SocketBoardsMask),
+			"socket.boards.timestamps" => Ok(Permission::SocketBoardsTimestamps),
+			"socket.boards.lifecycle" => Ok(Permission::SocketBoardLifecycle),
+			_ => Err(()),
 		}
 	}
 }

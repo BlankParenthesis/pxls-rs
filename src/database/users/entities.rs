@@ -1,5 +1,6 @@
 use ldap3::SearchEntry;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 
 use crate::{config::CONFIG, permissions::Permission};
 
@@ -82,8 +83,8 @@ pub struct User {
 
 lazy_static! {
 	static ref USER_FIELDS: [&'static str; 3] = [
-		&CONFIG.users_ldap_id_field,
-		&CONFIG.users_ldap_username_field,
+		&CONFIG.ldap_users_id_field,
+		&CONFIG.ldap_users_username_field,
 		"createTimestamp"
 	];
 }
@@ -98,11 +99,11 @@ impl TryFrom<SearchEntry> for User {
 	type Error = UserParseError;
 
 	fn try_from(value: SearchEntry) -> Result<Self, Self::Error> {
-		let id = value.attrs.get(&CONFIG.users_ldap_id_field)
+		let id = value.attrs.get(&CONFIG.ldap_users_id_field)
 			.and_then(|v| v.first())
 			.ok_or(UserParseError::MissingId)?
 			.to_owned();
-		let name = value.attrs.get(&CONFIG.users_ldap_username_field)
+		let name = value.attrs.get(&CONFIG.ldap_users_username_field)
 			.and_then(|v| v.first())
 			.ok_or(UserParseError::MissingId)?
 			.to_owned();
@@ -116,5 +117,56 @@ impl TryFrom<SearchEntry> for User {
 			})?;
 
 		Ok(User{ id, name, created_at })
+	}
+}
+
+#[derive(Debug)]
+pub enum RoleParseError {
+	MissingName,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Serialize)]
+pub struct Role {
+	pub name: String,
+	pub icon: Option<String>,
+	pub permissions: Vec<Permission>,
+}
+
+
+lazy_static! {
+	static ref ROLE_FIELDS: [&'static str; 3] = [
+		"cn",
+		"pxlsspaceIcon",
+		"pxlsspacePermission"
+	];
+}
+
+impl Role {
+	pub fn search_fields() -> [&'static str; 3] {
+		*ROLE_FIELDS
+	}
+}
+
+impl TryFrom<SearchEntry> for Role {
+	type Error = RoleParseError;
+
+	fn try_from(value: SearchEntry) -> Result<Self, Self::Error> {
+		let name = value.attrs.get("cn")
+			.and_then(|v| v.first())
+			.ok_or(RoleParseError::MissingName)?
+			.to_owned();
+		let icon = value.attrs.get("pxlsspaceIcon")
+			.and_then(|v| v.first())
+			.cloned();
+		let permissions = value.attrs.get("pxlsspacePermission")
+			.cloned()
+			.unwrap_or_default()
+			.into_iter()
+			// NOTE: silently drops invalid permissions
+			.filter_map(|v| Permission::try_from(v.as_str()).ok())
+			.collect();
+
+		Ok(Role{ name, icon, permissions })
 	}
 }

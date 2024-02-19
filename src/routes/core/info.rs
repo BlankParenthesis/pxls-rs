@@ -8,8 +8,8 @@ use crate::{
 	permissions::Permission,
 };
 
-#[derive(Serialize)]
 #[skip_serializing_none]
+#[derive(Serialize)]
 pub struct ServerInfo {
 	name: Option<&'static str>,
 	version: Option<&'static str>,
@@ -38,6 +38,7 @@ lazy_static! {
 			"board_initial",
 			"board_lifecycle",
 			"users",
+			"roles",
 		],
 	};
 }

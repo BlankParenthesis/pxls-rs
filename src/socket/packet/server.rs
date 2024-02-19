@@ -16,8 +16,8 @@ pub struct Change<T> {
 	pub values: Vec<T>,
 }
 
-#[derive(Serialize, Debug, Clone)]
 #[skip_serializing_none]
+#[derive(Serialize, Debug, Clone)]
 pub struct BoardInfo {
 	pub name: Option<String>,
 	pub shape: Option<Shape>,
@@ -48,8 +48,8 @@ impl From<Extension> for Option<DataType> {
 	}
 }
 
-#[derive(Serialize, Debug, Default, Clone)]
 #[skip_serializing_none]
+#[derive(Serialize, Debug, Default, Clone)]
 pub struct BoardData {
 	colors: Option<Box<[Change<u8>]>>,
 	timestamps: Option<Box<[Change<u32>]>>,
@@ -163,8 +163,8 @@ impl BoardUpdateBuilder {
 	}
 }
 
-#[derive(Serialize, Debug, Clone)]
 #[skip_serializing_none]
+#[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
 pub enum Packet {

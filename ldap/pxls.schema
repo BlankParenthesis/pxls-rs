@@ -1,0 +1,25 @@
+attributeType (
+	1.3.6.1.4.1.164036.1.1
+	NAME 'pxlsspaceIcon'
+	DESC 'A url pointing to an associated image'
+	EQUALITY caseExactMatch
+	SUBSTR caseExactSubstringsMatch
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256}
+	SINGLE VALUE )
+
+attributeType (
+	1.3.6.1.4.1.164036.1.2
+	NAME 'pxlsspacePermission'
+	DESC 'A permission string indicating authorization for certain actions'
+	EQUALITY caseIgnoreMatch
+	SUBSTR caseIgnoreSubstringsMatch
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64} )
+
+objectclass (
+	1.3.6.1.4.1.164036.2.1
+	NAME 'pxlsspaceRole'
+	DESC 'A group which uses may belong to that has permissions associated with it'
+	SUP top
+	STRUCTURAL
+	MUST cn
+	MAY ( pxlsspaceIcon $ pxlsspacePermission $ member ) )
