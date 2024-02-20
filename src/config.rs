@@ -9,6 +9,8 @@ pub struct Config {
 	pub oidc_issuer: Url,
 	pub oidc_client_id: Option<String>,
 	pub ldap_url: Url,
+	pub ldap_manager_user: String,
+	pub ldap_manager_password: String,
 	pub ldap_base: String,
 	pub ldap_users_ou: String,
 	pub ldap_users_id_field: String,

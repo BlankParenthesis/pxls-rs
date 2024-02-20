@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use ldap3::{LdapConnAsync, LdapError, drive, Ldap};
 use deadpool::managed::{Manager, Metrics, RecycleResult};
 
+use crate::config::CONFIG;
+
 pub type Pool = deadpool::managed::Pool<LDAPConnectionManager>;
 pub type Connection = deadpool::managed::Object<LDAPConnectionManager>;
 
@@ -15,8 +17,15 @@ impl Manager for LDAPConnectionManager {
 	type Error = LdapError;
 
 	async fn create(&self) -> Result<Self::Type, Self::Error> {
-		let (connection, ldap) = LdapConnAsync::new(&self.0).await?;
+		let (connection, mut ldap) = LdapConnAsync::new(&self.0).await?;
 		drive!(connection);
+		let user = format!(
+			"cn={},{}",
+			CONFIG.ldap_manager_user.as_str(),
+			CONFIG.ldap_base,
+		);
+		let password = CONFIG.ldap_manager_password.as_str();
+		ldap.simple_bind(&user, password).await?.success()?;
 		Ok(ldap)
 	}
 

@@ -28,7 +28,7 @@ Important missing features:
 	- [ ] [site_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/site_notices.md)
 	- [ ] [user_bans](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_bans.md)
 	- [ ] [user_count](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_count.md)
-	- [X] [users](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/users.md) (Missing routes for editing and deleting users)
+	- [X] [users](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/users.md)
 
 
 Notable other issues:

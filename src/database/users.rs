@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use base64::prelude::*;
 use deadpool::managed::PoolError;
 use enumset::EnumSet;
@@ -6,7 +8,7 @@ use ldap3::{
 	controls::{PagedResults, Control, ControlType},
 	Scope,
 	SearchEntry,
-	ldap_escape,
+	ldap_escape, Mod,
 };
 
 mod connection;
@@ -57,11 +59,22 @@ impl super::Database for UsersDatabase {
 	}
 }
 
+fn user_dn(id: &str) -> String {
+	format!(
+		"{}={},ou={},{}",
+		CONFIG.ldap_users_id_field,
+		ldap_escape(id),
+		CONFIG.ldap_users_ou,
+		CONFIG.ldap_base
+	)
+}
+
 pub struct UsersConnection {
 	connection: LdapConnection,
 }
 
 impl UsersConnection {
+
 	pub async fn list_users(
 		&mut self,
 		page: PageToken,
@@ -134,6 +147,43 @@ impl UsersConnection {
 					.map_err(FetchError::ParseError)
 			},
 			_ => Err(FetchError::AmbiguousItems),
+		}
+	}
+
+	pub async fn update_user(
+		&mut self,
+		id: &str,
+		name: &str,
+	) -> Result<(), FetchError<()>> { // TODO: different error type
+		let result = self.connection
+			.modify(&user_dn(id), vec![
+				Mod::Replace("displayName", HashSet::from([name]))
+			]).await
+			.map_err(FetchError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(FetchError::NoItems),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(FetchError::LdapError)
+		}
+	}
+
+	pub async fn delete_user(
+		&mut self,
+		id: &str,
+	) -> Result<(), FetchError<()>> { // TODO: different error type
+		let result = self.connection
+			.delete(&user_dn(id)).await
+			.map_err(FetchError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(FetchError::NoItems),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(FetchError::LdapError)
 		}
 	}
 
@@ -267,14 +317,7 @@ impl UsersConnection {
 		&mut self,
 		id: &str,
 	) -> Result<EnumSet<Permission>, LdapError> {
-		let user_dn = format!(
-			"{}={},ou={},{}",
-			CONFIG.ldap_users_id_field,
-			ldap_escape(id),
-			CONFIG.ldap_users_ou,
-			CONFIG.ldap_base,
-		);
-		let filter = format!("(member={})", user_dn);
+		let filter = format!("(member={})", user_dn(id));
 		let (results, _) = self.connection
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_roles_ou, CONFIG.ldap_base),

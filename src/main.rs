@@ -149,7 +149,9 @@ async fn main() {
 	let routes_users = 
 		routes::users::users::list(Arc::clone(&users_db))
 		.or(routes::users::users::current(Arc::clone(&users_db)))
-		.or(routes::users::users::get(Arc::clone(&users_db)));
+		.or(routes::users::users::get(Arc::clone(&users_db)))
+		.or(routes::users::users::patch(Arc::clone(&users_db)))
+		.or(routes::users::users::delete(Arc::clone(&users_db)));
 		
 	let routes_roles =
 		routes::roles::users::roles(Arc::clone(&users_db))
