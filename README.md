@@ -24,7 +24,7 @@ Important missing features:
 	- [ ] [list_filtering](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/list_filtering.md)
 	- [ ] [placement_statistics](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/placement_statistics.md)
 	- [ ] [reports](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/reports.md)
-	- [X] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/roles.md) (Missing routes for editing and deleting roles)
+	- [X] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/roles.md)
 	- [ ] [site_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/site_notices.md)
 	- [ ] [user_bans](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_bans.md)
 	- [ ] [user_count](https://github.com/BlankParenthesis/PxlsNetworking/blob/new-extensions/extensions/user_count.md)

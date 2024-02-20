@@ -1,5 +1,7 @@
+use std::fmt;
+
 use enumset::{EnumSet, EnumSetType};
-use serde::{Serialize, Serializer};
+use serde::{Serialize, Serializer, Deserialize, de::Visitor};
 
 #[derive(Debug, EnumSetType)]
 pub enum Permission {
@@ -23,9 +25,16 @@ pub enum Permission {
 	UsersCurrentPatch,
 	UsersCurrentDelete,
 	UsersRolesGet,
+	UsersRolesPost,
+	UsersRolesDelete,
 	UsersCurrentRolesGet,
+	UsersCurrentRolesPost,
+	UsersCurrentRolesDelete,
 	RolesList,
 	RolesGet,
+	RolesPost,
+	RolesPatch,
+	RolesDelete,
 	SocketCore,
 	SocketAuthentication,
 	SocketBoardsInitial,
@@ -64,9 +73,16 @@ impl From<&Permission> for &str {
 			Permission::UsersCurrentPatch => "users.current.patch",
 			Permission::UsersCurrentDelete => "users.current.delete",
 			Permission::UsersRolesGet => "users.roles.get",
+			Permission::UsersRolesPost => "users.roles.post",
+			Permission::UsersRolesDelete => "users.roles.delete",
 			Permission::UsersCurrentRolesGet => "users.current.roles.get",
+			Permission::UsersCurrentRolesPost => "users.current.roles.post",
+			Permission::UsersCurrentRolesDelete => "users.current.roles.delete",
 			Permission::RolesList => "roles.list",
 			Permission::RolesGet => "roles.get",
+			Permission::RolesPost => "roles.post",
+			Permission::RolesPatch => "roles.patch",
+			Permission::RolesDelete => "roles.delete",
 			Permission::SocketCore => "socket.core",
 			Permission::SocketAuthentication => "socket.authentication",
 			Permission::SocketBoardsInitial => "socket.boards.initial",
@@ -104,9 +120,16 @@ impl TryFrom<&str> for Permission {
 			"users.current.patch" => Ok(Permission::UsersCurrentPatch),
 			"users.current.delete" => Ok(Permission::UsersCurrentDelete),
 			"users.roles.get" => Ok(Permission::UsersRolesGet),
+			"users.roles.post" => Ok(Permission::UsersRolesPost),
+			"users.roles.delete" => Ok(Permission::UsersRolesDelete),
 			"users.current.roles.get" => Ok(Permission::UsersCurrentRolesGet),
+			"users.current.roles.post" => Ok(Permission::UsersCurrentRolesPost),
+			"users.current.roles.delete" => Ok(Permission::UsersCurrentRolesDelete),
 			"roles.list" => Ok(Permission::UsersList),
 			"roles.get" => Ok(Permission::RolesGet),
+			"roles.post" => Ok(Permission::RolesPost),
+			"roles.patch" => Ok(Permission::RolesPatch),
+			"roles.delete" => Ok(Permission::RolesDelete),
 			"socket.core" => Ok(Permission::SocketCore),
 			"socket.authentication" => Ok(Permission::SocketAuthentication),
 			"socket.boards.initial" => Ok(Permission::SocketBoardsInitial),
@@ -125,4 +148,30 @@ impl Serialize for Permission {
 	) -> Result<S::Ok, S::Error> {
 		serializer.serialize_str(self.into())
 	}
+}
+
+
+struct V {}
+
+impl<'de> Visitor<'de> for V {
+	type Value = Permission;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("A permission string")
+    }
+
+	fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+	where E: serde::de::Error {
+		Permission::try_from(v)
+			.map_err(|e| E::custom("Invalid permission"))
+	}
+}
+
+impl<'de> Deserialize<'de> for Permission {
+    fn deserialize<D>(
+		deserializer: D,
+	) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        deserializer.deserialize_str(V {})
+    }
 }

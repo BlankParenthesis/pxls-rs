@@ -154,9 +154,14 @@ async fn main() {
 		.or(routes::users::users::delete(Arc::clone(&users_db)));
 		
 	let routes_roles =
-		routes::roles::users::roles(Arc::clone(&users_db))
+		routes::roles::users::roles::list(Arc::clone(&users_db))
+		.or(routes::roles::users::roles::post(Arc::clone(&users_db)))
+		.or(routes::roles::users::roles::delete(Arc::clone(&users_db)))
 		.or(routes::roles::roles::list(Arc::clone(&users_db)))
-		.or(routes::roles::roles::get(Arc::clone(&users_db)));
+		.or(routes::roles::roles::get(Arc::clone(&users_db)))
+		.or(routes::roles::roles::post(Arc::clone(&users_db)))
+		.or(routes::roles::roles::patch(Arc::clone(&users_db)))
+		.or(routes::roles::roles::delete(Arc::clone(&users_db)));
 	
 	let routes = 
 		routes_core

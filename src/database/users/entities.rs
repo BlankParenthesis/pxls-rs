@@ -1,6 +1,7 @@
 use ldap3::SearchEntry;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
+use url::{Url, ParseError};
 
 use crate::{config::CONFIG, permissions::Permission};
 
@@ -123,13 +124,14 @@ impl TryFrom<SearchEntry> for User {
 #[derive(Debug)]
 pub enum RoleParseError {
 	MissingName,
+	InvalidIcon(ParseError),
 }
 
 #[skip_serializing_none]
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Role {
 	pub name: String,
-	pub icon: Option<String>,
+	pub icon: Option<Url>,
 	pub permissions: Vec<Permission>,
 }
 
@@ -158,7 +160,9 @@ impl TryFrom<SearchEntry> for Role {
 			.to_owned();
 		let icon = value.attrs.get("pxlsspaceIcon")
 			.and_then(|v| v.first())
-			.cloned();
+			.map(|v| v.parse::<Url>())
+			.transpose()
+			.map_err(RoleParseError::InvalidIcon)?;
 		let permissions = value.attrs.get("pxlsspacePermission")
 			.cloned()
 			.unwrap_or_default()

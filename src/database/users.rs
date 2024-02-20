@@ -14,10 +14,11 @@ use ldap3::{
 mod connection;
 mod entities;
 
-use entities::{User, UserParseError, Role, RoleParseError};
+pub use entities::{User, UserParseError, Role, RoleParseError};
 use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
+use url::Url;
 
 use crate::{config::CONFIG, permissions::Permission};
 
@@ -313,6 +314,132 @@ impl UsersConnection {
 		}
 	}
 
+	pub async fn create_role(
+		&mut self,
+		role: Role,
+	) -> Result<Role, FetchError<()>> {
+		let name = ldap_escape(&role.name).to_string();
+		let role_dn = format!(
+			"cn={},ou={},{}",
+			name,
+			CONFIG.ldap_roles_ou,
+			CONFIG.ldap_base,
+		);
+
+		let mut attributes = vec![];
+		
+		attributes.push(("objectClass", HashSet::from(["pxlsspaceRole"])));
+		attributes.push(("cn", HashSet::from([name.as_str()])));
+
+		let icon = role.icon.as_ref()
+			.map(|icon| ldap_escape(icon.as_str()).to_string());
+		if let Some(ref icon) = icon {
+			let value = HashSet::from([icon.as_str()]);
+			attributes.push(("pxlsspaceIcon", value));
+		};
+
+		let permissions = role.permissions.iter()
+			.map(|p| p.into())
+			.collect::<HashSet<&str>>();
+
+		attributes.push(("pxlsspacePermission", permissions));
+
+		self.connection
+			.add(&role_dn, attributes).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map(|_| role)
+			.map_err(FetchError::LdapError) // TODO: error types
+	}
+
+	pub async fn update_role(
+		&mut self,
+		name: &str,
+		new_name: Option<&str>,
+		icon: Option<Option<Url>>,
+		permissions: Option<Vec<Permission>>,
+	) -> Result<(), FetchError<()>> { // TODO: return Role
+		let mut role_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(name),
+			CONFIG.ldap_roles_ou,
+			CONFIG.ldap_base,
+		);
+
+		if let Some(new_name) = new_name {
+			self.connection
+				.modifydn(
+					role_dn.as_str(),
+					format!("cn={}", ldap_escape(new_name)).as_str(),
+					true,
+					None
+				).await
+				.map_err(FetchError::LdapError)?;
+
+			role_dn = format!(
+				"cn={},ou={},{}",
+				ldap_escape(new_name),
+				CONFIG.ldap_roles_ou,
+				CONFIG.ldap_base,
+			);
+		}
+
+		let mut modifications = vec![];
+		
+		let new_icon;
+		match icon {
+			Some(Some(icon)) => {
+				new_icon = ldap_escape(icon.as_str()).to_string();
+				let value = HashSet::from([new_icon.as_str()]);
+				modifications.push(Mod::Replace("pxlsspaceIcon", value));
+			},
+			Some(None) => {
+				modifications.push(Mod::Delete("pxlsspaceIcon", HashSet::new()));
+			}
+			None => (),
+		}
+
+		let new_permissions = permissions.map(|p| {
+			p.iter()
+				.map(|p| p.into())
+				.collect::<HashSet<&str>>()
+		});
+		if let Some(new_permissions) = new_permissions {
+			modifications.push(Mod::Replace("pxlsspacePermission", new_permissions));
+		}
+
+		self.connection
+			.modify(&role_dn, modifications).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map(|_| ())
+			.map_err(FetchError::LdapError) // TODO: error types
+	}
+
+	pub async fn delete_role(
+		&mut self,
+		name: &str,
+	) -> Result<(), FetchError<()>> { // TODO: different error type
+		let role_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(name),
+			CONFIG.ldap_roles_ou,
+			CONFIG.ldap_base,
+		);
+
+		let result = self.connection
+			.delete(&role_dn).await
+			.map_err(FetchError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(FetchError::NoItems),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(FetchError::LdapError)
+		}
+	}
+
 	pub async fn user_permissions(
 		&mut self,
 		id: &str,
@@ -336,5 +463,49 @@ impl UsersConnection {
 				// NOTE: silently drops invalid permissions
 				.filter_map(|v| Permission::try_from(v.as_str()).ok())
 		}).collect())
+	}
+
+	pub async fn add_user_role(
+		&mut self,
+		uid: &str,
+		role: &str,
+	) -> Result<(), FetchError<()>> { // TODO: different error type
+		let role_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(role),
+			CONFIG.ldap_roles_ou,
+			CONFIG.ldap_base,
+		);
+
+		self.connection
+			.modify(role_dn.as_str(), vec![
+				Mod::Add("member", HashSet::from([user_dn(uid).as_str()])),
+			]).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map(|_| ())
+			.map_err(FetchError::LdapError)
+	}
+
+	pub async fn remove_user_role(
+		&mut self,
+		uid: &str,
+		role: &str,
+	) -> Result<(), FetchError<()>> { // TODO: different error type
+		let role_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(role),
+			CONFIG.ldap_roles_ou,
+			CONFIG.ldap_base,
+		);
+
+		self.connection
+			.modify(role_dn.as_str(), vec![
+				Mod::Delete("member", HashSet::from([user_dn(uid).as_str()])),
+			]).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map(|_| ())
+			.map_err(FetchError::LdapError)
 	}
 }
