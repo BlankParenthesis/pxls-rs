@@ -48,17 +48,10 @@ pub fn list(
 					warp::reply::json(&page).into_response()
 				},
 				Err(FetchError::InvalidPage) => {
-					// TODO: find all these and just to status.into_response()
-					warp::reply::with_status(
-						"",
-						StatusCode::BAD_REQUEST
-					).into_response()
+					StatusCode::BAD_REQUEST.into_response()
 				},
 				Err(err) => {
-					warp::reply::with_status(
-						"",
-						StatusCode::INTERNAL_SERVER_ERROR
-					).into_response()
+					StatusCode::INTERNAL_SERVER_ERROR.into_response()
 				},
 			}
 		})
@@ -78,16 +71,10 @@ pub fn get(
 					warp::reply::json(&user).into_response()
 				},
 				Err(FetchError::NoItems) => {
-					warp::reply::with_status(
-						"",
-						StatusCode::NOT_FOUND
-					).into_response()
+					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {
-					warp::reply::with_status(
-						"",
-						StatusCode::INTERNAL_SERVER_ERROR
-					).into_response()
+					StatusCode::INTERNAL_SERVER_ERROR.into_response()
 				},
 			}
 		})
@@ -108,10 +95,7 @@ pub fn current(
 					.parse::<Uri>().unwrap();
 				warp::redirect::temporary(location).into_response()
 			} else {
-				warp::reply::with_status(
-					"",
-					StatusCode::UNAUTHORIZED
-				).into_response()
+				StatusCode::UNAUTHORIZED.into_response()
 			}
 		})
 }
