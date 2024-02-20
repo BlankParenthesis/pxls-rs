@@ -118,8 +118,8 @@ pub fn current(
 		.and(warp::path("current"))
 		.and(warp::path::tail())
 		.and(warp::get())
-		.and(authorization::bearer())
-		.then(|tail: Tail, user: Option<Bearer>| async move {
+		.and(authorization::authorized(users_db, &[Permission::UsersCurrentGet]))
+		.then(|tail: Tail, user: Option<Bearer>, _| async move {
 			if let Some(uid) = user.map(|b| b.id) {
 				let location = format!("/users/{}/{}", uid, tail.as_str())
 					.parse::<Uri>().unwrap();
