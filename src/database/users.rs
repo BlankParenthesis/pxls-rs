@@ -380,7 +380,7 @@ impl UsersConnection {
 		new_name: Option<&str>,
 		icon: Option<Option<Url>>,
 		permissions: Option<Vec<Permission>>,
-	) -> Result<(), UpdateError> { // TODO: return Role
+	) -> Result<(), UpdateError> {
 		let mut role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),

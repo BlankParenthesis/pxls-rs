@@ -33,7 +33,7 @@ pub fn get_timestamps(
 				.or(range::default())
 				.unify(),
 		)
-		.and(authorized(users_db, &[Permission::BoardsDataGet]))
+		.and(authorized(users_db, Permission::BoardsDataGet.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition

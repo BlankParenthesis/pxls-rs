@@ -37,7 +37,7 @@ pub fn post(
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorized(users_db, &[Permission::BoardsPost]))
+		.and(authorized(users_db, Permission::BoardsPost.into()))
 		.and(database::connection(boards_db))
 		.then(move |data: BoardInfoPost, _, _, connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
@@ -97,7 +97,7 @@ pub fn patch(
 		.and(warp::patch())
 		// TODO: require application/merge-patch+json type?
 		.and(warp::body::json())
-		.and(authorized(users_db, &[Permission::BoardsPatch]))
+		.and(authorized(users_db, Permission::BoardsPatch.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, patch: BoardInfoPatch, _, _, connection: BoardsConnection| async move {
 			let mut board = board.write().await;
@@ -141,7 +141,7 @@ pub fn delete(
 		.and(board::path::prepare_delete(&boards))
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorized(users_db, &[Permission::BoardsDelete]))
+		.and(authorized(users_db, Permission::BoardsDelete.into()))
 		.and(database::connection(boards_db))
 		.then(move |mut deletion: PendingDelete, _, _, connection: BoardsConnection| async move {
 			let board = deletion.perform();

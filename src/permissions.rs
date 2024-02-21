@@ -48,6 +48,18 @@ impl Permission {
 		// TODO: better defaults
 		EnumSet::all() - Self::BoardsPixelsPost
 	}
+
+	pub fn to_current(&self) -> Option<Self> {
+		match self {
+			Self::UsersGet => Some(Self::UsersCurrentGet),
+			Self::UsersPatch => Some(Self::UsersCurrentPatch),
+			Self::UsersDelete => Some(Self::UsersCurrentDelete),
+			Self::UsersRolesGet => Some(Self::UsersCurrentRolesGet),
+			Self::UsersRolesPost => Some(Self::UsersCurrentRolesPost),
+			Self::UsersRolesDelete => Some(Self::UsersCurrentRolesDelete),
+			_ => None,
+		}
+	}
 }
 
 impl From<&Permission> for &str {

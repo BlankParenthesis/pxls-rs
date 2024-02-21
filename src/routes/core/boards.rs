@@ -33,7 +33,7 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
-		.and(authorized(users_db, &[Permission::BoardsList]))
+		.and(authorized(users_db, Permission::BoardsList.into()))
 		.then(move |pagination: PaginationOptions<usize>, _, _| {
 			let boards = Arc::clone(&boards);
 			async move {
@@ -110,7 +110,7 @@ pub fn get(
 		.and(board::path::read(&boards))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, &[Permission::BoardsGet]))
+		.and(authorized(users_db, Permission::BoardsGet.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, user, _, connection: BoardsConnection| async move {
 			let board = board.read().await;

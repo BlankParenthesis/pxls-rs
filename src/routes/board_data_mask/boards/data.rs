@@ -36,7 +36,7 @@ pub fn get_mask(
 				.or(range::default())
 				.unify(),
 		)
-		.and(authorized(users_db, &[Permission::BoardsDataGet]))
+		.and(authorized(users_db, Permission::BoardsDataGet.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
@@ -61,7 +61,7 @@ pub fn patch_mask(
 		.and(warp::path::end())
 		.and(warp::patch())
 		.and(patch::bytes())
-		.and(authorized(users_db, &[Permission::BoardsDataPatch]))
+		.and(authorized(users_db, Permission::BoardsDataPatch.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, patch: BinaryPatch, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition

@@ -31,7 +31,7 @@ pub fn get(
 		.and(warp::path("users"))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, &[Permission::BoardsUsers]))
+		.and(authorized(users_db, Permission::BoardsUsers.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, _, _, connection: BoardsConnection| async move {
 			let board = board.read().await;

@@ -22,7 +22,7 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
-		.and(authorized(users_db, &[Permission::RolesList]))
+		.and(authorized(users_db, Permission::RolesList.into()))
 		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
@@ -67,7 +67,7 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, &[Permission::RolesGet]))
+		.and(authorized(users_db, Permission::RolesGet.into()))
 		.then(move |role: String, _, mut connection: UsersConnection| async move {
 			match connection.get_role(&role).await {
 				Ok(role) => {
@@ -90,7 +90,7 @@ pub fn post(
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorized(users_db, &[Permission::RolesPost]))
+		.and(authorized(users_db, Permission::RolesPost.into()))
 		.then(move |role: Role, _, mut connection: UsersConnection| async move {
 			match connection.create_role(&role).await {
 				Ok(()) => {
@@ -134,7 +134,7 @@ pub fn patch(
 		.and(warp::path::end())
 		.and(warp::patch())
 		.and(warp::body::json())
-		.and(authorized(users_db, &[Permission::RolesPatch]))
+		.and(authorized(users_db, Permission::RolesPatch.into()))
 		.then(move |role: String, new_role: RoleUpdate, _, mut connection: UsersConnection| async move {
 			let update = connection.update_role(
 				role.as_str(),
@@ -171,7 +171,7 @@ pub fn delete(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorized(users_db, &[Permission::RolesDelete]))
+		.and(authorized(users_db, Permission::RolesDelete.into()))
 		.then(move |role: String, _, mut connection: UsersConnection| async move {
 			match connection.delete_role(&role).await {
 				Ok(role) => {

@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::sync::Arc;
 
+use enumset::EnumSet;
 use futures_util::future;
 use jsonwebtoken::TokenData;
 use warp::http::{header, StatusCode};
@@ -76,7 +77,7 @@ pub async fn validator(token: String) -> Result<Bearer, BearerError> {
 
 #[derive(Debug)]
 pub enum PermissionsError {
-	MissingPermission(Permission),
+	MissingPermission
 }
 impl Reject for PermissionsError {}
 
@@ -111,18 +112,16 @@ pub enum UsersDBError {
 
 impl Reject for UsersDBError {}
 
-pub fn authorized(
+pub fn permissions(
 	users_db: Arc<UsersDatabase>,
-	permissions: &'static [Permission],
 ) -> impl Filter<
-	Extract = (Option<Bearer>, UsersConnection),
-	Error = Rejection
+	Extract = (EnumSet<Permission>, Option<Bearer>, UsersConnection),
+	Error = Rejection,
 > + Clone {
 	warp::any()
 		.and(bearer())
 		.and(database::connection(users_db))
 		.and_then(|bearer: Option<Bearer>, mut connection: UsersConnection| async {
-
 			let user_permissions = match bearer {
 				Some(ref user) => {
 					connection.user_permissions(&user.id).await
@@ -132,13 +131,47 @@ pub fn authorized(
 				None => Permission::defaults(),
 			};
 
-			for permission in permissions.iter().copied() {
-				if !user_permissions.contains(permission) {
-					let error = PermissionsError::MissingPermission(permission);
-					return Err(Rejection::from(error));
-				}
-			}
+			Ok::<_, Rejection>((user_permissions, bearer, connection))
+		})
+		.untuple_one()
+}
 
+pub fn has_permissions(
+	user_permissions: EnumSet<Permission>,
+	permissions: EnumSet<Permission>,
+) -> bool {
+	user_permissions.is_superset(permissions)
+}
+
+pub fn has_permissions_current(
+	user_permissions: EnumSet<Permission>,
+	permissions: EnumSet<Permission>,
+) -> bool {
+	for permission in permissions.into_iter() {
+		let has_regular = user_permissions.contains(permission);
+		let has_current = user_permissions.contains(permission.to_current().unwrap());
+		if !has_regular && !has_current {
+			return false;
+		}
+	}
+	
+	true
+}
+
+pub fn authorized(
+	users_db: Arc<UsersDatabase>,
+	permissions: EnumSet<Permission>,
+) -> impl Filter<
+	Extract = (Option<Bearer>, UsersConnection),
+	Error = Rejection,
+> + Clone {
+	warp::any()
+		.and(self::permissions(users_db))
+		.and_then(move |user_permissions: EnumSet<Permission>, bearer: Option<Bearer>, connection| async move {
+			if !has_permissions(user_permissions, permissions) {
+				let error = PermissionsError::MissingPermission;
+				return Err(Rejection::from(error));
+			}
 			Ok((bearer, connection))
 		})
 		.untuple_one()

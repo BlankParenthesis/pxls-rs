@@ -50,7 +50,7 @@ pub fn get(
 	warp::path("info")
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, &[Permission::Info]))
+		.and(authorized(users_db, Permission::Info.into()))
 		.then(|_, _| async move  {
 			warp::reply::with_status(json(&*SERVER_INFO), StatusCode::OK)
 				.into_response()

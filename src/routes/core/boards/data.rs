@@ -28,7 +28,7 @@ pub fn get_colors(
 				.or(range::default())
 				.unify(),
 		)
-		.and(authorized(users_db, &[Permission::BoardsPixelsList]))
+		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition

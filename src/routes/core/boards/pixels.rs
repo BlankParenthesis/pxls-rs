@@ -26,7 +26,7 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
-		.and(authorized(users_db, &[Permission::BoardsPixelsList]))
+		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, options: PaginationOptions<PageToken>, _, _, connection: BoardsConnection| async move {
 			let page = options.page.unwrap_or_default();
@@ -78,7 +78,7 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, &[Permission::BoardsPixelsList]))
+		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(Arc::clone(&boards_db)))
 		.then(|board: PassableBoard, position, _, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
@@ -113,7 +113,7 @@ pub fn post(
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorized(users_db, &[Permission::BoardsPixelsPost]))
+		.and(authorized(users_db, Permission::BoardsPixelsPost.into()))
 		.and(database::connection(Arc::clone(&boards_db)))
 		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, _, connection: BoardsConnection| async move {
 			let user = user.expect("Default user shouldn't have place permisisons");
