@@ -9,7 +9,7 @@ use warp::{
 	path::Tail,
 };
 
-use crate::filter::response::paginated_list::{PaginationOptions, Page};
+use crate::{filter::response::paginated_list::{PaginationOptions, Page}, database::{UpdateError, DeleteError}};
 use crate::filter::response::reference::Reference;
 use crate::filter::header::authorization::{self, Bearer, UsersDBError, PermissionsError};
 use crate::filter::resource::database;
@@ -194,7 +194,7 @@ pub fn patch(
 				Ok(()) => {
 					StatusCode::OK.into_response()
 				},
-				Err(FetchError::NoItems) => {
+				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {
@@ -259,7 +259,7 @@ pub fn delete(
 				Ok(()) => {
 					StatusCode::OK.into_response()
 				},
-				Err(FetchError::NoItems) => {
+				Err(DeleteError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {

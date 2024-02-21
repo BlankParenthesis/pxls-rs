@@ -13,7 +13,7 @@ use crate::filter::response::paginated_list::{PaginationOptions, Page};
 use crate::filter::response::reference::Reference;
 use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, FetchError, Role};
+use crate::database::{UsersDatabase, UsersConnection, FetchError, Role, DeleteError, UpdateError, CreateError};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -92,12 +92,12 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorized(users_db, &[Permission::RolesPost]))
 		.then(move |role: Role, _, mut connection: UsersConnection| async move {
-			match connection.create_role(role).await {
+			match connection.create_role(&role).await {
 				Ok(role) => {
 					warp::reply::json(&role).into_response()
 				},
-				Err(FetchError::NoItems) => {
-					StatusCode::NOT_FOUND.into_response()
+				Err(CreateError::AlreadyExists) => {
+					StatusCode::CONFLICT.into_response()
 				},
 				Err(err) => {
 					eprintln!("{:?}", err);
@@ -135,7 +135,7 @@ pub fn patch(
 				Ok(role) => {
 					warp::reply::json(&role).into_response()
 				},
-				Err(FetchError::NoItems) => {
+				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {
@@ -159,7 +159,7 @@ pub fn delete(
 				Ok(role) => {
 					StatusCode::OK.into_response()
 				},
-				Err(FetchError::NoItems) => {
+				Err(DeleteError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {

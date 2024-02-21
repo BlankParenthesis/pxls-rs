@@ -14,7 +14,7 @@ use crate::filter::response::reference::Reference;
 use crate::filter::resource::database;
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, FetchError};
+use crate::database::{UsersDatabase, UsersConnection, FetchError, UpdateError};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -165,11 +165,10 @@ pub fn post(
 				Ok(role) => {
 					StatusCode::OK.into_response()
 				},
-				Err(FetchError::NoItems) => {
+				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {
-					eprintln!("{:?}", err);
 					StatusCode::INTERNAL_SERVER_ERROR.into_response()
 				},
 			}
@@ -233,11 +232,10 @@ pub fn delete(
 				Ok(role) => {
 					StatusCode::OK.into_response()
 				},
-				Err(FetchError::NoItems) => {
+				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
 				},
 				Err(err) => {
-					eprintln!("{:?}", err);
 					StatusCode::INTERNAL_SERVER_ERROR.into_response()
 				},
 			}

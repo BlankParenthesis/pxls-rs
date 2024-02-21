@@ -33,6 +33,24 @@ pub enum FetchError<E> {
 	AmbiguousItems,
 }
 
+#[derive(Debug)]
+pub enum CreateError {
+	LdapError(LdapError),
+	AlreadyExists,
+}
+
+#[derive(Debug)]
+pub enum UpdateError {
+	LdapError(LdapError),
+	NoItem,
+}
+
+#[derive(Debug)]
+pub enum DeleteError {
+	LdapError(LdapError),
+	NoItem,
+}
+
 pub struct UsersDatabase {
 	pool: Pool,
 }
@@ -75,7 +93,6 @@ pub struct UsersConnection {
 }
 
 impl UsersConnection {
-
 	pub async fn list_users(
 		&mut self,
 		page: PageToken,
@@ -155,36 +172,36 @@ impl UsersConnection {
 		&mut self,
 		id: &str,
 		name: &str,
-	) -> Result<(), FetchError<()>> { // TODO: different error type
+	) -> Result<(), UpdateError> {
 		let result = self.connection
 			.modify(&user_dn(id), vec![
 				Mod::Replace("displayName", HashSet::from([name]))
 			]).await
-			.map_err(FetchError::LdapError)?;
+			.map_err(UpdateError::LdapError)?;
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(FetchError::NoItems),
+			32 => Err(UpdateError::NoItem),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(FetchError::LdapError)
+				.map_err(UpdateError::LdapError)
 		}
 	}
 
 	pub async fn delete_user(
 		&mut self,
 		id: &str,
-	) -> Result<(), FetchError<()>> { // TODO: different error type
+	) -> Result<(), DeleteError> {
 		let result = self.connection
 			.delete(&user_dn(id)).await
-			.map_err(FetchError::LdapError)?;
+			.map_err(DeleteError::LdapError)?;
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(FetchError::NoItems),
+			32 => Err(DeleteError::NoItem),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(FetchError::LdapError)
+				.map_err(DeleteError::LdapError)
 		}
 	}
 
@@ -316,8 +333,8 @@ impl UsersConnection {
 
 	pub async fn create_role(
 		&mut self,
-		role: Role,
-	) -> Result<Role, FetchError<()>> {
+		role: &Role,
+	) -> Result<(), CreateError> {
 		let name = ldap_escape(&role.name).to_string();
 		let role_dn = format!(
 			"cn={},ou={},{}",
@@ -344,12 +361,17 @@ impl UsersConnection {
 
 		attributes.push(("pxlsspacePermission", permissions));
 
-		self.connection
+		let result = self.connection
 			.add(&role_dn, attributes).await
-			.map_err(FetchError::LdapError)?
-			.success()
-			.map(|_| role)
-			.map_err(FetchError::LdapError) // TODO: error types
+			.map_err(CreateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			68 => Err(CreateError::AlreadyExists),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(CreateError::LdapError),
+		}
 	}
 
 	pub async fn update_role(
@@ -358,7 +380,7 @@ impl UsersConnection {
 		new_name: Option<&str>,
 		icon: Option<Option<Url>>,
 		permissions: Option<Vec<Permission>>,
-	) -> Result<(), FetchError<()>> { // TODO: return Role
+	) -> Result<(), UpdateError> { // TODO: return Role
 		let mut role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -367,14 +389,22 @@ impl UsersConnection {
 		);
 
 		if let Some(new_name) = new_name {
-			self.connection
+			let result = self.connection
 				.modifydn(
 					role_dn.as_str(),
 					format!("cn={}", ldap_escape(new_name)).as_str(),
 					true,
 					None
 				).await
-				.map_err(FetchError::LdapError)?;
+				.map_err(UpdateError::LdapError)?;
+
+			match result.rc {
+				0 => (),
+				32 => return Err(UpdateError::NoItem),
+				_ => result.success()
+					.map(|_| ())
+					.map_err(UpdateError::LdapError)?,
+			}
 
 			role_dn = format!(
 				"cn={},ou={},{}",
@@ -408,18 +438,23 @@ impl UsersConnection {
 			modifications.push(Mod::Replace("pxlsspacePermission", new_permissions));
 		}
 
-		self.connection
+		let result = self.connection
 			.modify(&role_dn, modifications).await
-			.map_err(FetchError::LdapError)?
-			.success()
-			.map(|_| ())
-			.map_err(FetchError::LdapError) // TODO: error types
+			.map_err(UpdateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(UpdateError::NoItem),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(UpdateError::LdapError),
+		}
 	}
 
 	pub async fn delete_role(
 		&mut self,
 		name: &str,
-	) -> Result<(), FetchError<()>> { // TODO: different error type
+	) -> Result<(), DeleteError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -429,14 +464,14 @@ impl UsersConnection {
 
 		let result = self.connection
 			.delete(&role_dn).await
-			.map_err(FetchError::LdapError)?;
+			.map_err(DeleteError::LdapError)?;
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(FetchError::NoItems),
+			32 => Err(DeleteError::NoItem),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(FetchError::LdapError)
+				.map_err(DeleteError::LdapError)
 		}
 	}
 
@@ -469,7 +504,7 @@ impl UsersConnection {
 		&mut self,
 		uid: &str,
 		role: &str,
-	) -> Result<(), FetchError<()>> { // TODO: different error type
+	) -> Result<(), UpdateError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(role),
@@ -477,21 +512,26 @@ impl UsersConnection {
 			CONFIG.ldap_base,
 		);
 
-		self.connection
+		let result = self.connection
 			.modify(role_dn.as_str(), vec![
 				Mod::Add("member", HashSet::from([user_dn(uid).as_str()])),
 			]).await
-			.map_err(FetchError::LdapError)?
-			.success()
-			.map(|_| ())
-			.map_err(FetchError::LdapError)
+			.map_err(UpdateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(UpdateError::NoItem),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(UpdateError::LdapError),
+		}
 	}
 
 	pub async fn remove_user_role(
 		&mut self,
 		uid: &str,
 		role: &str,
-	) -> Result<(), FetchError<()>> { // TODO: different error type
+	) -> Result<(), UpdateError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(role),
@@ -499,13 +539,18 @@ impl UsersConnection {
 			CONFIG.ldap_base,
 		);
 
-		self.connection
+		let result = self.connection
 			.modify(role_dn.as_str(), vec![
 				Mod::Delete("member", HashSet::from([user_dn(uid).as_str()])),
 			]).await
-			.map_err(FetchError::LdapError)?
-			.success()
-			.map(|_| ())
-			.map_err(FetchError::LdapError)
+			.map_err(UpdateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(UpdateError::NoItem),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(UpdateError::LdapError),
+		}
 	}
 }
