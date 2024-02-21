@@ -9,7 +9,8 @@ use warp::{
 	path::Tail,
 };
 
-use crate::{filter::response::paginated_list::{PaginationOptions, Page}, database::{UpdateError, DeleteError}};
+use crate::filter::response::paginated_list::{PaginationOptions, Page, DEFAULT_PAGE_ITEM_LIMIT, MAX_PAGE_ITEM_LIMIT};
+use crate::database::{UpdateError, DeleteError};
 use crate::filter::response::reference::Reference;
 use crate::filter::header::authorization::{self, Bearer, UsersDBError, PermissionsError};
 use crate::filter::resource::database;
@@ -27,8 +28,8 @@ pub fn list(
 		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(10)
-				.clamp(1, 100); // TODO: maybe raise upper limit
+				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
+				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 			
 			match connection.list_users(page, limit).await {
 				Ok((page_token, users)) => {

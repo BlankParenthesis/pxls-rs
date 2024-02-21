@@ -9,7 +9,7 @@ use warp::{
 };
 
 use crate::filter::header::authorization::{self, Bearer, UsersDBError, PermissionsError};
-use crate::filter::response::paginated_list::{PaginationOptions, Page};
+use crate::filter::response::paginated_list::{PaginationOptions, Page, MAX_PAGE_ITEM_LIMIT, DEFAULT_PAGE_ITEM_LIMIT};
 use crate::filter::response::reference::Reference;
 use crate::filter::resource::database;
 
@@ -71,8 +71,8 @@ pub fn list(
 		.then(move |uid: String, pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(10)
-				.clamp(1, 100);
+				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
+				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
 			match connection.list_user_roles(&uid, page, limit).await {
 				Ok((page_token, roles)) => {
@@ -165,9 +165,7 @@ pub fn post(
 		.then(move |uid: String, role: RoleSpecifier, _, mut connection: UsersConnection| async move {
 			match connection.add_user_role(&uid, &role.role).await {
 				Ok(()) => {
-					// TODO: move to a DEFAULT_LIMIT constant somewhere universal
-					const LIMIT: usize = 10;
-					match connection.list_user_roles(&uid, None, LIMIT).await {
+					match connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await {
 						Ok((page_token, roles)) => {
 							let references = roles.iter()
 								.map(|r| Reference {
@@ -179,7 +177,7 @@ pub fn post(
 							let page = Page {
 								items: &references[..],
 								next: page_token.map(|p| {
-									format!("/users/{}/roles?limit={}&page={}", uid, LIMIT, p)
+									format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
 								}),
 								previous: None, // TODO: previous page
 							};
@@ -256,9 +254,7 @@ pub fn delete(
 		.then(move |uid: String, role: RoleSpecifier, _, mut connection: UsersConnection| async move {
 			match connection.remove_user_role(&uid, &role.role).await {
 				Ok(()) => {
-					// TODO: move to a DEFAULT_LIMIT constant somewhere universal
-					const LIMIT: usize = 10;
-					match connection.list_user_roles(&uid, None, LIMIT).await {
+					match connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await {
 						Ok((page_token, roles)) => {
 							let references = roles.iter()
 								.map(|r| Reference {
@@ -270,7 +266,7 @@ pub fn delete(
 							let page = Page {
 								items: &references[..],
 								next: page_token.map(|p| {
-									format!("/users/{}/roles?limit={}&page={}", uid, LIMIT, p)
+									format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
 								}),
 								previous: None, // TODO: previous page
 							};

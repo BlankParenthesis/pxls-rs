@@ -40,8 +40,8 @@ pub fn list(
 				let page = pagination.page.unwrap_or(0);
 				let limit = pagination
 					.limit
-					.unwrap_or(10)
-					.clamp(1, 100);
+					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
+					.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
 				let boards = Arc::clone(&boards);
 				let boards = boards.read().await;

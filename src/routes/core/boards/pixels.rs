@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
-use crate::filter::response::paginated_list::{PageToken, PaginationOptions, Page};
+use crate::filter::response::paginated_list::{PageToken, PaginationOptions, Page, DEFAULT_PAGE_ITEM_LIMIT, MAX_PAGE_ITEM_LIMIT};
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
@@ -32,8 +32,8 @@ pub fn list(
 			let page = options.page.unwrap_or_default();
 			let limit = options
 				.limit
-				.unwrap_or(10)
-				.clamp(1, 100);
+				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
+				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when listing pixels");
