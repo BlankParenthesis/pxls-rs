@@ -192,7 +192,14 @@ pub fn patch(
 
 			match connection.update_user(&uid, &update.name).await {
 				Ok(()) => {
-					StatusCode::OK.into_response()
+					match connection.get_user(&uid).await {
+						Ok(user) => {
+							warp::reply::json(&user).into_response()
+						},
+						Err(err) => {
+							StatusCode::INTERNAL_SERVER_ERROR.into_response()
+						},
+					}
 				},
 				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()

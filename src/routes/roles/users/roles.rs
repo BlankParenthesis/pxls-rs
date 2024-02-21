@@ -85,7 +85,9 @@ pub fn list(
 
 					let page = Page {
 						items: &references[..],
-						next: page_token.map(|p| format!("/users?limit={}&page={}", limit, p)),
+						next: page_token.map(|p| {
+							format!("/users/{}/roles?limit={}&page={}", uid, limit, p)
+						}),
 						// TODO: either find some magical way to generate this or
 						// change the spec
 						previous: None,
@@ -162,8 +164,32 @@ pub fn post(
 		.untuple_one()
 		.then(move |uid: String, role: RoleSpecifier, _, mut connection: UsersConnection| async move {
 			match connection.add_user_role(&uid, &role.role).await {
-				Ok(role) => {
-					StatusCode::OK.into_response()
+				Ok(()) => {
+					// TODO: move to a DEFAULT_LIMIT constant somewhere universal
+					const LIMIT: usize = 10;
+					match connection.list_user_roles(&uid, None, LIMIT).await {
+						Ok((page_token, roles)) => {
+							let references = roles.iter()
+								.map(|r| Reference {
+									uri: format!("/roles/{}", r.name).parse().unwrap(),
+									view: r,
+								})
+								.collect::<Vec<_>>();
+		
+							let page = Page {
+								items: &references[..],
+								next: page_token.map(|p| {
+									format!("/users/{}/roles?limit={}&page={}", uid, LIMIT, p)
+								}),
+								previous: None, // TODO: previous page
+							};
+		
+							warp::reply::json(&page).into_response()
+						},
+						Err(err) => {
+							StatusCode::INTERNAL_SERVER_ERROR.into_response()
+						},
+					}
 				},
 				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
@@ -229,8 +255,32 @@ pub fn delete(
 		.untuple_one()
 		.then(move |uid: String, role: RoleSpecifier, _, mut connection: UsersConnection| async move {
 			match connection.remove_user_role(&uid, &role.role).await {
-				Ok(role) => {
-					StatusCode::OK.into_response()
+				Ok(()) => {
+					// TODO: move to a DEFAULT_LIMIT constant somewhere universal
+					const LIMIT: usize = 10;
+					match connection.list_user_roles(&uid, None, LIMIT).await {
+						Ok((page_token, roles)) => {
+							let references = roles.iter()
+								.map(|r| Reference {
+									uri: format!("/roles/{}", r.name).parse().unwrap(),
+									view: r,
+								})
+								.collect::<Vec<_>>();
+		
+							let page = Page {
+								items: &references[..],
+								next: page_token.map(|p| {
+									format!("/users/{}/roles?limit={}&page={}", uid, LIMIT, p)
+								}),
+								previous: None, // TODO: previous page
+							};
+		
+							warp::reply::json(&page).into_response()
+						},
+						Err(err) => {
+							StatusCode::INTERNAL_SERVER_ERROR.into_response()
+						},
+					}
 				},
 				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()

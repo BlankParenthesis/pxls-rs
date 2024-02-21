@@ -93,8 +93,19 @@ pub fn post(
 		.and(authorized(users_db, &[Permission::RolesPost]))
 		.then(move |role: Role, _, mut connection: UsersConnection| async move {
 			match connection.create_role(&role).await {
-				Ok(role) => {
-					warp::reply::json(&role).into_response()
+				Ok(()) => {
+					match connection.get_role(&role.name).await {
+						Ok(role) => {
+							let reference = Reference {
+								uri: format!("/roles/{}", role.name).parse().unwrap(),
+								view: &role,
+							};
+							warp::reply::json(&reference).into_response()
+						},
+						Err(err) => {
+							StatusCode::INTERNAL_SERVER_ERROR.into_response()
+						},
+					}
 				},
 				Err(CreateError::AlreadyExists) => {
 					StatusCode::CONFLICT.into_response()
@@ -132,8 +143,15 @@ pub fn patch(
 				new_role.permissions,
 			);
 			match update.await {
-				Ok(role) => {
-					warp::reply::json(&role).into_response()
+				Ok(()) => {
+					match connection.get_role(&role).await {
+						Ok(role) => {
+							warp::reply::json(&role).into_response()
+						},
+						Err(err) => {
+							StatusCode::INTERNAL_SERVER_ERROR.into_response()
+						},
+					}
 				},
 				Err(UpdateError::NoItem) => {
 					StatusCode::NOT_FOUND.into_response()
