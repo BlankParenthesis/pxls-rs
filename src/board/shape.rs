@@ -94,10 +94,10 @@ impl Serialize for Shape {
 }
 
 impl<'de> Deserialize<'de> for Shape {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
 	{
-        Vec::<Vec<usize>>::deserialize(deserializer).map(Self::new)
-    }
+		Vec::<Vec<usize>>::deserialize(deserializer).map(Self::new)
+	}
 }

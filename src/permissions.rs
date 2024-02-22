@@ -168,9 +168,9 @@ struct V {}
 impl<'de> Visitor<'de> for V {
 	type Value = Permission;
 
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("A permission string")
-    }
+	fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+		formatter.write_str("A permission string")
+	}
 
 	fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
 	where E: serde::de::Error {
@@ -180,10 +180,10 @@ impl<'de> Visitor<'de> for V {
 }
 
 impl<'de> Deserialize<'de> for Permission {
-    fn deserialize<D>(
+	fn deserialize<D>(
 		deserializer: D,
 	) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
-        deserializer.deserialize_str(V {})
-    }
+	where D: serde::Deserializer<'de> {
+		deserializer.deserialize_str(V {})
+	}
 }

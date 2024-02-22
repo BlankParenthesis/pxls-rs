@@ -89,9 +89,9 @@ struct DataRange {
 
 #[derive(Error, Debug)]
 enum RangeOrReadError<E: fmt::Debug> {
-    #[error(transparent)]
+	#[error(transparent)]
 	RangeErr(RangeIndexError),
-    #[error(transparent)]
+	#[error(transparent)]
 	ReadErr(#[from] E),
 }
 
