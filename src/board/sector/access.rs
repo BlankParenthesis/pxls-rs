@@ -3,9 +3,27 @@ use std::io::Read;
 
 use async_trait::async_trait;
 
-use crate::database::{BoardsConnection, DatabaseError};
+use crate::database::BoardsConnection;
 use crate::{AsyncRead, AsyncWrite, Len};
 use super::{SectorBuffer, SectorCache};
+
+#[derive(Debug)]
+pub enum IoError {
+	Io(std::io::Error),
+	Sql(sea_orm::DbErr),
+}
+
+impl From<std::io::Error> for IoError {
+	fn from(value: std::io::Error) -> Self {
+		Self::Io(value)
+	}
+}
+
+impl From<sea_orm::DbErr> for IoError {
+	fn from(value: sea_orm::DbErr) -> Self {
+		Self::Sql(value)
+	}
+}
 
 pub struct SectorAccessor<'l> {
 	cursor: usize,
@@ -75,7 +93,7 @@ impl<'l> Seek for SectorAccessor<'l> {
 
 #[async_trait]
 impl<'l> AsyncRead for SectorAccessor<'l> {
-	type Error = DatabaseError<std::io::Error>;
+	type Error = IoError;
 
 	async fn read(
 		&mut self,
@@ -91,8 +109,7 @@ impl<'l> AsyncRead for SectorAccessor<'l> {
 			let offset = self.cursor % sector_size;
 
 			let sector = self.sectors
-				.get_sector(sector_index, self.connection).await
-				.map_err(DatabaseError::DbErr)?
+				.get_sector(sector_index, self.connection).await?
 				.unwrap();
 
 			let mut buf = &match self.buffer {
@@ -119,7 +136,7 @@ impl<'l> AsyncRead for SectorAccessor<'l> {
 	
 #[async_trait]
 impl<'l> AsyncWrite for SectorAccessor<'l> {
-	type Error = DatabaseError<std::io::Error>;
+	type Error = IoError;
 
 	async fn write(
 		&mut self,
@@ -130,8 +147,7 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 
 		let mut written = 0;
 
-		let transaction = self.connection.begin().await
-			.map_err(DatabaseError::DbErr)?;
+		let transaction = self.connection.begin().await?;
 
 		while !input.is_empty() && (0..total_size).contains(&self.cursor) {
 			let sector_index = self.cursor / sector_size;
@@ -158,8 +174,7 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 			written += write_len;
 			self.cursor += write_len;
 
-			sector.save(self.buffer, self.connection).await
-				.map_err(DatabaseError::DbErr)?;
+			sector.save(self.buffer, self.connection).await?;
 
 			if self.buffer == SectorBuffer::Initial {
 				drop(sector);
@@ -169,7 +184,7 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 
 		transaction.commit().await
 			.map(|_| written)
-			.map_err(DatabaseError::DbErr)
+			.map_err(IoError::from)
 	}
 
 	async fn flush(&mut self) -> std::result::Result<(), Self::Error> {

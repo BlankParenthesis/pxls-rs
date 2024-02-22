@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warp::reject::Rejection;
 use warp::{Reply, Filter, reply::json};
 
-use crate::filter::header::authorization::{self, Bearer, UsersDBError};
+use crate::filter::header::authorization::{self, Bearer};
 use crate::filter::resource::database;
 use crate::permissions::Permission;
 use crate::database::{UsersConnection, UsersDatabase};
@@ -19,9 +19,7 @@ pub fn get(
 		.and_then(|user: Option<Bearer>, mut connection: UsersConnection| async move {
 			let permissions = match user {
 				Some(user) => {
-					connection.user_permissions(&user.id).await
-						.map_err(UsersDBError::Raw)
-						.map_err(Rejection::from)?
+					connection.user_permissions(&user.id).await?
 				},
 				None => Permission::defaults(),
 			};

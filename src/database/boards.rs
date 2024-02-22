@@ -390,7 +390,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		let placements = placement::Entity::find()
 			.filter(
 				placement::Column::Board.eq(board_id)
-					.and(placement::Column::UserId.eq(user_id.clone())),
+					.and(placement::Column::UserId.eq(user_id)),
 			)
 			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
 			.order_by(placement::Column::Id, sea_orm::Order::Desc)

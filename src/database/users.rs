@@ -14,18 +14,56 @@ use ldap3::{
 mod connection;
 mod entities;
 
-pub use entities::{User, UserParseError, Role, RoleParseError};
+pub use entities::{User, Role, ParseError};
 use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
+use reqwest::StatusCode;
 use url::Url;
+use warp::{reject::Reject, reply::Reply};
 
 use crate::{config::CONFIG, permissions::Permission};
 
+// TODO: rename
+#[derive(Debug)]
+pub enum DatabaseError {
+	Fetch(FetchError),
+	Create(CreateError),
+	Update(UpdateError),
+	Delete(DeleteError),
+}
+
+impl Reject for DatabaseError {}
+impl Reply for &DatabaseError {
+	fn into_response(self) -> warp::reply::Response {
+		match self {
+			DatabaseError::Update(UpdateError::NoItem) |
+			DatabaseError::Delete(DeleteError::NoItem) |
+			DatabaseError::Fetch(FetchError::NoItems) => {
+				StatusCode::NOT_FOUND.into_response()
+			},
+			DatabaseError::Fetch(FetchError::InvalidPage) => {
+				StatusCode::BAD_REQUEST.into_response()
+			},
+			DatabaseError::Create(CreateError::AlreadyExists) => {
+				StatusCode::CONFLICT.into_response()
+			},
+			DatabaseError::Fetch(FetchError::MissingPagerData) |
+			DatabaseError::Fetch(FetchError::AmbiguousItems) |
+			DatabaseError::Fetch(FetchError::ParseError(_)) |
+			DatabaseError::Fetch(FetchError::LdapError(_)) |
+			DatabaseError::Create(CreateError::LdapError(_)) |
+			DatabaseError::Update(UpdateError::LdapError(_)) |
+			DatabaseError::Delete(DeleteError::LdapError(_)) => {
+				StatusCode::INTERNAL_SERVER_ERROR.into_response()
+			},
+		}
+	}
+}
 
 #[derive(Debug)]
-pub enum FetchError<E> {
-	ParseError(E),
+pub enum FetchError {
+	ParseError(ParseError),
 	LdapError(LdapError),
 	MissingPagerData,
 	InvalidPage,
@@ -49,6 +87,30 @@ pub enum UpdateError {
 pub enum DeleteError {
 	LdapError(LdapError),
 	NoItem,
+}
+
+impl From<FetchError> for DatabaseError {
+	fn from(value: FetchError) -> Self {
+		Self::Fetch(value)
+	}
+}
+
+impl From<CreateError> for DatabaseError {
+	fn from(value: CreateError) -> Self {
+		Self::Create(value)
+	}
+}
+
+impl From<UpdateError> for DatabaseError {
+	fn from(value: UpdateError) -> Self {
+		Self::Update(value)
+	}
+}
+
+impl From<DeleteError> for DatabaseError {
+	fn from(value: DeleteError) -> Self {
+		Self::Delete(value)
+	}
 }
 
 pub struct UsersDatabase {
@@ -97,7 +159,7 @@ impl UsersConnection {
 		&mut self,
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<User>), FetchError<UserParseError>> {
+	) -> Result<(PageToken, Vec<User>), DatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
@@ -126,6 +188,7 @@ impl UsersConnection {
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(User::try_from)
+			.map(|r| r.map_err(ParseError::from))
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
 		
@@ -140,7 +203,7 @@ impl UsersConnection {
 	pub async fn get_user(
 		&mut self,
 		id: &str,
-	) -> Result<User, FetchError<UserParseError>> {
+	) -> Result<User, DatabaseError> {
 		let filter = format!("({}={})", CONFIG.ldap_users_id_field, ldap_escape(id));
 		let (results, _) = self.connection
 			.search(
@@ -154,7 +217,7 @@ impl UsersConnection {
 			.map_err(FetchError::LdapError)?;
 
 		match results.len() {
-			0 => Err(FetchError::NoItems),
+			0 => Err(FetchError::NoItems.into()),
 			1 => {
 				let result = results.into_iter()
 					.next()
@@ -162,9 +225,11 @@ impl UsersConnection {
 					.unwrap();
 
 				User::try_from(result)
+					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
+					.map_err(DatabaseError::from)
 			},
-			_ => Err(FetchError::AmbiguousItems),
+			_ => Err(FetchError::AmbiguousItems.into()),
 		}
 	}
 
@@ -172,7 +237,7 @@ impl UsersConnection {
 		&mut self,
 		id: &str,
 		name: &str,
-	) -> Result<(), UpdateError> {
+	) -> Result<(), DatabaseError> {
 		let result = self.connection
 			.modify(&user_dn(id), vec![
 				Mod::Replace("displayName", HashSet::from([name]))
@@ -181,27 +246,29 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(UpdateError::NoItem),
+			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
+				.map_err(DatabaseError::from)
 		}
 	}
 
 	pub async fn delete_user(
 		&mut self,
 		id: &str,
-	) -> Result<(), DeleteError> {
+	) -> Result<(), DatabaseError> {
 		let result = self.connection
 			.delete(&user_dn(id)).await
 			.map_err(DeleteError::LdapError)?;
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(DeleteError::NoItem),
+			32 => Err(DeleteError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(DeleteError::LdapError)
+				.map_err(DatabaseError::from),
 		}
 	}
 
@@ -210,7 +277,7 @@ impl UsersConnection {
 		id: &str, 
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<Role>), FetchError<RoleParseError>> {
+	) -> Result<(PageToken, Vec<Role>), DatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
@@ -246,6 +313,7 @@ impl UsersConnection {
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(Role::try_from)
+			.map(|r| r.map_err(ParseError::from))
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
 		
@@ -261,7 +329,7 @@ impl UsersConnection {
 		&mut self,
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<Role>), FetchError<RoleParseError>> {
+	) -> Result<(PageToken, Vec<Role>), DatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
@@ -289,6 +357,7 @@ impl UsersConnection {
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(Role::try_from)
+			.map(|r| r.map_err(ParseError::from))
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
 		
@@ -303,7 +372,7 @@ impl UsersConnection {
 	pub async fn get_role(
 		&mut self,
 		name: &str,
-	) -> Result<Role, FetchError<RoleParseError>> {
+	) -> Result<Role, DatabaseError> {
 		let filter = format!("(cn={})", ldap_escape(name));
 		let (results, _) = self.connection
 			.search(
@@ -317,7 +386,7 @@ impl UsersConnection {
 			.map_err(FetchError::LdapError)?;
 
 		match results.len() {
-			0 => Err(FetchError::NoItems),
+			0 => Err(FetchError::NoItems.into()),
 			1 => {
 				let result = results.into_iter()
 					.next()
@@ -325,16 +394,18 @@ impl UsersConnection {
 					.unwrap();
 
 				Role::try_from(result)
+					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
+					.map_err(DatabaseError::from)
 			},
-			_ => Err(FetchError::AmbiguousItems),
+			_ => Err(FetchError::AmbiguousItems.into()),
 		}
 	}
 
 	pub async fn create_role(
 		&mut self,
 		role: &Role,
-	) -> Result<(), CreateError> {
+	) -> Result<(), DatabaseError> {
 		let name = ldap_escape(&role.name).to_string();
 		let role_dn = format!(
 			"cn={},ou={},{}",
@@ -367,10 +438,11 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			68 => Err(CreateError::AlreadyExists),
+			68 => Err(CreateError::AlreadyExists.into()),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(CreateError::LdapError),
+				.map_err(CreateError::LdapError)
+				.map_err(DatabaseError::from),
 		}
 	}
 
@@ -380,7 +452,7 @@ impl UsersConnection {
 		new_name: Option<&str>,
 		icon: Option<Option<Url>>,
 		permissions: Option<Vec<Permission>>,
-	) -> Result<(), UpdateError> {
+	) -> Result<(), DatabaseError> {
 		let mut role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -400,7 +472,7 @@ impl UsersConnection {
 
 			match result.rc {
 				0 => (),
-				32 => return Err(UpdateError::NoItem),
+				32 => return Err(UpdateError::NoItem.into()),
 				_ => result.success()
 					.map(|_| ())
 					.map_err(UpdateError::LdapError)?,
@@ -444,17 +516,18 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(UpdateError::NoItem),
+			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(UpdateError::LdapError),
+				.map_err(UpdateError::LdapError)
+				.map_err(DatabaseError::from),
 		}
 	}
 
 	pub async fn delete_role(
 		&mut self,
 		name: &str,
-	) -> Result<(), DeleteError> {
+	) -> Result<(), DatabaseError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -468,17 +541,18 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(DeleteError::NoItem),
+			32 => Err(DeleteError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(DeleteError::LdapError)
+				.map_err(DatabaseError::from),
 		}
 	}
 
 	pub async fn user_permissions(
 		&mut self,
 		id: &str,
-	) -> Result<EnumSet<Permission>, LdapError> {
+	) -> Result<EnumSet<Permission>, DatabaseError> {
 		let filter = format!("(member={})", user_dn(id));
 		let (results, _) = self.connection
 			.search(
@@ -486,8 +560,10 @@ impl UsersConnection {
 				Scope::OneLevel,
 				filter.as_str(),
 				["pxlsspacePermission"],
-			).await?
-			.success()?;
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map_err(FetchError::LdapError)?;
 
 		Ok(results.into_iter().flat_map(|result| {
 			let permissions = SearchEntry::construct(result);
@@ -504,7 +580,7 @@ impl UsersConnection {
 		&mut self,
 		uid: &str,
 		role: &str,
-	) -> Result<(), UpdateError> {
+	) -> Result<(), DatabaseError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(role),
@@ -520,10 +596,11 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(UpdateError::NoItem),
+			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(UpdateError::LdapError),
+				.map_err(UpdateError::LdapError)
+				.map_err(DatabaseError::from),
 		}
 	}
 
@@ -531,7 +608,7 @@ impl UsersConnection {
 		&mut self,
 		uid: &str,
 		role: &str,
-	) -> Result<(), UpdateError> {
+	) -> Result<(), DatabaseError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(role),
@@ -547,10 +624,11 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(UpdateError::NoItem),
+			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
-				.map_err(UpdateError::LdapError),
+				.map_err(UpdateError::LdapError)
+				.map_err(DatabaseError::from),
 		}
 	}
 }

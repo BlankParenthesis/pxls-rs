@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use warp::{
-	http::StatusCode,
 	Filter,
 	Reply,
 	Rejection,
@@ -13,7 +12,7 @@ use crate::filter::response::paginated_list::{PaginationOptions, Page, MAX_PAGE_
 use crate::filter::response::reference::Reference;
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, FetchError, UpdateError};
+use crate::database::{UsersDatabase, UsersConnection};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -42,18 +41,18 @@ pub fn list(
 			if check(user_permissions, permissions) {
 				Ok((uid, pagination, connection))
 			} else {
-				Err(Rejection::from(PermissionsError::MissingPermission))
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
+		.and_then(move |uid: String, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
-			match connection.list_user_roles(&uid, page, limit).await {
-				Ok((page_token, roles)) => {
+			connection.list_user_roles(&uid, page, limit).await
+				.map(|(page_token, roles)| {
 					let references = roles.iter()
 						.map(|r| Reference {
 							uri: format!("/roles/{}", r.name).parse().unwrap(),
@@ -72,14 +71,8 @@ pub fn list(
 					};
 
 					warp::reply::json(&page).into_response()
-				},
-				Err(FetchError::InvalidPage) => {
-					StatusCode::BAD_REQUEST.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+				})
+				.map_err(warp::reject::custom)
 		})
 }
 
@@ -114,44 +107,32 @@ pub fn post(
 			if check(user_permissions, permissions) {
 				Ok((uid, role, connection))
 			} else {
-				Err(Rejection::from(PermissionsError::MissingPermission))
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
-			match connection.add_user_role(&uid, &role.role).await {
-				Ok(()) => {
-					match connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await {
-						Ok((page_token, roles)) => {
-							let references = roles.iter()
-								.map(|r| Reference {
-									uri: format!("/roles/{}", r.name).parse().unwrap(),
-									view: r,
-								})
-								.collect::<Vec<_>>();
-		
-							let page = Page {
-								items: &references[..],
-								next: page_token.map(|p| {
-									format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
-								}),
-								previous: None, // TODO: previous page
-							};
-		
-							warp::reply::json(&page).into_response()
-						},
-						Err(err) => {
-							StatusCode::INTERNAL_SERVER_ERROR.into_response()
-						},
-					}
-				},
-				Err(UpdateError::NoItem) => {
-					StatusCode::NOT_FOUND.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+		.and_then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
+			connection.add_user_role(&uid, &role.role).await?;
+			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
+				.map(|(page_token, roles)| {
+					let references = roles.iter()
+						.map(|r| Reference {
+							uri: format!("/roles/{}", r.name).parse().unwrap(),
+							view: r,
+						})
+						.collect::<Vec<_>>();
+
+					let page = Page {
+						items: &references[..],
+						next: page_token.map(|p| {
+							format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
+						}),
+						previous: None, // TODO: previous page
+					};
+
+					warp::reply::json(&page).into_response()
+				})
+				.map_err(warp::reject::custom)
 		})
 }
 
@@ -182,43 +163,31 @@ pub fn delete(
 			if check(user_permissions, permissions) {
 				Ok((uid, role, connection))
 			} else {
-				Err(Rejection::from(PermissionsError::MissingPermission))
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
-			match connection.remove_user_role(&uid, &role.role).await {
-				Ok(()) => {
-					match connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await {
-						Ok((page_token, roles)) => {
-							let references = roles.iter()
-								.map(|r| Reference {
-									uri: format!("/roles/{}", r.name).parse().unwrap(),
-									view: r,
-								})
-								.collect::<Vec<_>>();
-		
-							let page = Page {
-								items: &references[..],
-								next: page_token.map(|p| {
-									format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
-								}),
-								previous: None, // TODO: previous page
-							};
-		
-							warp::reply::json(&page).into_response()
-						},
-						Err(err) => {
-							StatusCode::INTERNAL_SERVER_ERROR.into_response()
-						},
-					}
-				},
-				Err(UpdateError::NoItem) => {
-					StatusCode::NOT_FOUND.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+		.and_then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
+			connection.remove_user_role(&uid, &role.role).await?;
+			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
+				.map(|(page_token, roles)| {
+					let references = roles.iter()
+						.map(|r| Reference {
+							uri: format!("/roles/{}", r.name).parse().unwrap(),
+							view: r,
+						})
+						.collect::<Vec<_>>();
+
+					let page = Page {
+						items: &references[..],
+						next: page_token.map(|p| {
+							format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
+						}),
+						previous: None, // TODO: previous page
+					};
+
+					warp::reply::json(&page).into_response()
+				})
+				.map_err(warp::reject::custom)
 		})
 }

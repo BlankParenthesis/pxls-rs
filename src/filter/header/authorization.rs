@@ -102,16 +102,6 @@ impl Bearer {
 	}
 }
 
-
-// TODO: improve database error handling consistency in general
-// (that's probably a moderate refactor)
-#[derive(Debug)]
-pub enum UsersDBError {
-	Raw(ldap3::LdapError),
-}
-
-impl Reject for UsersDBError {}
-
 pub fn permissions(
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<
@@ -124,9 +114,7 @@ pub fn permissions(
 		.and_then(|bearer: Option<Bearer>, mut connection: UsersConnection| async {
 			let user_permissions = match bearer {
 				Some(ref user) => {
-					connection.user_permissions(&user.id).await
-						.map_err(UsersDBError::Raw)
-						.map_err(Rejection::from)?
+					connection.user_permissions(&user.id).await?
 				}
 				None => Permission::defaults(),
 			};

@@ -1,9 +1,27 @@
 use ldap3::SearchEntry;
 use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
-use url::{Url, ParseError};
+use url::{Url, ParseError as UrlParseError};
 
 use crate::{config::CONFIG, permissions::Permission};
+
+#[derive(Debug)]
+pub enum ParseError {
+	User(UserParseError),
+	Role(RoleParseError),
+}
+
+impl From<UserParseError> for ParseError {
+	fn from(value: UserParseError) -> Self {
+		Self::User(value)
+	}
+}
+
+impl From<RoleParseError> for ParseError {
+	fn from(value: RoleParseError) -> Self {
+		Self::Role(value)
+	}
+}
 
 #[derive(Debug)]
 pub enum TimestampParseError {
@@ -124,7 +142,7 @@ impl TryFrom<SearchEntry> for User {
 #[derive(Debug)]
 pub enum RoleParseError {
 	MissingName,
-	InvalidIcon(ParseError),
+	InvalidIcon(UrlParseError),
 }
 
 #[skip_serializing_none]

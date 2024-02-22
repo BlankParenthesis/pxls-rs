@@ -18,14 +18,15 @@ use sea_orm::DbErr;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{filter::{body::patch::BinaryPatch, response::paginated_list::PageToken}, database::DatabaseError};
+use crate::filter::body::patch::BinaryPatch;
+use crate::filter::response::paginated_list::PageToken;
 use crate::filter::response::reference::Reference;
 use crate::AsyncWrite;
 use crate::socket::{AuthedSocket, packet};
 use crate::database::{BoardsConnection, Order};
 
 use connections::Connections;
-use sector::{SectorAccessor, SectorCache, MaskValue};
+use sector::{SectorAccessor, SectorCache, MaskValue, IoError};
 use cooldown::CooldownInfo;
 use info::BoardInfo;
 
@@ -42,6 +43,7 @@ pub enum PlaceError {
 	NoOp,
 	Cooldown,
 	OutOfBounds,
+	DatabaseError(sea_orm::DbErr),
 }
 
 impl Reject for PlaceError {}
@@ -58,6 +60,9 @@ impl Reply for PlaceError {
 			Self::NoOp => StatusCode::CONFLICT,
 			Self::Cooldown => StatusCode::TOO_MANY_REQUESTS,
 			Self::OutOfBounds => StatusCode::NOT_FOUND,
+			Self::DatabaseError(_) => {
+				StatusCode::INTERNAL_SERVER_ERROR
+			},
 		}
 		.into_response()
 	}
@@ -65,8 +70,8 @@ impl Reply for PlaceError {
 
 #[derive(Debug)]
 pub enum PatchError {
-	SeekFailed(std::io::Error),
-	WriteFailed(DatabaseError<std::io::Error>),
+	SeekFailed(IoError),
+	WriteFailed(IoError),
 	WriteOutOfBounds,
 }
 
@@ -165,6 +170,7 @@ impl Board {
 
 		sector_data
 			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
+			.map_err(IoError::Io)
 			.map_err(PatchError::SeekFailed)?;
 
 		sector_data
@@ -291,7 +297,7 @@ impl Board {
 		position: u64,
 		color: u8,
 		connection: &BoardsConnection,
-	) -> Result<Placement, DatabaseError<PlaceError>> {
+	) -> Result<Placement, PlaceError> {
 		// TODO: I hate most things about how this is written.
 		// Redo it and/or move stuff.
 
@@ -302,7 +308,7 @@ impl Board {
 			.ok_or(PlaceError::OutOfBounds)?;
 
 		if !self.info.palette.contains_key(&(color as u32)) {
-			return Err(DatabaseError::Other(PlaceError::InvalidColor));
+			return Err(PlaceError::InvalidColor);
 		}
 		
 		let mut sector = self.sectors
@@ -327,7 +333,7 @@ impl Board {
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
-		).await.map_err(DatabaseError::DbErr)?;
+		).await.map_err(PlaceError::DatabaseError)?;
 
 		if cooldown_info.pixels_available == 0 {
 			return Err(PlaceError::Cooldown.into());
@@ -342,7 +348,7 @@ impl Board {
 			color,
 			timestamp,
 			user_id.to_owned(),
-		).await.map_err(DatabaseError::DbErr)?;
+		).await.map_err(PlaceError::DatabaseError)?;
 
 		sector.colors[sector_offset] = color;
 		let timestamp_slice =
@@ -370,7 +376,7 @@ impl Board {
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
-		).await.map_err(DatabaseError::DbErr)?;
+		).await.map_err(PlaceError::DatabaseError)?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info).await;
 

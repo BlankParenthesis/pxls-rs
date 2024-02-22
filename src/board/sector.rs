@@ -8,7 +8,7 @@ mod access;
 use crate::database::BoardsConnectionGeneric;
 
 pub use cache::SectorCache;
-pub use access::SectorAccessor;
+pub use access::{SectorAccessor, IoError};
 
 #[derive(TryFromPrimitive)]
 #[repr(u8)]

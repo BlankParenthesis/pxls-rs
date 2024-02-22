@@ -10,11 +10,10 @@ use warp::{
 };
 
 use crate::filter::response::paginated_list::{PaginationOptions, Page, DEFAULT_PAGE_ITEM_LIMIT, MAX_PAGE_ITEM_LIMIT};
-use crate::database::{UpdateError, DeleteError};
 use crate::filter::response::reference::Reference;
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, FetchError};
+use crate::database::{UsersDatabase, UsersConnection};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -24,14 +23,14 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::UsersList.into()))
-		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
+		.and_then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 			
-			match connection.list_users(page, limit).await {
-				Ok((page_token, users)) => {
+			connection.list_users(page, limit).await
+				.map(|(page_token, users)| {
 					let references = users.iter()
 						.map(|u| Reference {
 							uri: format!("/users/{}", u.id).parse().unwrap(),
@@ -48,14 +47,8 @@ pub fn list(
 					};
 
 					warp::reply::json(&page).into_response()
-				},
-				Err(FetchError::InvalidPage) => {
-					StatusCode::BAD_REQUEST.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+				})
+				.map_err(warp::reject::custom)
 		})
 }
 
@@ -83,22 +76,14 @@ pub fn get(
 			if check(user_permissions, permissions) {
 				Ok((uid, connection))
 			} else {
-				Err(Rejection::from(PermissionsError::MissingPermission))
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, mut connection: UsersConnection| async move {
-			match connection.get_user(&uid).await {
-				Ok(user) => {
-					warp::reply::json(&user).into_response()
-				},
-				Err(FetchError::NoItems) => {
-					StatusCode::NOT_FOUND.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+		.and_then(move |uid: String, mut connection: UsersConnection| async move {
+			connection.get_user(&uid).await
+				.map(|user| warp::reply::json(&user))
+				.map_err(warp::reject::custom)
 		})
 }
 
@@ -151,31 +136,17 @@ pub fn patch(
 			if check(user_permissions, permissions) {
 				Ok((uid, update, connection))
 			} else {
-				Err(Rejection::from(PermissionsError::MissingPermission))
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| async move {
+		.and_then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| async move {
 			// TODO: validate username
 
-			match connection.update_user(&uid, &update.name).await {
-				Ok(()) => {
-					match connection.get_user(&uid).await {
-						Ok(user) => {
-							warp::reply::json(&user).into_response()
-						},
-						Err(err) => {
-							StatusCode::INTERNAL_SERVER_ERROR.into_response()
-						},
-					}
-				},
-				Err(UpdateError::NoItem) => {
-					StatusCode::NOT_FOUND.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+			connection.update_user(&uid, &update.name).await?;
+			connection.get_user(&uid).await
+				.map(|user| warp::reply::json(&user))
+				.map_err(warp::reject::custom)
 		})
 }
 
@@ -203,24 +174,15 @@ pub fn delete(
 			if check(user_permissions, permissions) {
 				Ok((uid, connection))
 			} else {
-				Err(Rejection::from(PermissionsError::MissingPermission))
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, mut connection: UsersConnection| async move {
-			match connection.delete_user(&uid).await {
-				Ok(()) => {
-					StatusCode::OK.into_response()
-				},
-				Err(DeleteError::NoItem) => {
-					StatusCode::NOT_FOUND.into_response()
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+		.and_then(move |uid: String, mut connection: UsersConnection| async move {
+			connection.delete_user(&uid).await
+				.map(|_| StatusCode::OK)
+				.map_err(warp::reject::custom)
 		})
 }
 
-// TODO: patch, delete, and socket stuff 
-// (if they are even possible — it seems troublesome with the external stores)
+// TODO: socket stuff 
