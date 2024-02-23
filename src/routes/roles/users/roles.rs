@@ -54,10 +54,7 @@ pub fn list(
 			connection.list_user_roles(&uid, page, limit).await
 				.map(|(page_token, roles)| {
 					let references = roles.iter()
-						.map(|r| Reference {
-							uri: format!("/roles/{}", r.name).parse().unwrap(),
-							view: r,
-						})
+						.map(Reference::from)
 						.collect::<Vec<_>>();
 
 					let page = Page {
@@ -116,10 +113,7 @@ pub fn post(
 			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
 				.map(|(page_token, roles)| {
 					let references = roles.iter()
-						.map(|r| Reference {
-							uri: format!("/roles/{}", r.name).parse().unwrap(),
-							view: r,
-						})
+						.map(Reference::from)
 						.collect::<Vec<_>>();
 
 					let page = Page {
@@ -172,10 +166,7 @@ pub fn delete(
 			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
 				.map(|(page_token, roles)| {
 					let references = roles.iter()
-						.map(|r| Reference {
-							uri: format!("/roles/{}", r.name).parse().unwrap(),
-							view: r,
-						})
+						.map(Reference::from)
 						.collect::<Vec<_>>();
 
 					let page = Page {

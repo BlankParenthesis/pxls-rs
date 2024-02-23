@@ -1,7 +1,6 @@
 use warp::http::Uri;
 use serde::Serialize;
 
-// TODO: impl Into<Reference> for a bunch of things
 #[derive(Debug, Serialize)]
 pub struct Reference<'t, T>
 where

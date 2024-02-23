@@ -3,7 +3,9 @@ use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
 use url::{Url, ParseError as UrlParseError};
 
-use crate::{config::CONFIG, permissions::Permission};
+use crate::config::CONFIG;
+use crate::permissions::Permission;
+use crate::filter::response::reference::Reference;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -139,6 +141,15 @@ impl TryFrom<SearchEntry> for User {
 	}
 }
 
+impl<'l> From<&'l User> for Reference<'l, User> {
+	fn from(user: &'l User) -> Self {
+		Self {
+			uri: format!("/users/{}", user.id).parse().unwrap(),
+			view: user,
+		}
+	}
+}
+
 #[derive(Debug)]
 pub enum RoleParseError {
 	MissingName,
@@ -190,5 +201,14 @@ impl TryFrom<SearchEntry> for Role {
 			.collect();
 
 		Ok(Role{ name, icon, permissions })
+	}
+}
+
+impl<'l> From<&'l Role> for Reference<'l, Role> {
+	fn from(role: &'l Role) -> Self {
+		Self {
+			uri: format!("/roles/{}", role.name).parse().unwrap(),
+			view: role,
+		}
 	}
 }

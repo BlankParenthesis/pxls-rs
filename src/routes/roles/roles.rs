@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use reqwest::header;
 use serde::Deserialize;
 use url::Url;
 use warp::{
@@ -32,10 +33,7 @@ pub fn list(
 			connection.list_roles(page, limit).await
 				.map(|(page_token, roles)| {
 					let references = roles.iter()
-						.map(|r| Reference {
-							uri: format!("/roles/{}", r.name).parse().unwrap(),
-							view: r,
-						})
+						.map(Reference::from)
 						.collect::<Vec<_>>();
 
 					let page = Page {
@@ -80,11 +78,16 @@ pub fn post(
 			connection.create_role(&role).await?;
 			connection.get_role(&role.name).await
 				.map(|role| {
-					let reference = Reference {
-						uri: format!("/roles/{}", role.name).parse().unwrap(),
-						view: &role,
-					};
-					warp::reply::json(&reference)
+					let reference = &Reference::from(&role);
+					let response = warp::reply::with_status(
+						warp::reply::json(reference),
+						StatusCode::CREATED
+					);
+					warp::reply::with_header(
+						response,
+						header::LOCATION,
+						reference.uri.to_string(),
+					)
 				})
 				.map_err(warp::reject::custom)
 		})

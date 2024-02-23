@@ -32,10 +32,7 @@ pub fn list(
 			connection.list_users(page, limit).await
 				.map(|(page_token, users)| {
 					let references = users.iter()
-						.map(|u| Reference {
-							uri: format!("/users/{}", u.id).parse().unwrap(),
-							view: u,
-						})
+						.map(Reference::from)
 						.collect::<Vec<_>>();
 
 					let page = Page {
