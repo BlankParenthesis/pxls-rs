@@ -222,8 +222,20 @@ impl UnauthedSocket {
 				if let Some(board) = board.upgrade() {
 					let mut board = board.write().await;
 					if let Some(ref mut board) = *board {
-						// TODO: bad unwrap? Handle by rejecting+closing connection.
-						board.insert_socket(&socket, &connection).await.unwrap();
+						let insert_result = board.insert_socket(
+							&socket,
+							&connection,
+						).await;
+
+						if let Err(err) = insert_result {
+							let message = ws::Message::close_with(
+								u16::from(CloseReason::ServerError),
+								"",
+							);
+							
+							let _ = socket.sender.send(Ok(message));
+							return;
+						}
 					}
 				}
 
@@ -243,7 +255,7 @@ impl UnauthedSocket {
 					None => ws::Message::close(),
 				};
 
-				socket.sender.send(Ok(message));
+				let _ = socket.sender.send(Ok(message));
 			}
 		}
 	}
@@ -386,7 +398,7 @@ impl AuthedSocket {
 			ws::Message::close()
 		};
 
-		self.sender.send(Ok(close));
+		let _ = self.sender.send(Ok(close));
 	}
 
 	async fn reauthorize(
