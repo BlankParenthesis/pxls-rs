@@ -49,7 +49,7 @@ impl Permission {
 		EnumSet::all() - Self::BoardsPixelsPost
 	}
 
-	pub fn to_current(&self) -> Option<Self> {
+	pub fn to_current(self) -> Option<Self> {
 		match self {
 			Self::UsersGet => Some(Self::UsersCurrentGet),
 			Self::UsersPatch => Some(Self::UsersCurrentPatch),
@@ -175,7 +175,7 @@ impl<'de> Visitor<'de> for V {
 	fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
 	where E: serde::de::Error {
 		Permission::try_from(v)
-			.map_err(|e| E::custom("Invalid permission"))
+			.map_err(|err| E::custom("Invalid permission"))
 	}
 }
 

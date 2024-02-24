@@ -112,7 +112,7 @@ pub fn get(
 		.and(database::connection(boards_db))
 		.then(|board: PassableBoard, user, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
-			let board = board.as_ref().expect("Board wend missing when getting info");
+			let board = board.as_ref().expect("Board went missing when getting info");
 			let mut response = warp::reply::json(&board.info).into_response();
 
 			if let Some(Bearer { id, .. }) = user {

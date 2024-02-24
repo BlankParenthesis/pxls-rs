@@ -76,7 +76,8 @@ impl Discovery {
 					.map(|json| {
 						json.keys
 							.into_iter()
-							.filter_map(|k| serde_json::from_value(k).ok()) // TODO: this silently drops parsing errors on keys
+							// TODO: this silently drops parsing errors on keys
+							.filter_map(|k| serde_json::from_value(k).ok())
 							.collect()
 					})
 					.map_err(|_| DiscoveryError::InvalidConfigResponse)
