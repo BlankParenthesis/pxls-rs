@@ -1,6 +1,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::{BytesMut, BufMut};
+use reqwest::StatusCode;
 use sea_orm::{
 	ConnectOptions, 
 	Database, 
@@ -22,6 +23,7 @@ use sea_orm::{
 	ConnectionTrait,
 };
 use sea_orm_migration::MigratorTrait;
+use warp::reply::Reply;
 
 use crate::{config::CONFIG, filter::response::paginated_list::PageToken};
 use crate::board::{Palette, Color, Board, Placement, Sector};
@@ -33,8 +35,40 @@ use migration::Migrator;
 
 use super::Order;
 
-// TODO: bind to a different error which implements Reply
-pub type DbResult<T> = Result<T, sea_orm::DbErr>;
+#[derive(Debug)]
+pub enum BoardsDatabaseError {
+	DbErr(sea_orm::DbErr),
+}
+
+impl From<sea_orm::DbErr> for BoardsDatabaseError {
+	fn from(value: sea_orm::DbErr) -> Self {
+		BoardsDatabaseError::DbErr(value)
+	}
+}
+
+impl From<&BoardsDatabaseError> for StatusCode {
+	fn from(error: &BoardsDatabaseError) -> Self {
+		match error {
+			BoardsDatabaseError::DbErr(err) => {
+				StatusCode::INTERNAL_SERVER_ERROR
+			}
+		}
+	}
+}
+
+impl From<BoardsDatabaseError> for StatusCode {
+	fn from(error: BoardsDatabaseError) -> Self {
+		error.into()
+	}
+}
+
+impl Reply for BoardsDatabaseError {
+	fn into_response(self) -> warp::reply::Response {
+		StatusCode::from(&self).into_response()
+	}
+}
+
+type DbResult<T> = Result<T, BoardsDatabaseError>;
 
 pub struct BoardsDatabase {
 	pool: DatabaseConnection,
@@ -70,6 +104,7 @@ pub struct BoardsConnection<Connection: TransactionTrait + ConnectionTrait> {
 impl BoardsConnection<DatabaseTransaction> {
 	pub async fn commit(self) -> DbResult<()> {
 		self.connection.commit().await
+			.map_err(BoardsDatabaseError::from)
 	}
 }
 
@@ -77,6 +112,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 	pub async fn begin(&self) -> DbResult<BoardsConnection<DatabaseTransaction>> {
 		self.connection.begin().await
 			.map(|connection| BoardsConnection { connection })
+			.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn list_boards(&self) -> DbResult<Vec<Board>> {
@@ -265,6 +301,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.one(&self.connection).await
 			.map(|option| option.map(|placement| placement.timestamp))
 			.map(|timestamp| timestamp.unwrap_or(0) as u32)
+			.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn list_placements(
@@ -364,6 +401,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
 		})
+		.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn count_placements(
@@ -380,6 +418,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			)
 			.count(&self.connection).await
 			.map(|i| i as usize)
+			.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn list_user_placements(
@@ -417,6 +456,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.filter(placement::Column::Timestamp.between(min_time, max_time))
 			.count(&self.connection).await
 			.map(|count| count as usize)
+			.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn create_sector(
@@ -525,6 +565,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.filter(Self::find_sector(board_id, sector_index))
 			.exec(&self.connection).await
 			.map(|_| ())
+			.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn write_sector_initial(
@@ -538,5 +579,6 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.filter(Self::find_sector(board_id, sector_index))
 			.exec(&self.connection).await
 			.map(|_| ())
+			.map_err(BoardsDatabaseError::from)
 	}
 }

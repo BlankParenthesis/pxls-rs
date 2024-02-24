@@ -88,22 +88,19 @@ struct DataRange {
 }
 
 #[derive(Error, Debug)]
-enum RangeOrReadError<E: fmt::Debug> {
+pub enum RangeOrReadError<E> {
 	#[error(transparent)]
 	RangeErr(RangeIndexError),
 	#[error(transparent)]
 	ReadErr(#[from] E),
 }
 
-impl<E: fmt::Debug + Send> Reply for RangeOrReadError<E> {
+impl<E: Reply> Reply for RangeOrReadError<E> {
 	fn into_response(self) -> reply::Response {
 		match self {
 			RangeOrReadError::RangeErr(e) => e.into_response(),
 			RangeOrReadError::ReadErr(err) => {
-				Response::builder()
-					.status(StatusCode::INTERNAL_SERVER_ERROR)
-					.body("".into())
-					.unwrap()
+				StatusCode::INTERNAL_SERVER_ERROR.into_response()
 			},
 		}
 	}
@@ -116,7 +113,7 @@ async fn data_ranges<D, E>(
 ) -> Result<Vec<DataRange>, RangeOrReadError<E>>
 where
 	D: AsyncRead<Error = E> + Seek + Len,
-	E: fmt::Debug,
+	E: Send + Reply,
 {
 	if !unit.eq("bytes") {
 		return Err(RangeOrReadError::RangeErr(RangeIndexError::UnknownUnit));
@@ -325,15 +322,15 @@ impl Range {
 	pub async fn respond_with<D, E>(
 		&self,
 		data: &mut D,
-	) -> reply::Response
+	) -> Result<reply::Response, RangeOrReadError<E>>
 	where
 		D: AsyncRead<Error = E> + Seek + Len,
-		E: Send + fmt::Debug,
+		E: Send + Reply,
 	{
 		match self {
 			Self::Multi { unit, ranges } => {
-				match data_ranges(data, unit, ranges).await {
-					Ok(datas) => {
+				data_ranges(data, unit, ranges).await
+					.map(|datas| {
 						let boundary = choose_boundary(&datas);
 						let merged = merge_ranges(&datas, &boundary);
 
@@ -344,12 +341,10 @@ impl Range {
 							.header(header::CONTENT_TYPE, content_type)
 							.body(merged)
 							.into_response()
-					},
-					Err(e) => e.into_response(),
-				}
+					})
 			},
 			Self::Single { unit, range } => {
-				let validate_range = range
+				let range = range
 					.with_length(data.len())
 					.and_then(|ranges| {
 						if unit.eq("bytes") {
@@ -357,29 +352,20 @@ impl Range {
 						} else {
 							Err(RangeIndexError::UnknownUnit)
 						}
-					});
+					})
+					.map_err(RangeOrReadError::RangeErr)?;
 
-				match validate_range {
-					Ok(range) => {
-						let length = range.end - range.start;
-						let mut buffer = vec![0; length];
+				let length = range.end - range.start;
+				let mut buffer = vec![0; length];
 
-						data.seek(std::io::SeekFrom::Start(
-							u64::try_from(range.start).unwrap(),
-						))
-						.unwrap();
+				data.seek(std::io::SeekFrom::Start(
+					u64::try_from(range.start).unwrap(),
+				))
+				.unwrap();
 
-						// TODO: assert correct read_size
-						let read_size = match data.read(&mut buffer).await {
-							Ok(size) => size,
-							Err(err) => {
-								return Response::builder()
-									.status(StatusCode::INTERNAL_SERVER_ERROR)
-									.body("")
-									.into_response()
-							},
-						};
-
+				data.read(&mut buffer).await
+					// TODO: assert correct read_size
+					.map(|read_size| {
 						let range = format!("bytes {}-{}/{}", range.start, range.end, data.len());
 
 						Response::builder()
@@ -388,30 +374,23 @@ impl Range {
 							.header(header::CONTENT_RANGE, range)
 							.body(buffer)
 							.into_response()
-					},
-					Err(error) => error.into_response(),
-				}
+					})
+					.map_err(RangeOrReadError::ReadErr)
 			},
 			Self::None => {
 				let length = data.len();
 				let mut buffer = vec![0; length];
 
-				// TODO: assert correct read_size
-				let read_size = match data.read(&mut buffer).await {
-					Ok(size) => size,
-					Err(err) => {
-						return Response::builder()
-							.status(StatusCode::INTERNAL_SERVER_ERROR)
-							.body("".into())
-							.unwrap()
-					},
-				};
-
-				Response::builder()
-					.header(header::CONTENT_TYPE, "application/octet-stream")
-					.header(header::ACCEPT_RANGES, "bytes")
-					.body(buffer)
-					.into_response()
+				data.read(&mut buffer).await
+					// TODO: assert correct read_size
+					.map(|read_size| {
+						Response::builder()
+							.header(header::CONTENT_TYPE, "application/octet-stream")
+							.header(header::ACCEPT_RANGES, "bytes")
+							.body(buffer)
+							.into_response()
+					})
+					.map_err(RangeOrReadError::ReadErr)
 			},
 		}
 	}

@@ -15,7 +15,7 @@ mod permissions;
 
 use std::{collections::HashMap, sync::Arc};
 
-use database::{BoardsDatabase, UsersDatabase, Database, DatabaseError};
+use database::{BoardsDatabase, UsersDatabase, Database, UsersDatabaseError};
 use filter::header::authorization::{BearerError, PermissionsError};
 use futures_util::future;
 use tokio::sync::RwLock;
@@ -181,7 +181,7 @@ async fn main() {
 				future::ok(StatusCode::FORBIDDEN.into_response())
 			} else if let Some(err) = rejection.find::<BodyDeserializeError>() {
 				future::ok(StatusCode::BAD_REQUEST.into_response())
-			} else if let Some(err) = rejection.find::<DatabaseError>() {
+			} else if let Some(err) = rejection.find::<UsersDatabaseError>() {
 				future::ok(err.into_response())
 			} else {
 				future::err(rejection)

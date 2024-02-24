@@ -161,44 +161,42 @@ pub fn socket(
 		.and(serde_qs::warp::query(Default::default()))
 		.and(database::connection(boards_db))
 		.map(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
-			if let Some(extensions) = options.extensions {
-				if extensions.is_empty() {
-					return StatusCode::UNPROCESSABLE_ENTITY.into_response();
-				}
-
-				if !extensions.contains(Extension::Authentication) {
-					let permissions = Permission::defaults();
-					let has_permissions = extensions.iter()
-						.map(|e| e.socket_permission())
-						.all(|p| permissions.contains(p));
-				
-					if !has_permissions {
-						return StatusCode::FORBIDDEN.into_response();
+			options.extensions
+				.ok_or(StatusCode::UNPROCESSABLE_ENTITY)
+				.and_then(|extensions| {
+					if extensions.is_empty() {
+						return Err(StatusCode::UNPROCESSABLE_ENTITY);
 					}
-				}
-			
-				let users_db = Arc::clone(&users_db);
-				ws.on_upgrade(move |websocket| {
-					UnauthedSocket::connect(
-						websocket,
-						extensions,
-						Arc::downgrade(&*board),
-						connection,
-						users_db,
-					)
+
+					if !extensions.contains(Extension::Authentication) {
+						let permissions = Permission::defaults();
+						let has_permissions = extensions.iter()
+							.map(|e| e.socket_permission())
+							.all(|p| permissions.contains(p));
+					
+						if !has_permissions {
+							return Err(StatusCode::FORBIDDEN);
+						}
+					}
+				
+					let users_db = Arc::clone(&users_db);
+					
+					Ok(ws.on_upgrade(move |websocket| {
+						UnauthedSocket::connect(
+							websocket,
+							extensions,
+							Arc::downgrade(&*board),
+							connection,
+							users_db,
+						)
+					}))
 				})
-				.into_response()
-			} else {
-				StatusCode::UNPROCESSABLE_ENTITY.into_response()
-			}
 		})
-		.recover(|rejection: Rejection| {
-			async {
-				if let Some(err) = rejection.find::<serde_qs::Error>() {
-					Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
-				} else {
-					Err(rejection)
-				}
+		.recover(|rejection: Rejection| async {
+			if let Some(err) = rejection.find::<serde_qs::Error>() {
+				Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
+			} else {
+				Err(rejection)
 			}
 		})
 }

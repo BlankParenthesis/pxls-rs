@@ -14,12 +14,11 @@ use std::{
 };
 
 use bytes::BufMut;
-use sea_orm::DbErr;
 use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::filter::body::patch::BinaryPatch;
+use crate::{filter::body::patch::BinaryPatch, database::BoardsDatabaseError};
 use crate::filter::response::paginated_list::PageToken;
 use crate::AsyncWrite;
 use crate::socket::{AuthedSocket, packet};
@@ -43,7 +42,7 @@ pub enum PlaceError {
 	NoOp,
 	Cooldown,
 	OutOfBounds,
-	DatabaseError(sea_orm::DbErr),
+	DatabaseError(BoardsDatabaseError),
 }
 
 impl Reject for PlaceError {}
@@ -216,7 +215,7 @@ impl Board {
 		palette: Option<Palette>,
 		max_pixels_available: Option<u32>,
 		connection: &BoardsConnection,
-	) -> Result<(), DbErr> {
+	) -> Result<(), BoardsDatabaseError> {
 		assert!(
 			name.is_some()
 			|| palette.is_some()
@@ -275,7 +274,7 @@ impl Board {
 	pub async fn delete(
 		mut self,
 		connection: &BoardsConnection,
-	) -> Result<(), DbErr> {
+	) -> Result<(), BoardsDatabaseError> {
 		self.connections.close();
 		connection.delete_board(self.id).await
 	}
@@ -284,7 +283,7 @@ impl Board {
 		&self,
 		user_id: &str,
 		connection: &BoardsConnection,
-	) -> Result<u32, DbErr> {
+	) -> Result<u32, BoardsDatabaseError> {
 		connection.last_place_time(self.id, user_id.to_owned()).await
 	}
 
@@ -324,7 +323,7 @@ impl Board {
 		}?;
 
 		if sector.colors[sector_offset] == color {
-			return Err(PlaceError::NoOp.into());
+			return Err(PlaceError::NoOp);
 		}
 
 		let timestamp = self.current_timestamp();
@@ -334,7 +333,7 @@ impl Board {
 		).await.map_err(PlaceError::DatabaseError)?;
 
 		if cooldown_info.pixels_available == 0 {
-			return Err(PlaceError::Cooldown.into());
+			return Err(PlaceError::Cooldown);
 		}
 
 		// Race conditions on this are guarded by the writable sector above,
@@ -387,7 +386,7 @@ impl Board {
 		limit: usize,
 		order: Order,
 		connection: &BoardsConnection,
-	) -> Result<(Option<PageToken>, Vec<Placement>), DbErr> {
+	) -> Result<(Option<PageToken>, Vec<Placement>), BoardsDatabaseError> {
 		connection.list_placements(self.id, token, limit, order).await
 	}
 
@@ -395,7 +394,7 @@ impl Board {
 		&self,
 		position: u64,
 		connection: &BoardsConnection,
-	) -> Result<Option<Placement>, DbErr> {
+	) -> Result<Option<Placement>, BoardsDatabaseError> {
 		connection.get_placement(self.id, position).await
 	}
 
@@ -420,7 +419,7 @@ impl Board {
 		&self,
 		placement: Option<&Placement>,
 		connection: &BoardsConnection,
-	) -> Result<Vec<SystemTime>, DbErr> {
+	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
 			let activity = self.user_count_for_time(
 				placement.timestamp,
@@ -464,7 +463,7 @@ impl Board {
 		&self,
 		user_id: &str,
 		connection: &BoardsConnection,
-	) -> Result<CooldownInfo, DbErr> {
+	) -> Result<CooldownInfo, BoardsDatabaseError> {
 		let placements = connection.list_user_placements(
 			self.id,
 			user_id,
@@ -528,7 +527,7 @@ impl Board {
 		&self,
 		timestamp: u32,
 		connection: &BoardsConnection,
-	) -> Result<usize, DbErr> {
+	) -> Result<usize, BoardsDatabaseError> {
 		let idle_timeout = self.idle_timeout();
 		let max_time = i32::try_from(timestamp).unwrap();
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
@@ -539,7 +538,7 @@ impl Board {
 	pub async fn user_count(
 		&self,
 		connection: &BoardsConnection,
-	) -> Result<usize, DbErr> {
+	) -> Result<usize, BoardsDatabaseError> {
 		self.user_count_for_time(self.current_timestamp(), connection).await
 	}
 
@@ -552,7 +551,7 @@ impl Board {
 		&mut self,
 		socket: &Arc<AuthedSocket>,
 		connection: &BoardsConnection,
-	) -> Result<(), DbErr> {
+	) -> Result<(), BoardsDatabaseError> {
 		let id = socket.user_id().await;
 
 		let cooldown_info = if let Some(ref user_id) = id {

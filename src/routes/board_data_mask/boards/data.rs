@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warp::{
 	http::StatusCode,
 	reject::Rejection,
-	reply::{self, Reply},
+	reply::Reply,
 	Filter,
 };
 

@@ -2,15 +2,23 @@ use std::{convert::*, io::*};
 use std::io::Read;
 
 use async_trait::async_trait;
+use reqwest::StatusCode;
+use warp::reply::Reply;
 
-use crate::database::BoardsConnection;
+use crate::database::{BoardsConnection, BoardsDatabaseError};
 use crate::{AsyncRead, AsyncWrite, Len};
 use super::{SectorBuffer, SectorCache};
 
 #[derive(Debug)]
 pub enum IoError {
 	Io(std::io::Error),
-	Sql(sea_orm::DbErr),
+	Sql(BoardsDatabaseError),
+}
+
+impl Reply for IoError {
+	fn into_response(self) -> warp::reply::Response {
+		StatusCode::INTERNAL_SERVER_ERROR.into_response()
+	}
 }
 
 impl From<std::io::Error> for IoError {
@@ -19,8 +27,8 @@ impl From<std::io::Error> for IoError {
 	}
 }
 
-impl From<sea_orm::DbErr> for IoError {
-	fn from(value: sea_orm::DbErr) -> Self {
+impl From<BoardsDatabaseError> for IoError {
+	fn from(value: BoardsDatabaseError) -> Self {
 		Self::Sql(value)
 	}
 }

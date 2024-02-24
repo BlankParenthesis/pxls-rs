@@ -1,11 +1,11 @@
 use bytes::BytesMut;
 use num_enum::TryFromPrimitive;
-use sea_orm::{DbErr, ConnectionTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, TransactionTrait};
 
 mod cache;
 mod access;
 
-use crate::database::BoardsConnectionGeneric;
+use crate::database::{BoardsConnectionGeneric, BoardsDatabaseError};
 
 pub use cache::SectorCache;
 pub use access::{SectorAccessor, IoError};
@@ -53,7 +53,7 @@ impl Sector {
 		index: i32,
 		size: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<Self, DbErr> {
+	) -> Result<Self, BoardsDatabaseError> {
 		// NOTE: default mask is NoPlace so that new boards require activation
 		// before use.
 		let mask = vec![MaskValue::NoPlace as u8; size];
@@ -66,7 +66,7 @@ impl Sector {
 		board_id: i32,
 		sector_index: i32,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<Option<Self>, DbErr> {
+	) -> Result<Option<Self>, BoardsDatabaseError> {
 		connection.get_sector(board_id, sector_index).await
 	}
 
@@ -74,7 +74,7 @@ impl Sector {
 		&self,
 		buffer: SectorBuffer,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<(), DbErr> {
+	) -> Result<(), BoardsDatabaseError> {
 		match buffer {
 			SectorBuffer::Colors => unimplemented!(),
 			SectorBuffer::Timestamps => unimplemented!(),

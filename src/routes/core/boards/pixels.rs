@@ -50,7 +50,6 @@ pub fn list(
 						next,
 					})
 				})
-				.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)
 		})
 }
 
@@ -70,13 +69,9 @@ pub fn get(
 		.then(|board: PassableBoard, position, _, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting a pixel");
-			board.lookup(position, &connection).await
-				.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)
-				.and_then(|placement| {
-					placement
-						.map(|placement| warp::reply::json(&placement))
-						.ok_or(StatusCode::NOT_FOUND)
-				})
+			board.lookup(position, &connection).await?
+				.map(|placement| warp::reply::json(&placement))
+				.ok_or(StatusCode::NOT_FOUND)
 		})
 }
 

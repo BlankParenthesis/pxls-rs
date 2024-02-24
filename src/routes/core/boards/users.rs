@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use reqwest::StatusCode;
 use warp::{Reply, Rejection};
 use warp::Filter;
 
@@ -40,6 +39,5 @@ pub fn get(
 					let idle_timeout = board.idle_timeout();
 					warp::reply::json(&UserCount { active, idle_timeout })
 				})
-				.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)
 		})
 }

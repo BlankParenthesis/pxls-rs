@@ -46,8 +46,7 @@ pub fn post(
 					data.shape,
 					data.palette,
 					data.max_pixels_available,
-				).await
-					.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)?;
+				).await?;
 
 				let id = board.id as usize;
 
@@ -95,8 +94,7 @@ pub fn patch(
 				patch.max_pixels_available,
 				&connection,
 			).await
-				.map(|()| reference::created(board))
-				.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+				.map(|()| reference::created(board)) // TODO: is "created" correct?
 		})
 }
 
@@ -118,6 +116,5 @@ pub fn delete(
 				.expect("Board went missing during deletion")
 				.delete(&connection).await
 				.map(|_| StatusCode::NO_CONTENT)
-				.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 		})
 }

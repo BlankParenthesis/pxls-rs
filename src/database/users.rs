@@ -24,45 +24,54 @@ use warp::{reject::Reject, reply::Reply};
 
 use crate::{config::CONFIG, permissions::Permission};
 
-// TODO: rename
 #[derive(Debug)]
-pub enum DatabaseError {
+pub enum UsersDatabaseError {
 	Fetch(FetchError),
 	Create(CreateError),
 	Update(UpdateError),
 	Delete(DeleteError),
 }
 
-impl Reject for DatabaseError {}
-impl Reply for &DatabaseError {
-	fn into_response(self) -> warp::reply::Response {
-		match self {
-			DatabaseError::Update(UpdateError::NoItem) |
-			DatabaseError::Delete(DeleteError::NoItem) |
-			DatabaseError::Fetch(FetchError::NoItems) => {
-				StatusCode::NOT_FOUND.into_response()
+impl Reject for UsersDatabaseError {}
+impl From<&UsersDatabaseError> for StatusCode {
+	fn from(error: &UsersDatabaseError) -> Self {
+		match error {
+			UsersDatabaseError::Update(UpdateError::NoItem) |
+			UsersDatabaseError::Delete(DeleteError::NoItem) |
+			UsersDatabaseError::Fetch(FetchError::NoItems) => {
+				StatusCode::NOT_FOUND
 			},
-			DatabaseError::Fetch(FetchError::InvalidPage) => {
-				StatusCode::BAD_REQUEST.into_response()
+			UsersDatabaseError::Fetch(FetchError::InvalidPage) => {
+				StatusCode::BAD_REQUEST
 			},
-			DatabaseError::Create(CreateError::AlreadyExists) => {
-				StatusCode::CONFLICT.into_response()
+			UsersDatabaseError::Create(CreateError::AlreadyExists) => {
+				StatusCode::CONFLICT
 			},
-			DatabaseError::Fetch(FetchError::MissingPagerData) |
-			DatabaseError::Fetch(FetchError::AmbiguousItems) |
-			DatabaseError::Fetch(FetchError::ParseError(_)) |
-			DatabaseError::Fetch(FetchError::LdapError(_)) |
-			DatabaseError::Create(CreateError::LdapError(_)) |
-			DatabaseError::Update(UpdateError::LdapError(_)) |
-			DatabaseError::Delete(DeleteError::LdapError(_)) => {
-				StatusCode::INTERNAL_SERVER_ERROR.into_response()
+			UsersDatabaseError::Fetch(FetchError::MissingPagerData) |
+			UsersDatabaseError::Fetch(FetchError::AmbiguousItems) |
+			UsersDatabaseError::Fetch(FetchError::ParseError(_)) |
+			UsersDatabaseError::Fetch(FetchError::LdapError(_)) |
+			UsersDatabaseError::Create(CreateError::LdapError(_)) |
+			UsersDatabaseError::Update(UpdateError::LdapError(_)) |
+			UsersDatabaseError::Delete(DeleteError::LdapError(_)) => {
+				StatusCode::INTERNAL_SERVER_ERROR
 			},
 		}
 	}
 }
-impl Reply for DatabaseError {
+impl From<UsersDatabaseError> for StatusCode {
+	fn from(error: UsersDatabaseError) -> Self {
+		error.into()
+	}
+}
+impl Reply for &UsersDatabaseError {
 	fn into_response(self) -> warp::reply::Response {
-		(&self).into_response()
+		StatusCode::from(self).into_response()
+	}
+}
+impl Reply for UsersDatabaseError {
+	fn into_response(self) -> warp::reply::Response {
+		StatusCode::from(&self).into_response()
 	}
 }
 
@@ -94,25 +103,25 @@ pub enum DeleteError {
 	NoItem,
 }
 
-impl From<FetchError> for DatabaseError {
+impl From<FetchError> for UsersDatabaseError {
 	fn from(value: FetchError) -> Self {
 		Self::Fetch(value)
 	}
 }
 
-impl From<CreateError> for DatabaseError {
+impl From<CreateError> for UsersDatabaseError {
 	fn from(value: CreateError) -> Self {
 		Self::Create(value)
 	}
 }
 
-impl From<UpdateError> for DatabaseError {
+impl From<UpdateError> for UsersDatabaseError {
 	fn from(value: UpdateError) -> Self {
 		Self::Update(value)
 	}
 }
 
-impl From<DeleteError> for DatabaseError {
+impl From<DeleteError> for UsersDatabaseError {
 	fn from(value: DeleteError) -> Self {
 		Self::Delete(value)
 	}
@@ -164,7 +173,7 @@ impl UsersConnection {
 		&mut self,
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<User>), DatabaseError> {
+	) -> Result<(PageToken, Vec<User>), UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
@@ -208,7 +217,7 @@ impl UsersConnection {
 	pub async fn get_user(
 		&mut self,
 		id: &str,
-	) -> Result<User, DatabaseError> {
+	) -> Result<User, UsersDatabaseError> {
 		let filter = format!("({}={})", CONFIG.ldap_users_id_field, ldap_escape(id));
 		let (results, _) = self.connection
 			.search(
@@ -232,7 +241,7 @@ impl UsersConnection {
 				User::try_from(result)
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
-					.map_err(DatabaseError::from)
+					.map_err(UsersDatabaseError::from)
 			},
 			_ => Err(FetchError::AmbiguousItems.into()),
 		}
@@ -242,7 +251,7 @@ impl UsersConnection {
 		&mut self,
 		id: &str,
 		name: &str,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let result = self.connection
 			.modify(&user_dn(id), vec![
 				Mod::Replace("displayName", HashSet::from([name]))
@@ -255,14 +264,14 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
-				.map_err(DatabaseError::from)
+				.map_err(UsersDatabaseError::from)
 		}
 	}
 
 	pub async fn delete_user(
 		&mut self,
 		id: &str,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let result = self.connection
 			.delete(&user_dn(id)).await
 			.map_err(DeleteError::LdapError)?;
@@ -273,7 +282,7 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(DeleteError::LdapError)
-				.map_err(DatabaseError::from),
+				.map_err(UsersDatabaseError::from),
 		}
 	}
 
@@ -282,7 +291,7 @@ impl UsersConnection {
 		id: &str, 
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<Role>), DatabaseError> {
+	) -> Result<(PageToken, Vec<Role>), UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
@@ -335,7 +344,7 @@ impl UsersConnection {
 		&mut self,
 		page: PageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<Role>), DatabaseError> {
+	) -> Result<(PageToken, Vec<Role>), UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
@@ -378,7 +387,7 @@ impl UsersConnection {
 	pub async fn get_role(
 		&mut self,
 		name: &str,
-	) -> Result<Role, DatabaseError> {
+	) -> Result<Role, UsersDatabaseError> {
 		let filter = format!("(cn={})", ldap_escape(name));
 		let (results, _) = self.connection
 			.search(
@@ -402,7 +411,7 @@ impl UsersConnection {
 				Role::try_from(result)
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
-					.map_err(DatabaseError::from)
+					.map_err(UsersDatabaseError::from)
 			},
 			_ => Err(FetchError::AmbiguousItems.into()),
 		}
@@ -411,7 +420,7 @@ impl UsersConnection {
 	pub async fn create_role(
 		&mut self,
 		role: &Role,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let name = ldap_escape(&role.name).to_string();
 		let role_dn = format!(
 			"cn={},ou={},{}",
@@ -448,7 +457,7 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(CreateError::LdapError)
-				.map_err(DatabaseError::from),
+				.map_err(UsersDatabaseError::from),
 		}
 	}
 
@@ -458,7 +467,7 @@ impl UsersConnection {
 		new_name: Option<&str>,
 		icon: Option<Option<Url>>,
 		permissions: Option<Vec<Permission>>,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let mut role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -526,14 +535,14 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
-				.map_err(DatabaseError::from),
+				.map_err(UsersDatabaseError::from),
 		}
 	}
 
 	pub async fn delete_role(
 		&mut self,
 		name: &str,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -551,14 +560,14 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(DeleteError::LdapError)
-				.map_err(DatabaseError::from),
+				.map_err(UsersDatabaseError::from),
 		}
 	}
 
 	pub async fn user_permissions(
 		&mut self,
 		id: &str,
-	) -> Result<EnumSet<Permission>, DatabaseError> {
+	) -> Result<EnumSet<Permission>, UsersDatabaseError> {
 		let filter = format!("(member={})", user_dn(id));
 		let (results, _) = self.connection
 			.search(
@@ -586,7 +595,7 @@ impl UsersConnection {
 		&mut self,
 		uid: &str,
 		role: &str,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(role),
@@ -606,7 +615,7 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
-				.map_err(DatabaseError::from),
+				.map_err(UsersDatabaseError::from),
 		}
 	}
 
@@ -614,7 +623,7 @@ impl UsersConnection {
 		&mut self,
 		uid: &str,
 		role: &str,
-	) -> Result<(), DatabaseError> {
+	) -> Result<(), UsersDatabaseError> {
 		let role_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(role),
@@ -634,7 +643,7 @@ impl UsersConnection {
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
-				.map_err(DatabaseError::from),
+				.map_err(UsersDatabaseError::from),
 		}
 	}
 }

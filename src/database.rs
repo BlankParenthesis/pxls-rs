@@ -7,9 +7,9 @@ pub use users::{
 	UsersDatabase,
 	UsersConnection,
 	Role,
-	DatabaseError,
+	UsersDatabaseError,
 };
-pub use boards::BoardsDatabase;
+pub use boards::{BoardsDatabase, BoardsDatabaseError};
 
 pub type BoardsConnection = boards::BoardsConnection<DatabaseConnection>;
 pub type BoardsConnectionGeneric<T> = boards::BoardsConnection<T>;
