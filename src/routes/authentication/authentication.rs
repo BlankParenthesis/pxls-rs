@@ -1,9 +1,8 @@
 use crate::config::CONFIG;
 
-use reqwest::StatusCode;
 use serde::Serialize;
 use url::Url;
-use warp::{Filter, Reply, Rejection, reply::json};
+use warp::{Filter, Reply, Rejection};
 
 #[derive(Serialize)]
 pub struct AuthInfo {
@@ -25,5 +24,5 @@ pub fn get() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone 
 	warp::path("auth")
 		.and(warp::path::end())
 		.and(warp::get())
-		.map(|| warp::reply::with_status(json(&*AUTH_INFO), StatusCode::OK).into_response())
+		.map(|| warp::reply::json(&*AUTH_INFO))
 }

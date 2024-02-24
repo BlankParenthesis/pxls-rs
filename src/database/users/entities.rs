@@ -2,10 +2,10 @@ use ldap3::SearchEntry;
 use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
 use url::{Url, ParseError as UrlParseError};
+use warp::http::Uri;
 
 use crate::config::CONFIG;
 use crate::permissions::Permission;
-use crate::filter::response::reference::Reference;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -141,12 +141,9 @@ impl TryFrom<SearchEntry> for User {
 	}
 }
 
-impl<'l> From<&'l User> for Reference<'l, User> {
-	fn from(user: &'l User) -> Self {
-		Self {
-			uri: format!("/users/{}", user.id).parse().unwrap(),
-			view: user,
-		}
+impl From<&User> for Uri {
+	fn from(user: &User) -> Self {
+		format!("/users/{}", user.id).parse().unwrap()
 	}
 }
 
@@ -204,11 +201,8 @@ impl TryFrom<SearchEntry> for Role {
 	}
 }
 
-impl<'l> From<&'l Role> for Reference<'l, Role> {
-	fn from(role: &'l Role) -> Self {
-		Self {
-			uri: format!("/roles/{}", role.name).parse().unwrap(),
-			view: role,
-		}
+impl From<&Role> for Uri {
+	fn from(role: &Role) -> Self {
+		format!("/roles/{}", role.name).parse().unwrap()
 	}
 }

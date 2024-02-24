@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use reqwest::StatusCode;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
-use warp::{Filter, Reply, Rejection, reply::json};
+use warp::{Filter, Reply, Rejection};
 
 use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
@@ -51,8 +50,5 @@ pub fn get(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorized(users_db, Permission::Info.into()))
-		.then(|_, _| async move  {
-			warp::reply::with_status(json(&*SERVER_INFO), StatusCode::OK)
-				.into_response()
-		})
+		.map(|_, _| warp::reply::json(&*SERVER_INFO))
 }

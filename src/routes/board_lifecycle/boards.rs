@@ -3,11 +3,10 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
-use warp::http::Uri;
 use warp::{
-	http::{StatusCode, header},
+	http::StatusCode,
 	reject::Rejection,
-	reply::{Reply, self, json},
+	reply::Reply,
 	Filter,
 };
 
@@ -16,7 +15,7 @@ use crate::board::Palette;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard, PendingDelete};
 use crate::filter::resource::database;
-use crate::filter::response::reference::Reference;
+use crate::filter::response::reference;
 use crate::permissions::Permission;
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 
@@ -47,14 +46,8 @@ pub fn post(
 					data.shape,
 					data.palette,
 					data.max_pixels_available,
-				).await;
-
-				let board = match board {
-					Ok(board) => board,
-					Err(err) => {
-						return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-					}
-				};
+				).await
+					.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)?;
 
 				let id = board.id as usize;
 
@@ -65,15 +58,7 @@ pub fn post(
 					.read().await;
 				let board = board.as_ref().expect("Board went missing during creation");
 
-				let mut response = json(&Reference::from(board)).into_response();
-				response = reply::with_status(response, StatusCode::CREATED).into_response();
-				response = reply::with_header(
-					response,
-					header::LOCATION,
-					Uri::from(board).to_string(),
-				)
-				.into_response();
-				response
+				Ok::<_, StatusCode>(reference::created(board))
 			}
 		})
 }
@@ -103,32 +88,15 @@ pub fn patch(
 			let mut board = board.write().await;
 			let board = board.as_mut().expect("Board went missing when patching");
 
-			let update = board.update_info(
+			board.update_info(
 				patch.name,
 				patch.shape,
 				patch.palette,
 				patch.max_pixels_available,
 				&connection,
-			);
-
-			match update.await {
-				Ok(()) => {
-					let mut response = json(&Reference::from(&*board)).into_response();
-					response = reply::with_status(
-						response,
-						StatusCode::CREATED,
-					).into_response();
-					response = reply::with_header(
-						response,
-						header::LOCATION,
-						Uri::from(&*board).to_string(),
-					).into_response();
-					response
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+			).await
+				.map(|()| reference::created(board))
+				.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 		})
 }
 
@@ -146,12 +114,10 @@ pub fn delete(
 		.then(move |mut deletion: PendingDelete, _, _, connection: BoardsConnection| async move {
 			let board = deletion.perform();
 			let mut board = board.write().await;
-			let board = board.take().expect("Board went missing during deletion");
-			match board.delete(&connection).await {
-				Ok(()) => StatusCode::NO_CONTENT.into_response(),
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+			board.take()
+				.expect("Board went missing during deletion")
+				.delete(&connection).await
+				.map(|_| StatusCode::NO_CONTENT)
+				.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 		})
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warp::{
 	http::StatusCode,
 	reject::Rejection,
-	reply::{self, Reply},
+	reply::Reply,
 	Filter,
 };
 
@@ -65,13 +65,9 @@ pub fn patch_initial(
 		.then(|board: PassableBoard, patch: BinaryPatch, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.write().await;
-			let patch_result = board.as_ref()
+			board.as_ref()
 				.expect("Board went missing when patching initial data")
-				.try_patch_initial(&patch, &connection).await;
-
-			match patch_result {
-				Ok(_) => StatusCode::NO_CONTENT.into_response(),
-				Err(e) => reply::with_status(e, StatusCode::CONFLICT).into_response(),
-			}
+				.try_patch_initial(&patch, &connection).await
+				.map(|_| StatusCode::NO_CONTENT)
 		})
 }

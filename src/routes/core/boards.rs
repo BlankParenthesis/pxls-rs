@@ -3,7 +3,6 @@ use std::ops::Deref;
 
 use reqwest::StatusCode;
 use warp::hyper::Response;
-use warp::reply::{json, self};
 use warp::ws::Ws;
 use warp::{Reply, Rejection};
 use warp::{http::header, Filter};
@@ -43,7 +42,6 @@ pub fn list(
 					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 					.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
-				let boards = Arc::clone(&boards);
 				let boards = boards.read().await;
 				let boards = boards.iter()
 					.map(|(_id, board)| board)
@@ -77,7 +75,7 @@ pub fn list(
 				// TODO: standardize generation of this
 				let response = Page { previous, items: items.as_slice(), next };
 
-				json(&response).into_response()
+				warp::reply::json(&response)
 			}
 		})
 }
@@ -115,7 +113,7 @@ pub fn get(
 		.then(|board: PassableBoard, user, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board wend missing when getting info");
-			let mut response = json(&board.info).into_response();
+			let mut response = warp::reply::json(&board.info).into_response();
 
 			if let Some(Bearer { id, .. }) = user {
 				let cooldown_info = board.user_cooldown_info(
@@ -126,14 +124,14 @@ pub fn get(
 				match cooldown_info {
 					Ok(cooldown_info) => {
 						for (key, value) in cooldown_info.into_headers() {
-							response = reply::with_header(response, key, value)
+							response = warp::reply::with_header(response, key, value)
 								.into_response();
 						}
 					},
 					Err(err) => {
 						// Indicate there was an error, but keep the body since
 						// we have the data and are only missing the cooldown.
-						response = reply::with_status(
+						response = warp::reply::with_status(
 							response,
 							StatusCode::INTERNAL_SERVER_ERROR,
 						).into_response()

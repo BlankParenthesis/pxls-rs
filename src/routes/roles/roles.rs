@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use reqwest::header;
 use serde::Deserialize;
 use url::Url;
 use warp::{
@@ -11,7 +10,7 @@ use warp::{
 };
 
 use crate::filter::response::paginated_list::{PaginationOptions, Page, DEFAULT_PAGE_ITEM_LIMIT, MAX_PAGE_ITEM_LIMIT};
-use crate::filter::response::reference::Reference;
+use crate::filter::response::reference::{Reference, self};
 use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, Role};
@@ -24,7 +23,7 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(authorized(users_db, Permission::RolesList.into()))
-		.and_then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
+		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
@@ -46,7 +45,6 @@ pub fn list(
 
 					warp::reply::json(&page)
 				})
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -59,10 +57,9 @@ pub fn get(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorized(users_db, Permission::RolesGet.into()))
-		.and_then(move |role: String, _, mut connection: UsersConnection| async move {
+		.then(move |role: String, _, mut connection: UsersConnection| async move {
 			connection.get_role(&role).await
 				.map(|role| warp::reply::json(&role))
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -74,22 +71,10 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorized(users_db, Permission::RolesPost.into()))
-		.and_then(move |role: Role, _, mut connection: UsersConnection| async move {
+		.then(move |role: Role, _, mut connection: UsersConnection| async move {
 			connection.create_role(&role).await?;
 			connection.get_role(&role.name).await
-				.map(|role| {
-					let reference = &Reference::from(&role);
-					let response = warp::reply::with_status(
-						warp::reply::json(reference),
-						StatusCode::CREATED
-					);
-					warp::reply::with_header(
-						response,
-						header::LOCATION,
-						reference.uri.to_string(),
-					)
-				})
-				.map_err(warp::reject::custom)
+				.map(|role| reference::created(&role))
 		})
 }
 
@@ -101,6 +86,7 @@ struct RoleUpdate {
 	permissions: Option<Vec<Permission>>,
 }
 
+// TODO: for this and all other reasonable patches: require if-not-modified precondition
 pub fn patch(
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -110,7 +96,7 @@ pub fn patch(
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorized(users_db, Permission::RolesPatch.into()))
-		.and_then(move |role: String, new_role: RoleUpdate, _, mut connection: UsersConnection| async move {
+		.then(move |role: String, new_role: RoleUpdate, _, mut connection: UsersConnection| async move {
 			connection.update_role(
 				role.as_str(),
 				new_role.name.as_deref(),
@@ -119,7 +105,6 @@ pub fn patch(
 			).await?;
 			connection.get_role(&role).await
 				.map(|role| warp::reply::json(&role))
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -131,9 +116,8 @@ pub fn delete(
 		.and(warp::path::end())
 		.and(warp::delete())
 		.and(authorized(users_db, Permission::RolesDelete.into()))
-		.and_then(move |role: String, _, mut connection: UsersConnection| async move {
+		.then(move |role: String, _, mut connection: UsersConnection| async move {
 			connection.delete_role(&role).await
-				.map(|()| StatusCode::OK) 
-				.map_err(warp::reject::custom)
+				.map(|()| StatusCode::NO_CONTENT) 
 		})
 }

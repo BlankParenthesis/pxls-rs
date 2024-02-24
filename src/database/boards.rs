@@ -33,6 +33,7 @@ use migration::Migrator;
 
 use super::Order;
 
+// TODO: bind to a different error which implements Reply
 pub type DbResult<T> = Result<T, sea_orm::DbErr>;
 
 pub struct BoardsDatabase {

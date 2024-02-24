@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use reqwest::StatusCode;
-use warp::reply::json;
 use warp::{Reply, Rejection};
 use warp::Filter;
 use serde::Deserialize;
@@ -38,32 +37,20 @@ pub fn list(
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when listing pixels");
 
-			let placements = board.list_placements(
-				page,
-				limit,
-				Order::Forward,
-				&connection
-			).await;
-
-			let (next, placements) = match placements {
-				Ok((token, placements)) => {
-					let token = token.map(|token| format!(
+			board.list_placements(page, limit, Order::Forward, &connection)
+				.await
+				.map(|(token, placements)| {
+					let next = token.map(|token| format!(
 						"/boards/{}/pixels?page={}&limit={}",
 						board.id, token, limit
 					));
-					(token, placements)
-				},
-				Err(err) => {
-					return StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			};
-
-			json(&Page {
-				previous: None,
-				items: placements.as_slice(),
-				next,
-			})
-			.into_response()
+					warp::reply::json(&Page {
+						previous: None,
+						items: placements.as_slice(),
+						next,
+					})
+				})
+				.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)
 		})
 }
 
@@ -83,16 +70,13 @@ pub fn get(
 		.then(|board: PassableBoard, position, _, _, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting a pixel");
-			match board.lookup(position, &connection).await {
-				Ok(placement) => {
+			board.lookup(position, &connection).await
+				.map_err(|err| StatusCode::INTERNAL_SERVER_ERROR)
+				.and_then(|placement| {
 					placement
-						.map(|placement| json(&placement).into_response())
-						.unwrap_or_else(|| StatusCode::NOT_FOUND.into_response())
-				},
-				Err(err) => {
-					StatusCode::INTERNAL_SERVER_ERROR.into_response()
-				},
-			}
+						.map(|placement| warp::reply::json(&placement))
+						.ok_or(StatusCode::NOT_FOUND)
+				})
 		})
 }
 
@@ -132,7 +116,7 @@ pub fn post(
 			match place_attempt {
 				Ok(placement) => {
 					let mut response = warp::reply::with_status(
-						json(&placement).into_response(),
+						warp::reply::json(&placement).into_response(),
 						StatusCode::CREATED,
 					).into_response();
 

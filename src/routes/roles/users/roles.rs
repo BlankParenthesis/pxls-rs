@@ -108,7 +108,7 @@ pub fn post(
 			}
 		})
 		.untuple_one()
-		.and_then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
+		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
 			connection.add_user_role(&uid, &role.role).await?;
 			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
 				.map(|(page_token, roles)| {
@@ -124,9 +124,8 @@ pub fn post(
 						previous: None, // TODO: previous page
 					};
 
-					warp::reply::json(&page).into_response()
+					warp::reply::json(&page)
 				})
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -161,7 +160,7 @@ pub fn delete(
 			}
 		})
 		.untuple_one()
-		.and_then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
+		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
 			connection.remove_user_role(&uid, &role.role).await?;
 			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
 				.map(|(page_token, roles)| {
@@ -177,8 +176,7 @@ pub fn delete(
 						previous: None, // TODO: previous page
 					};
 
-					warp::reply::json(&page).into_response()
+					warp::reply::json(&page)
 				})
-				.map_err(warp::reject::custom)
 		})
 }

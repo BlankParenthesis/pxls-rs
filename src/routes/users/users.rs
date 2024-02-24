@@ -23,7 +23,7 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::UsersList.into()))
-		.and_then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
+		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
@@ -43,9 +43,8 @@ pub fn list(
 						previous: None,
 					};
 
-					warp::reply::json(&page).into_response()
+					warp::reply::json(&page)
 				})
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -77,10 +76,9 @@ pub fn get(
 			}
 		})
 		.untuple_one()
-		.and_then(move |uid: String, mut connection: UsersConnection| async move {
+		.then(move |uid: String, mut connection: UsersConnection| async move {
 			connection.get_user(&uid).await
 				.map(|user| warp::reply::json(&user))
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -96,9 +94,9 @@ pub fn current(
 			if let Some(uid) = user.map(|b| b.id) {
 				let location = format!("/users/{}/{}", uid, tail.as_str())
 					.parse::<Uri>().unwrap();
-				warp::redirect::temporary(location).into_response()
+				Ok(warp::redirect::temporary(location))
 			} else {
-				StatusCode::UNAUTHORIZED.into_response()
+				Err(StatusCode::UNAUTHORIZED)
 			}
 		})
 }
@@ -137,13 +135,12 @@ pub fn patch(
 			}
 		})
 		.untuple_one()
-		.and_then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| async move {
+		.then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| async move {
 			// TODO: validate username
 
 			connection.update_user(&uid, &update.name).await?;
 			connection.get_user(&uid).await
 				.map(|user| warp::reply::json(&user))
-				.map_err(warp::reject::custom)
 		})
 }
 
@@ -175,10 +172,9 @@ pub fn delete(
 			}
 		})
 		.untuple_one()
-		.and_then(move |uid: String, mut connection: UsersConnection| async move {
+		.then(move |uid: String, mut connection: UsersConnection| async move {
 			connection.delete_user(&uid).await
-				.map(|_| StatusCode::OK)
-				.map_err(warp::reject::custom)
+				.map(|_| StatusCode::NO_CONTENT)
 		})
 }
 

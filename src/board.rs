@@ -15,12 +15,12 @@ use std::{
 
 use bytes::BufMut;
 use sea_orm::DbErr;
+use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::filter::body::patch::BinaryPatch;
 use crate::filter::response::paginated_list::PageToken;
-use crate::filter::response::reference::Reference;
 use crate::AsyncWrite;
 use crate::socket::{AuthedSocket, packet};
 use crate::database::{BoardsConnection, Order};
@@ -101,12 +101,10 @@ impl From<&Board> for Uri {
 	}
 }
 
-impl<'l> From<&'l Board> for Reference<'l, BoardInfo> {
-	fn from(board: &'l Board) -> Self {
-		Self {
-			uri: board.into(),
-			view: &board.info,
-		}
+impl Serialize for Board {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where S: serde::Serializer {
+		self.info.serialize(serializer)
 	}
 }
 

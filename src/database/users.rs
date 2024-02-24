@@ -60,6 +60,11 @@ impl Reply for &DatabaseError {
 		}
 	}
 }
+impl Reply for DatabaseError {
+	fn into_response(self) -> warp::reply::Response {
+		(&self).into_response()
+	}
+}
 
 #[derive(Debug)]
 pub enum FetchError {
@@ -325,6 +330,7 @@ impl UsersConnection {
 		}
 	}
 
+	// TODO: consider returning Page
 	pub async fn list_roles(
 		&mut self,
 		page: PageToken,
