@@ -5,10 +5,15 @@ use warp::{Reply, Rejection};
 use warp::Filter;
 use serde::Deserialize;
 
+use crate::board::PlacementPageToken;
 use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
-use crate::filter::response::paginated_list::{PageToken, PaginationOptions, Page, DEFAULT_PAGE_ITEM_LIMIT, MAX_PAGE_ITEM_LIMIT};
+use crate::filter::response::paginated_list::{
+	PaginationOptions,
+	DEFAULT_PAGE_ITEM_LIMIT,
+	MAX_PAGE_ITEM_LIMIT,
+};
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
@@ -27,8 +32,8 @@ pub fn list(
 		.and(warp::query())
 		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, options: PaginationOptions<PageToken>, _, _, connection: BoardsConnection| async move {
-			let page = options.page.unwrap_or_default();
+		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, _, _, connection: BoardsConnection| async move {
+			let page = options.page;
 			let limit = options
 				.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
@@ -39,17 +44,7 @@ pub fn list(
 
 			board.list_placements(page, limit, Order::Forward, &connection)
 				.await
-				.map(|(token, placements)| {
-					let next = token.map(|token| format!(
-						"/boards/{}/pixels?page={}&limit={}",
-						board.id, token, limit
-					));
-					warp::reply::json(&Page {
-						previous: None,
-						items: placements.as_slice(),
-						next,
-					})
-				})
+				.map(|page| warp::reply::json(&page))
 		})
 }
 

@@ -8,6 +8,7 @@ pub use users::{
 	UsersConnection,
 	Role,
 	UsersDatabaseError,
+	LdapPageToken,
 };
 pub use boards::{BoardsDatabase, BoardsDatabaseError};
 

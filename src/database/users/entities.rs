@@ -5,6 +5,7 @@ use url::{Url, ParseError as UrlParseError};
 use warp::http::Uri;
 
 use crate::config::CONFIG;
+use crate::filter::response::reference::Referenceable;
 use crate::permissions::Permission;
 
 #[derive(Debug)]
@@ -147,6 +148,10 @@ impl From<&User> for Uri {
 	}
 }
 
+impl Referenceable for User {
+	fn location(&self) -> Uri { Uri::from(self) }
+}
+
 #[derive(Debug)]
 pub enum RoleParseError {
 	MissingName,
@@ -200,9 +205,12 @@ impl TryFrom<SearchEntry> for Role {
 		Ok(Role{ name, icon, permissions })
 	}
 }
-
 impl From<&Role> for Uri {
 	fn from(role: &Role) -> Self {
 		format!("/roles/{}", role.name).parse().unwrap()
 	}
+}
+
+impl Referenceable for Role {
+	fn location(&self) -> Uri { Uri::from(self) }
 }

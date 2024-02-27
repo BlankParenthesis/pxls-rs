@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt};
 
 use base64::prelude::*;
 use deadpool::managed::PoolError;
@@ -19,10 +19,48 @@ use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
 use reqwest::StatusCode;
+use serde::de::{Deserialize, Visitor};
 use url::Url;
 use warp::{reject::Reject, reply::Reply};
 
-use crate::{config::CONFIG, permissions::Permission};
+use crate::config::CONFIG;
+use crate::permissions::Permission;
+use crate::filter::response::paginated_list::{Page, PageToken};
+
+#[derive(Debug, Default)]
+pub struct LdapPageToken(Vec<u8>);
+
+impl PageToken for LdapPageToken {
+	fn start() -> Self { Self::default() }
+}
+
+impl fmt::Display for LdapPageToken {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", BASE64_URL_SAFE.encode(&self.0))
+	} 
+}
+
+struct Base64Visitor;
+
+impl<'de> Visitor<'de> for Base64Visitor {
+	type Value = Vec<u8>;
+	
+	fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+		write!(formatter, "A base 64 string")
+	}
+
+	fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+	where E: serde::de::Error {
+		BASE64_URL_SAFE.decode(v).map_err(E::custom)
+	}
+}
+
+impl<'de> Deserialize<'de> for LdapPageToken {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where D: serde::Deserializer<'de> {
+		deserializer.deserialize_str(Base64Visitor).map(LdapPageToken)
+	}
+}
 
 #[derive(Debug)]
 pub enum UsersDatabaseError {
@@ -131,8 +169,6 @@ pub struct UsersDatabase {
 	pool: Pool,
 }
 
-pub type PageToken = Option<String>;
-
 #[async_trait::async_trait]
 impl super::Database for UsersDatabase {
 	type Error = PoolError<LdapError>;
@@ -171,14 +207,12 @@ pub struct UsersConnection {
 impl UsersConnection {
 	pub async fn list_users(
 		&mut self,
-		page: PageToken,
+		page: LdapPageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<User>), UsersDatabaseError> {
+	) -> Result<Page<User>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
-			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
-				.unwrap_or(Ok(vec![]))
-				.map_err(|_| FetchError::InvalidPage)?,
+			cookie: page.0,
 		};
 
 		let filter = format!("({}=*)", CONFIG.ldap_users_id_field);
@@ -206,12 +240,17 @@ impl UsersConnection {
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
 		
-		if page_data.cookie.is_empty() {
-			Ok((None, items))
-		} else {
-			let page = BASE64_URL_SAFE.encode(page_data.cookie);
-			Ok((Some(page), items))
-		}
+			let next = if page_data.cookie.is_empty() {
+				None
+			} else {
+				let page = LdapPageToken(page_data.cookie);
+				Some(format!(
+					"/users?limit={}&page={}",
+					limit, page
+				).parse().unwrap())
+			};
+	
+			Ok(Page { items, next, previous: None })	
 	}
 
 	pub async fn get_user(
@@ -289,14 +328,12 @@ impl UsersConnection {
 	pub async fn list_user_roles(
 		&mut self,
 		id: &str, 
-		page: PageToken,
+		page: LdapPageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<Role>), UsersDatabaseError> {
+	) -> Result<Page<Role>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
-			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
-				.unwrap_or(Ok(vec![]))
-				.map_err(|_| FetchError::InvalidPage)?,
+			cookie: page.0,
 		};
 
 		let user_dn = format!(
@@ -330,26 +367,28 @@ impl UsersConnection {
 			.map(|r| r.map_err(ParseError::from))
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
-		
-		if page_data.cookie.is_empty() {
-			Ok((None, items))
+
+		let next = if page_data.cookie.is_empty() {
+			None
 		} else {
-			let page = BASE64_URL_SAFE.encode(page_data.cookie);
-			Ok((Some(page), items))
-		}
+			let page = LdapPageToken(page_data.cookie);
+			Some(format!(
+				"/users/{}/roles?limit={}&page={}",
+				id, limit, page
+			).parse().unwrap())
+		};
+
+		Ok(Page { items, next, previous: None })		
 	}
 
-	// TODO: consider returning Page
 	pub async fn list_roles(
 		&mut self,
-		page: PageToken,
+		page: LdapPageToken,
 		limit: usize,
-	) -> Result<(PageToken, Vec<Role>), UsersDatabaseError> {
+	) -> Result<Page<Role>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
-			cookie: page.map(|p| BASE64_URL_SAFE.decode(p))
-				.unwrap_or(Ok(vec![]))
-				.map_err(|_| FetchError::InvalidPage)?,
+			cookie: page.0,
 		};
 
 		let (results, status) = self.connection.with_controls(pager)
@@ -376,12 +415,18 @@ impl UsersConnection {
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
 		
-		if page_data.cookie.is_empty() {
-			Ok((None, items))
+
+		let next = if page_data.cookie.is_empty() {
+			None
 		} else {
-			let page = BASE64_URL_SAFE.encode(page_data.cookie);
-			Ok((Some(page), items))
-		}
+			let page = LdapPageToken(page_data.cookie);
+			Some(format!(
+				"/roles?limit={}&page={}",
+				limit, page
+			).parse().unwrap())
+		};
+
+		Ok(Page { items, next, previous: None })
 	}
 
 	pub async fn get_role(

@@ -1,91 +1,73 @@
-use std::fmt;
+use serde::{Deserialize, Serialize, Serializer};
+use warp::http::Uri;
 
-use serde::{
-	de::{self, Deserializer, Visitor},
-	Deserialize, Serialize,
-};
+use super::reference::Reference;
+
+fn optional_uri<S>(uri: &Option<Uri>, ser: S) -> Result<S::Ok, S::Error>
+where S: Serializer {
+	if let Some(uri) = uri {
+		http_serde::uri::serialize(uri, ser)
+	} else {
+		ser.serialize_none()
+	}
+}
 
 #[derive(Serialize, Debug)]
-pub struct Page<'t, T> {
-	pub items: &'t [T],
-	pub next: Option<String>,
-	pub previous: Option<String>,
+pub struct Page<T: Serialize> {
+	pub items: Vec<T>,
+	#[serde(serialize_with = "optional_uri")]
+	pub next: Option<Uri>,
+	// TODO: either find some magical way to generate this or change the spec
+	#[serde(serialize_with = "optional_uri")]
+	pub previous: Option<Uri>,
+}
+
+impl <T> Page<T> 
+where 
+	Reference<T>: From<T>,
+	T: Serialize,
+{
+	pub fn into_references(self) -> Page<Reference<T>> {
+		let items = self.items.into_iter()
+			.map(Reference::from)
+			.collect();
+
+		Page {
+			items,
+			next: self.next,
+			previous: self.previous
+		}
+	}
+}
+
+impl <'t, T> Page<T> 
+where 
+	Reference<&'t T>: From<&'t T>,
+	T: Serialize + 't,
+{
+	pub fn references(&'t self) -> Page<Reference<&'t T>> {
+		let items = self.items.iter()
+			.map(Reference::from)
+			.collect();
+
+		Page {
+			items,
+			next: self.next.clone(),
+			previous: self.previous.clone(),
+		}
+	}
 }
 
 #[derive(Deserialize, Debug)]
-pub struct PaginationOptions<T> {
-	pub page: Option<T>,
+pub struct PaginationOptions<T: PageToken> {
+	#[serde(default)]
+	pub page: T,
 	pub limit: Option<usize>,
 }
 
 pub const DEFAULT_PAGE_ITEM_LIMIT: usize = 10;
 pub const MAX_PAGE_ITEM_LIMIT: usize = 100;
 
-pub struct PageToken {
-	pub id: usize,
-	pub timestamp: u32,
-}
-
-impl PageToken {
-	pub fn start() -> Self {
-		Self {
-			id: 0,
-			timestamp: 0,
-		}
-	}
-}
-
-impl Default for PageToken {
-	fn default() -> Self {
-		Self::start()
-	}
-}
-
-impl fmt::Display for PageToken {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}_{}", self.id, self.timestamp)
-	}
-}
-
-impl<'de> Deserialize<'de> for PageToken {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-	where
-		D: Deserializer<'de>,
-	{
-		struct PageVisitor;
-
-		impl<'de> Visitor<'de> for PageVisitor {
-			type Value = PageToken;
-
-			fn expecting(
-				&self,
-				formatter: &mut fmt::Formatter,
-			) -> fmt::Result {
-				formatter.write_str("a string of two integers, separated by an underscore")
-			}
-
-			fn visit_str<E>(
-				self,
-				value: &str,
-			) -> Result<Self::Value, E>
-			where
-				E: de::Error,
-			{
-				value.split_once('_')
-					.ok_or_else(|| E::custom("missing underscore"))
-					.and_then(|(timestamp, id)| {
-						Ok(PageToken {
-							id: id
-								.parse()
-								.map_err(|_| E::custom("id invalid"))?,
-							timestamp: timestamp
-								.parse()
-								.map_err(|_| E::custom("timestamp invalid"))?,
-						})
-					})
-			}
-		}
-
-		deserializer.deserialize_str(PageVisitor)
-	}
+pub trait PageToken: Default {
+	fn start() -> Self;
 }

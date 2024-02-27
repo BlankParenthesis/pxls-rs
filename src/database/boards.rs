@@ -25,8 +25,8 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, filter::response::paginated_list::PageToken};
-use crate::board::{Palette, Color, Board, Placement, Sector};
+use crate::{config::CONFIG, filter::response::paginated_list::Page};
+use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
 
 mod entities;
 
@@ -307,10 +307,10 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 	pub async fn list_placements(
 		&self,
 		board_id: i32,
-		token: PageToken,
+		token: PlacementPageToken,
 		limit: usize,
 		order: Order,
-	) -> DbResult<(Option<PageToken>, Vec<Placement>)> {
+	) -> DbResult<Page<Placement>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(placement::Column::Timestamp).into(),
 			Expr::col(placement::Column::Id).into(),
@@ -340,10 +340,17 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.limit(limit as u64)
 			.all(&self.connection).await?;
 
-		let token = placements.last().map(|placement| PageToken {
-			id: placement.id as usize,
-			timestamp: placement.timestamp as u32,
-		});
+		let token = placements.last()
+			.map(|placement| PlacementPageToken {
+				id: placement.id as usize,
+				timestamp: placement.timestamp as u32,
+			})
+			.map(|token| {
+				format!(
+					"/boards/{}/pixels?page={}&limit={}",
+					board_id, token, limit,
+				).parse().unwrap()
+			});
 
 		let placements = placements.into_iter()
 			.map(|placement| Placement {
@@ -353,7 +360,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			})
 			.collect();
 		
-		Ok((token, placements))
+		Ok(Page { items: placements, next: token, previous: None })
 	}
 
 	pub async fn get_placement(

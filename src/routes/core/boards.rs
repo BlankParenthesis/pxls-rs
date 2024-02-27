@@ -1,7 +1,11 @@
 use std::sync::Arc;
 use std::ops::Deref;
 
+use tokio::sync::RwLockReadGuard;
+use ouroboros::self_referencing;
 use reqwest::StatusCode;
+use serde::Deserialize;
+use warp::http::Uri;
 use warp::hyper::Response;
 use warp::ws::Ws;
 use warp::{Reply, Rejection};
@@ -10,19 +14,45 @@ use warp::path::Tail;
 
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 use crate::filter::header::authorization::{Bearer, authorized};
-use crate::filter::resource::{board, database};
-use crate::{
-	permissions::Permission,
-	filter::resource::board::PassableBoard,
-	socket::{Extension, UnauthedSocket},
-	BoardDataMap,
-	filter::response::reference::Reference,
-	filter::response::paginated_list::*,
-};
+use crate::filter::resource::{board::{self, PassableBoard}, database};
+use crate::filter::response::reference::Reference;
+use crate::permissions::Permission;
+use crate::socket::{Extension, UnauthedSocket};
+use crate::filter::response::paginated_list::*;
+use crate::board::Board;
+
+use crate::{BoardRef, BoardDataMap};
 
 pub mod data;
 pub mod pixels;
 pub mod users;
+
+#[derive(Debug, Deserialize, Default)]
+struct BoardPageToken(usize);
+
+impl PageToken for BoardPageToken {
+	fn start() -> Self {
+		BoardPageToken(0)
+	}
+}
+
+#[self_referencing]
+struct OwnedBoardReference<'a> {
+	board: &'a BoardRef,
+	#[covariant]
+	#[borrows(board)]
+	lock: RwLockReadGuard<'this, Option<Board>>,
+	#[borrows(lock)]
+	inner: &'this Board,
+}
+
+impl<'a> Deref for OwnedBoardReference<'a> {
+	type Target = Board;
+
+	fn deref(&self) -> &Self::Target {
+		self.borrow_inner()
+	}
+}
 
 pub fn list(
 	boards: BoardDataMap,
@@ -33,10 +63,10 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(authorized(users_db, Permission::BoardsList.into()))
-		.then(move |pagination: PaginationOptions<usize>, _, _| {
+		.then(move |pagination: PaginationOptions<BoardPageToken>, _, _| {
 			let boards = Arc::clone(&boards);
 			async move {
-				let page = pagination.page.unwrap_or(0);
+				let page = pagination.page.0;
 				let limit = pagination
 					.limit
 					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
@@ -52,8 +82,9 @@ pub fn list(
 				fn page_uri(
 					page: usize,
 					limit: usize,
-				) -> String {
+				) -> Uri {
 					format!("/boards?page={}&limit={}", page, limit)
+						.parse().unwrap()
 				}
 
 				let previous = page.checked_sub(1).and_then(|page| {
@@ -61,21 +92,29 @@ pub fn list(
 				});
 
 				let mut items = Vec::with_capacity(limit);
-				for board in pages.next().unwrap_or_default() {
-					let board = board.read().await;
-					let board = board.deref().as_ref().expect("Board went missing during listing");
-					let reference = Reference::from(board);
-					items.push(serde_json::to_value(reference).unwrap());
+				for board in pages.next().unwrap_or_default() {					
+					let board = OwnedBoardReferenceAsyncSendBuilder {
+						board,
+						lock_builder: |board| Box::pin(async move {
+							board.read().await
+						}),
+						inner_builder: |lock| Box::pin(async move {
+							lock.as_ref().expect("Board went missing")
+						}),
+					}.build().await;
+					items.push(board);
 				}
+				let items = items.iter()
+					.map(|b| Reference::from(b.deref()))
+					.collect();
 
 				let next = page.checked_add(1).and_then(|page| {
 					pages.next().map(|_| page_uri(page, limit))
 				});
 
-				// TODO: standardize generation of this
-				let response = Page { previous, items: items.as_slice(), next };
+				let page = Page { previous, items, next };
 
-				warp::reply::json(&response)
+				warp::reply::json(&page)
 			}
 		})
 }

@@ -8,11 +8,15 @@ use warp::{
 };
 
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
-use crate::filter::response::paginated_list::{PaginationOptions, Page, MAX_PAGE_ITEM_LIMIT, DEFAULT_PAGE_ITEM_LIMIT};
-use crate::filter::response::reference::Reference;
+use crate::filter::response::paginated_list::{
+	PaginationOptions,
+	PageToken,
+	MAX_PAGE_ITEM_LIMIT,
+	DEFAULT_PAGE_ITEM_LIMIT,
+};
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection};
+use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -45,31 +49,14 @@ pub fn list(
 			}
 		})
 		.untuple_one()
-		.and_then(move |uid: String, pagination: PaginationOptions<String>, mut connection: UsersConnection| async move {
+		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
 			connection.list_user_roles(&uid, page, limit).await
-				.map(|(page_token, roles)| {
-					let references = roles.iter()
-						.map(Reference::from)
-						.collect::<Vec<_>>();
-
-					let page = Page {
-						items: &references[..],
-						next: page_token.map(|p| {
-							format!("/users/{}/roles?limit={}&page={}", uid, limit, p)
-						}),
-						// TODO: either find some magical way to generate this or
-						// change the spec
-						previous: None,
-					};
-
-					warp::reply::json(&page).into_response()
-				})
-				.map_err(warp::reject::custom)
+				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }
 
@@ -110,22 +97,8 @@ pub fn post(
 		.untuple_one()
 		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
 			connection.add_user_role(&uid, &role.role).await?;
-			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
-				.map(|(page_token, roles)| {
-					let references = roles.iter()
-						.map(Reference::from)
-						.collect::<Vec<_>>();
-
-					let page = Page {
-						items: &references[..],
-						next: page_token.map(|p| {
-							format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
-						}),
-						previous: None, // TODO: previous page
-					};
-
-					warp::reply::json(&page)
-				})
+			connection.list_user_roles(&uid, PageToken::start(), DEFAULT_PAGE_ITEM_LIMIT).await
+				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }
 
@@ -162,21 +135,8 @@ pub fn delete(
 		.untuple_one()
 		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
 			connection.remove_user_role(&uid, &role.role).await?;
-			connection.list_user_roles(&uid, None, DEFAULT_PAGE_ITEM_LIMIT).await
-				.map(|(page_token, roles)| {
-					let references = roles.iter()
-						.map(Reference::from)
-						.collect::<Vec<_>>();
-
-					let page = Page {
-						items: &references[..],
-						next: page_token.map(|p| {
-							format!("/users/{}/roles?limit={}&page={}", uid, DEFAULT_PAGE_ITEM_LIMIT, p)
-						}),
-						previous: None, // TODO: previous page
-					};
-
-					warp::reply::json(&page)
-				})
+			connection.list_user_roles(&uid, PageToken::start(), DEFAULT_PAGE_ITEM_LIMIT)
+				.await
+				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }

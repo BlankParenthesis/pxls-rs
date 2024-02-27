@@ -9,11 +9,14 @@ use warp::{
 	path::Tail,
 };
 
-use crate::filter::response::paginated_list::{PaginationOptions, Page, DEFAULT_PAGE_ITEM_LIMIT, MAX_PAGE_ITEM_LIMIT};
-use crate::filter::response::reference::Reference;
+use crate::filter::response::paginated_list::{
+	PaginationOptions,
+	DEFAULT_PAGE_ITEM_LIMIT,
+	MAX_PAGE_ITEM_LIMIT
+};
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection};
+use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -23,28 +26,14 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::UsersList.into()))
-		.then(move |pagination: PaginationOptions<String>, _, mut connection: UsersConnection| async move {
+		.then(move |pagination: PaginationOptions<LdapPageToken>, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 			
 			connection.list_users(page, limit).await
-				.map(|(page_token, users)| {
-					let references = users.iter()
-						.map(Reference::from)
-						.collect::<Vec<_>>();
-
-					let page = Page {
-						items: &references[..],
-						next: page_token.map(|p| format!("/users?limit={}&page={}", limit, p)),
-						// TODO: either find some magical way to generate this or
-						// change the spec
-						previous: None,
-					};
-
-					warp::reply::json(&page)
-				})
+				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }
 

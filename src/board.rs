@@ -18,8 +18,7 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{filter::body::patch::BinaryPatch, database::BoardsDatabaseError};
-use crate::filter::response::paginated_list::PageToken;
+use crate::{filter::{body::patch::BinaryPatch, response::{paginated_list::Page, reference::Referenceable}}, database::BoardsDatabaseError};
 use crate::AsyncWrite;
 use crate::socket::{AuthedSocket, packet};
 use crate::database::{BoardsConnection, Order};
@@ -32,7 +31,7 @@ use info::BoardInfo;
 pub use color::{Color, Palette};
 pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
-pub use placement::Placement;
+pub use placement::{Placement, PlacementPageToken};
 
 #[derive(Debug)]
 pub enum PlaceError {
@@ -98,6 +97,10 @@ impl From<&Board> for Uri {
 			.parse::<Uri>()
 			.unwrap()
 	}
+}
+
+impl Referenceable for Board {
+	fn location(&self) -> Uri { Uri::from(self) }
 }
 
 impl Serialize for Board {
@@ -382,11 +385,11 @@ impl Board {
 
 	pub async fn list_placements(
 		&self,
-		token: PageToken,
+		token: PlacementPageToken,
 		limit: usize,
 		order: Order,
 		connection: &BoardsConnection,
-	) -> Result<(Option<PageToken>, Vec<Placement>), BoardsDatabaseError> {
+	) -> Result<Page<Placement>, BoardsDatabaseError> {
 		connection.list_placements(self.id, token, limit, order).await
 	}
 

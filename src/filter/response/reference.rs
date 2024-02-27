@@ -2,24 +2,25 @@ use reqwest::{StatusCode, header};
 use warp::{http::Uri, reply::Reply};
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
-pub struct Reference<'t, T>
-where
-	T: Serialize,
-{
-	#[serde(with = "http_serde::uri")]
-	uri: Uri,
-	view: &'t T,
+pub trait Referenceable {
+	fn location(&self) -> Uri;
 }
 
-impl<'t, T> From<&'t T> for Reference<'t, T> 
-where
-	T: Serialize,
-	Uri: From<&'t T>,
-{
-	fn from(value: &'t T) -> Self {
+impl<T: Referenceable> Referenceable for &T {
+	fn location(&self) -> Uri { (*self).location() }
+}
+
+#[derive(Debug, Serialize)]
+pub struct Reference<T: Serialize> {
+	#[serde(with = "http_serde::uri")]
+	uri: Uri,
+	view: T,
+}
+
+impl<T: Serialize + Referenceable> From<T> for Reference<T> {
+	fn from(value: T) -> Self {
 		Self {
-			uri: Uri::from(value),
+			uri: value.location(),
 			view: value,
 		}
 	}
@@ -28,7 +29,7 @@ where
 pub fn created<'t, T>(body: &'t T) -> impl Reply
 where
 	T: Serialize,
-	Reference<'t, T>: From<&'t T>,
+	Reference<&'t T>: From<&'t T>,
 {
 	let reference = Reference::from(body);
 	warp::reply::with_header(
