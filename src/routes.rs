@@ -6,3 +6,4 @@ pub mod board_data_timestamps;
 pub mod board_lifecycle;
 pub mod users;
 pub mod roles;
+pub mod user_count;

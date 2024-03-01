@@ -18,8 +18,7 @@ pub struct UserCount {
 	pub idle_timeout: u32,
 }
 
-
-pub fn get(
+pub fn users(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,

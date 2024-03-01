@@ -39,6 +39,7 @@ lazy_static! {
 			"board_lifecycle",
 			"users",
 			"roles",
+			"user_count",
 		],
 	};
 }

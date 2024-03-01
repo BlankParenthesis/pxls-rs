@@ -25,7 +25,6 @@ use crate::{BoardRef, BoardDataMap};
 
 pub mod data;
 pub mod pixels;
-pub mod users;
 
 #[derive(Debug, Deserialize, Default)]
 struct BoardPageToken(usize);

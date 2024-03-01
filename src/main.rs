@@ -76,11 +76,6 @@ async fn main() {
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
 		))
-		.or(routes::core::boards::users::get(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-			Arc::clone(&users_db),
-		))
 		.or(routes::core::boards::pixels::list(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
@@ -165,6 +160,13 @@ async fn main() {
 		.or(routes::roles::roles::patch(Arc::clone(&users_db)))
 		.or(routes::roles::roles::delete(Arc::clone(&users_db)));
 	
+	let routes_usercount = 
+		routes::user_count::boards::users(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
+		);
+
 	let routes = 
 		routes_core
 		.or(routes_lifecycle)
@@ -174,6 +176,7 @@ async fn main() {
 		.or(routes_authentication)
 		.or(routes_users)
 		.or(routes_roles)
+		.or(routes_usercount)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())
