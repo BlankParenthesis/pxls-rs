@@ -14,7 +14,7 @@ use crate::board::cooldown::CooldownInfo;
 use crate::socket::{
 	CloseReason,
 	AuthedSocket,
-	Extension,
+	BoardSubscription,
 	packet::{self, server::DataType}
 };
 
@@ -26,7 +26,7 @@ struct UserConnections {
 impl UserConnections {
 	async fn new(
 		socket: Arc<AuthedSocket>,
-		cooldown_info: CooldownInfo,
+		cooldown_info: Option<CooldownInfo>,
 	) -> Arc<RwLock<Self>> {
 		// NOTE: AuthedSocket hashes as the uuid, which is never mutated
 		#[allow(clippy::mutable_key_type)]
@@ -38,10 +38,12 @@ impl UserConnections {
 			cooldown_timer: None,
 		}));
 
-		Self::set_cooldown_info(
-			Arc::clone(&user_connections),
-			cooldown_info,
-		).await;
+		if let Some(cooldown_info) = cooldown_info {
+			Self::set_cooldown_info(
+				Arc::clone(&user_connections),
+				cooldown_info,
+			).await;
+		}
 
 		user_connections
 	}
@@ -113,9 +115,9 @@ impl UserConnections {
 		&self,
 		packet: &packet::server::Packet,
 	) {
-		let extension = Extension::from(packet);
+		let subscription = BoardSubscription::from(packet);
 		for connection in &self.connections {
-			if connection.extensions.contains(extension) {
+			if connection.subscriptions.contains(subscription) {
 				connection.send(packet).await;
 			}
 		}
@@ -161,8 +163,8 @@ impl UserConnections {
 #[derive(Default)]
 pub struct Connections {
 	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
-	by_extension: EnumMap<Extension, HashSet<Arc<AuthedSocket>>>,
-	by_board_extensions: HashMap<EnumSet<DataType>, HashSet<Arc<AuthedSocket>>>,
+	by_subscription: EnumMap<BoardSubscription, HashSet<Arc<AuthedSocket>>>,
+	by_board_update: HashMap<EnumSet<DataType>, HashSet<Arc<AuthedSocket>>>,
 }
 
 impl Connections {
@@ -177,8 +179,7 @@ impl Connections {
 			Entry::Vacant(entry) => {
 				let new_connections = UserConnections::new(
 					Arc::clone(socket),
-					// SAFETY: this is only None if autheduser is None
-					cooldown_info.unwrap(),
+					cooldown_info,
 				).await;
 				entry.insert(Arc::clone(&new_connections));
 				new_connections
@@ -188,15 +189,15 @@ impl Connections {
 
 		connections.write().await.insert(Arc::clone(socket));
 
-		for extension in socket.extensions {
-			self.by_extension[extension].insert(Arc::clone(socket));
+		for subscription in socket.subscriptions {
+			self.by_subscription[subscription].insert(Arc::clone(socket));
 		}
 
-		let combination = socket.extensions.iter()
+		let combination = socket.subscriptions.iter()
 			.filter_map(Option::<DataType>::from)
 			.collect();
 		
-		self.by_board_extensions.entry(combination)
+		self.by_board_update.entry(combination)
 			.or_default()
 			.insert(Arc::clone(socket));
 	}
@@ -216,15 +217,15 @@ impl Connections {
 			self.by_uid.remove(&id);
 		}
 
-		for extension in socket.extensions {
-			self.by_extension[extension].remove(socket);
+		for subscription in socket.subscriptions {
+			self.by_subscription[subscription].remove(socket);
 		}
 
-		let combination = socket.extensions.iter()
+		let combination = socket.subscriptions.iter()
 			.filter_map(Option::<DataType>::from)
 			.collect();
 		
-		self.by_board_extensions.entry(combination)
+		self.by_board_update.entry(combination)
 			.or_default()
 			.remove(socket);
 	}
@@ -233,8 +234,8 @@ impl Connections {
 		&self,
 		packet: packet::server::Packet,
 	) {
-		let extension = Extension::from(&packet);
-		for connection in self.by_extension[extension].iter() {
+		let subscription = BoardSubscription::from(&packet);
+		for connection in self.by_subscription[subscription].iter() {
 			connection.send(&packet).await;
 		}
 	}
@@ -244,7 +245,7 @@ impl Connections {
 		data: packet::server::BoardUpdateBuilder,
 	) {
 		for (combination, packet) in data.build_combinations() {
-			if let Some(sockets) = self.by_board_extensions.get(&combination) {
+			if let Some(sockets) = self.by_board_update.get(&combination) {
 				for connection in sockets {
 					connection.send(&packet).await;
 				}
@@ -276,7 +277,7 @@ impl Connections {
 	}
 
 	pub fn close(&mut self) {
-		for connections in self.by_extension.values() {
+		for connections in self.by_subscription.values() {
 			for connection in connections {
 				connection.close(Some(CloseReason::ServerClosing));
 			}

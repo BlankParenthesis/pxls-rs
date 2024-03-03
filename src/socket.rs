@@ -3,14 +3,14 @@ pub mod packet;
 use core::hash::Hash;
 use std::{
 	sync::{Arc, Weak},
-	time::Duration,
+	time::Duration, fmt,
 };
 
 use async_trait::async_trait;
 use enum_map::Enum;
 use enumset::{EnumSet, EnumSetType};
 use futures_util::{stream::SplitStream, FutureExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::de::{Deserialize, Visitor};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -24,28 +24,80 @@ use crate::{
 	database::{BoardsConnection, UsersDatabase, UsersConnection, Database},
 };
 
-// TODO: move this somewhere else
-#[derive(Debug, EnumSetType, Enum, Deserialize, Serialize)]
+#[derive(Debug, EnumSetType, Enum)]
 #[enumset(serialize_repr = "list")]
-#[serde(rename_all = "snake_case")]
-pub enum Extension {
-	Core,
-	Authentication,
-	BoardTimestamps,
-	BoardMask,
-	BoardInitial,
-	BoardLifecycle,
+pub enum BoardSubscription {
+	DataColors,
+	DataTimestamps,
+	DataMask,
+	DataInitial,
+	Info,
+	Cooldown,
 }
 
-impl Extension {
-	pub fn socket_permission(&self) -> Permission {
+impl TryFrom<&str> for BoardSubscription {
+	type Error = ();
+
+	fn try_from(value: &str) -> Result<Self, Self::Error> {
+		match value {
+			"data.colors" => Ok(BoardSubscription::DataColors),
+			"data.timestamps" => Ok(BoardSubscription::DataTimestamps),
+			"data.mask" => Ok(BoardSubscription::DataMask),
+			"data.initial" => Ok(BoardSubscription::DataInitial),
+			"info" => Ok(BoardSubscription::Info),
+			"cooldown" => Ok(BoardSubscription::Cooldown),
+			_ => Err(()),
+		}
+	}
+}
+
+// TODO: this format is quite common for things — maybe check if there's a
+// crate to serialize with dots as separators already or create such a derive
+// macro yourself.
+// Update: strum looks maybe helpful but only has the same sort of
+// transformations as serde by default.
+impl<'de> Deserialize<'de> for BoardSubscription {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where D: serde::Deserializer<'de> {
+		struct V;
+		impl<'de> Visitor<'de> for V {
+			type Value = BoardSubscription;
+
+			fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+				write!(f, "A valid subscription string")
+			}
+
+			fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+			where E: serde::de::Error, {
+				BoardSubscription::try_from(v)
+					.map_err(|()| {
+						format!("Invalid permission string \"{}\"", v)
+					})
+					.map_err(E::custom)
+			}
+		}
+
+		deserializer.deserialize_str(V)
+	}
+}
+
+// NOTE: this is needed for the correct deserialization to be set on enumtype
+impl serde::Serialize for BoardSubscription {
+	fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+	where S: serde::Serializer {
+		unimplemented!()
+	}
+}
+
+impl BoardSubscription {
+	pub fn permission(&self) -> Permission {
 		match self {
-			Extension::Core => Permission::SocketCore,
-			Extension::Authentication => Permission::SocketAuthentication,
-			Extension::BoardTimestamps => Permission::SocketBoardsTimestamps,
-			Extension::BoardMask => Permission::SocketBoardsMask,
-			Extension::BoardInitial => Permission::SocketBoardsInitial,
-			Extension::BoardLifecycle => Permission::SocketBoardLifecycle,
+			BoardSubscription::DataColors => Permission::BoardsEventsDataColors,
+			BoardSubscription::DataTimestamps => Permission::BoardsEventsDataTimestamps,
+			BoardSubscription::DataMask => Permission::BoardsEventsDataMask,
+			BoardSubscription::DataInitial => Permission::BoardsEventsDataInitial,
+			BoardSubscription::Info => Permission::BoardsEventsInfo,
+			BoardSubscription::Cooldown => Permission::BoardsEventsCooldown,
 		}
 	}
 }
@@ -181,21 +233,26 @@ impl Authorized {
 			.map(|Authenticated(bearer)| bearer.is_valid())
 			.unwrap_or(true)
 	}
+
+	fn is_anonymous(&self) -> bool {
+		self.0.is_none()
+	}
 }
 
 pub struct UnauthedSocket {
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
-	extensions: EnumSet<Extension>,
+	subscriptions: EnumSet<BoardSubscription>,
 	users_db: Arc<UsersDatabase>,
 }
 
 impl UnauthedSocket {
 	pub async fn connect(
 		websocket: ws::WebSocket,
-		extensions: EnumSet<Extension>,
+		subscriptions: EnumSet<BoardSubscription>,
 		board: Weak<RwLock<Option<Board>>>,
 		connection: BoardsConnection,
 		users_db: Arc<UsersDatabase>,
+		anonymous: bool,
 	) {
 		let (ws_sender, mut ws_receiver) = websocket.split();
 		let (sender, sender_receiver) = mpsc::unbounded_channel();
@@ -212,9 +269,9 @@ impl UnauthedSocket {
 				}),
 		);
 
-		let socket = Self { sender, extensions, users_db };
+		let socket = Self { sender, subscriptions, users_db };
 
-		match socket.auth_socket(&mut ws_receiver).await {
+		match socket.auth_socket(&mut ws_receiver, anonymous).await {
 			Ok(socket) => {
 				let socket = Arc::new(socket);
 
@@ -303,9 +360,8 @@ impl UnauthedSocket {
 	async fn auth_socket(
 		self,
 		receiver: &mut SplitStream<ws::WebSocket>,
+		anonymous: bool,
 	) -> Result<AuthedSocket, (Self, AuthFailure)> {
-		let anonymous = !self.extensions.contains(Extension::Authentication);
-
 		let credentials = if anonymous {
 			None
 		} else {
@@ -315,8 +371,8 @@ impl UnauthedSocket {
 			}
 		};
 
-		let permissions = self.extensions.iter()
-			.map(|e| e.socket_permission())
+		let permissions = self.subscriptions.iter()
+			.map(|e| e.permission())
 			.collect::<Vec<_>>();
 	
 		let mut connection = match self.users_db.connection().await {
@@ -329,7 +385,7 @@ impl UnauthedSocket {
 				Ok(AuthedSocket {
 					uuid: Uuid::new_v4(),
 					sender: self.sender,
-					extensions: self.extensions,
+					subscriptions: self.subscriptions,
 					credentials: RwLock::new(credentials),
 					users_db: self.users_db,
 				})
@@ -343,7 +399,7 @@ impl UnauthedSocket {
 pub struct AuthedSocket {
 	uuid: Uuid,
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
-	pub extensions: EnumSet<Extension>,
+	pub subscriptions: EnumSet<BoardSubscription>,
 	credentials: RwLock<Authorized>,
 	users_db: Arc<UsersDatabase>,
 }
@@ -405,12 +461,12 @@ impl AuthedSocket {
 		&self,
 		token: Option<String>,
 	) -> Result<(), AuthFailure> {
-		if !self.extensions.contains(Extension::Authentication) {
+		if self.credentials.read().await.is_anonymous() {
 			return Err(AuthFailure::InvalidMessage);
 		}
 
-		let permissions = self.extensions.iter()
-			.map(|e| e.socket_permission())
+		let permissions = self.subscriptions.iter()
+			.map(|e| e.permission())
 			.collect::<Vec<_>>();
 
 		let mut connection = match self.users_db.connection().await {

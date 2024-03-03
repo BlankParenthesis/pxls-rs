@@ -35,12 +35,12 @@ pub enum Permission {
 	RolesPost,
 	RolesPatch,
 	RolesDelete,
-	SocketCore,
-	SocketAuthentication,
-	SocketBoardsInitial,
-	SocketBoardsMask,
-	SocketBoardsTimestamps,
-	SocketBoardLifecycle,
+	BoardsEventsDataColors,
+	BoardsEventsDataTimestamps,
+	BoardsEventsDataInitial,
+	BoardsEventsDataMask,
+	BoardsEventsInfo,
+	BoardsEventsCooldown,
 }
 
 impl Permission {
@@ -95,12 +95,12 @@ impl From<&Permission> for &str {
 			Permission::RolesPost => "roles.post",
 			Permission::RolesPatch => "roles.patch",
 			Permission::RolesDelete => "roles.delete",
-			Permission::SocketCore => "socket.core",
-			Permission::SocketAuthentication => "socket.authentication",
-			Permission::SocketBoardsInitial => "socket.boards.initial",
-			Permission::SocketBoardsMask => "socket.boards.mask",
-			Permission::SocketBoardsTimestamps => "socket.boards.timestamps",
-			Permission::SocketBoardLifecycle => "socket.boards.lifecycle",
+			Permission::BoardsEventsDataColors => "boards.events.data.colors",
+			Permission::BoardsEventsDataTimestamps => "boards.events.data.timestamps",
+			Permission::BoardsEventsDataInitial => "boards.events.data.initial",
+			Permission::BoardsEventsDataMask => "boards.events.data.mask",
+			Permission::BoardsEventsInfo => "boards.events.info",
+			Permission::BoardsEventsCooldown => "boards.events.cooldown",
 		}
 	}
 }
@@ -142,12 +142,10 @@ impl TryFrom<&str> for Permission {
 			"roles.post" => Ok(Permission::RolesPost),
 			"roles.patch" => Ok(Permission::RolesPatch),
 			"roles.delete" => Ok(Permission::RolesDelete),
-			"socket.core" => Ok(Permission::SocketCore),
-			"socket.authentication" => Ok(Permission::SocketAuthentication),
-			"socket.boards.initial" => Ok(Permission::SocketBoardsInitial),
-			"socket.boards.mask" => Ok(Permission::SocketBoardsMask),
-			"socket.boards.timestamps" => Ok(Permission::SocketBoardsTimestamps),
-			"socket.boards.lifecycle" => Ok(Permission::SocketBoardLifecycle),
+			"boards.events.data.colors" => Ok(Permission::BoardsEventsDataColors),
+			"boards.events.data.timestamps" => Ok(Permission::BoardsEventsDataTimestamps),
+			"boards.events.data.initial" => Ok(Permission::BoardsEventsDataInitial),
+			"boards.events.data.mask" => Ok(Permission::BoardsEventsDataMask),
 			_ => Err(()),
 		}
 	}

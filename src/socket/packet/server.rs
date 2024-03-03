@@ -8,7 +8,7 @@ use enumset::{EnumSet, EnumSetType};
 
 use crate::board::Palette;
 use crate::board::Shape;
-use crate::socket::Extension;
+use crate::socket::BoardSubscription;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Change<T> {
@@ -35,14 +35,14 @@ pub enum DataType {
 	Info,
 }
 
-impl From<Extension> for Option<DataType> {
-	fn from(extension: Extension) -> Self {
-		match extension {
-			Extension::Core => Some(DataType::Colors),
-			Extension::BoardTimestamps => Some(DataType::Timestamps),
-			Extension::BoardInitial => Some(DataType::Initial),
-			Extension::BoardMask => Some(DataType::Mask),
-			Extension::BoardLifecycle => Some(DataType::Info),
+impl From<BoardSubscription> for Option<DataType> {
+	fn from(subscription: BoardSubscription) -> Self {
+		match subscription {
+			BoardSubscription::DataColors => Some(DataType::Colors),
+			BoardSubscription::DataTimestamps => Some(DataType::Timestamps),
+			BoardSubscription::DataInitial => Some(DataType::Initial),
+			BoardSubscription::DataMask => Some(DataType::Mask),
+			BoardSubscription::Info => Some(DataType::Info),
 			_ => None,
 		}
 	}
@@ -179,12 +179,12 @@ pub enum Packet {
 	Ready,
 }
 
-impl From<&Packet> for Extension {
+impl From<&Packet> for BoardSubscription {
 	fn from(event: &Packet) -> Self {
 		match event {
-			Packet::BoardUpdate { .. } => Extension::Core,
-			Packet::PixelsAvailable { .. } => Extension::Core,
-			Packet::Ready => Extension::Core,
+			Packet::BoardUpdate { .. } => BoardSubscription::DataColors,
+			Packet::PixelsAvailable { .. } => BoardSubscription::Cooldown,
+			Packet::Ready => todo!(),
 		}
 	}
 }

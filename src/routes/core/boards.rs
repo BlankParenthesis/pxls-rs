@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::ops::Deref;
 
+use enumset::EnumSet;
 use tokio::sync::RwLockReadGuard;
 use ouroboros::self_referencing;
 use reqwest::StatusCode;
@@ -17,7 +18,7 @@ use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::{board::{self, PassableBoard}, database};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::socket::{Extension, UnauthedSocket};
+use crate::socket::{BoardSubscription, UnauthedSocket};
 use crate::filter::response::paginated_list::*;
 use crate::board::Board;
 
@@ -181,35 +182,39 @@ pub fn get(
 		})
 }
 
-#[derive(serde::Deserialize)]
-pub struct SocketOptions {
-	pub extensions: Option<enumset::EnumSet<Extension>>,
+#[derive(Debug, Deserialize)]
+struct SocketOptions {
+	subscribe: Option<EnumSet<BoardSubscription>>,
+	authenticate: Option<bool>,
 }
 
-pub fn socket(
+pub fn events(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
-		.and(warp::path("socket"))
+		.and(warp::path("events"))
 		.and(warp::path::end())
 		.and(warp::ws())
 		.and(serde_qs::warp::query(Default::default()))
 		.and(database::connection(boards_db))
 		.map(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
-			options.extensions
+			options.subscribe
 				.ok_or(StatusCode::UNPROCESSABLE_ENTITY)
-				.and_then(|extensions| {
-					if extensions.is_empty() {
+				.and_then(|subscriptions| {
+
+					if subscriptions.is_empty() {
 						return Err(StatusCode::UNPROCESSABLE_ENTITY);
 					}
 
-					if !extensions.contains(Extension::Authentication) {
+					let anonymous = !options.authenticate.unwrap_or(false);
+
+					if anonymous {
 						let permissions = Permission::defaults();
-						let has_permissions = extensions.iter()
-							.map(|e| e.socket_permission())
+						let has_permissions = subscriptions.iter()
+							.map(|e| e.permission())
 							.all(|p| permissions.contains(p));
 					
 						if !has_permissions {
@@ -222,10 +227,11 @@ pub fn socket(
 					Ok(ws.on_upgrade(move |websocket| {
 						UnauthedSocket::connect(
 							websocket,
-							extensions,
+							subscriptions,
 							Arc::downgrade(&*board),
 							connection,
 							users_db,
+							anonymous,
 						)
 					}))
 				})

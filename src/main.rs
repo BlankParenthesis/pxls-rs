@@ -66,7 +66,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		))
 		.or(routes::core::boards::default())
-		.or(routes::core::boards::socket(
+		.or(routes::core::boards::events(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
