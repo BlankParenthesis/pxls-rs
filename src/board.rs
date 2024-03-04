@@ -1,4 +1,4 @@
-mod connections;
+mod socket;
 mod cooldown;
 mod color;
 mod sector;
@@ -18,12 +18,13 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{filter::{body::patch::BinaryPatch, response::{paginated_list::Page, reference::Referenceable}}, database::BoardsDatabaseError};
+use crate::filter::body::patch::BinaryPatch;
+use crate::filter::response::{paginated_list::Page, reference::Referenceable};
+use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
-use crate::socket::{AuthedSocket, packet};
 use crate::database::{BoardsConnection, Order};
 
-use connections::Connections;
+use socket::{Connections, Packet, Socket};
 use sector::{SectorAccessor, SectorCache, MaskValue, IoError};
 use cooldown::CooldownInfo;
 use info::BoardInfo;
@@ -32,6 +33,7 @@ pub use color::{Color, Palette};
 pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
 pub use placement::{Placement, PlacementPageToken};
+pub use socket::BoardSubscription;
 
 #[derive(Debug)]
 pub enum PlaceError {
@@ -177,12 +179,12 @@ impl Board {
 			.write(&patch.data).await
 			.map_err(PatchError::WriteFailed)?;
 
-		let change = packet::server::Change {
+		let change = socket::Change {
 			position: u64::try_from(patch.start).unwrap(),
 			values: Vec::from(&*patch.data),
 		};
 
-		let mut packet = packet::server::BoardData::builder();
+		let mut packet = socket::BoardData::builder();
 		
 		match buffer {
 			SectorBuffer::Initial => packet = packet.initial(vec![change]),
@@ -259,12 +261,12 @@ impl Board {
 			self.info.max_pixels_available = max_stacked;
 		}
 
-		let packet = packet::server::Packet::BoardUpdate {
-			info: Some(packet::server::BoardInfo {
-					name,
-					shape,
-					palette,
-					max_pixels_available,
+		let packet = Packet::BoardUpdate {
+			info: Some(socket::BoardInfo {
+				name,
+				shape,
+				palette,
+				max_pixels_available,
 			}),
 			data: None,
 		};
@@ -357,17 +359,17 @@ impl Board {
 			.as_mut()
 			.put_u32_le(timestamp);
 
-		let color = packet::server::Change {
+		let color = socket::Change {
 			position,
 			values: vec![color],
 		};
 
-		let timestamp = packet::server::Change {
+		let timestamp = socket::Change {
 			position,
 			values: vec![timestamp],
 		};
 
-		let data = packet::server::BoardData::builder()
+		let data = socket::BoardData::builder()
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
@@ -552,7 +554,7 @@ impl Board {
 
 	pub async fn insert_socket(
 		&mut self,
-		socket: &Arc<AuthedSocket>,
+		socket: &Arc<Socket>,
 		connection: &BoardsConnection,
 	) -> Result<(), BoardsDatabaseError> {
 		let id = socket.user_id().await;
@@ -564,14 +566,13 @@ impl Board {
 		};
 
 		self.connections.insert(socket, cooldown_info).await;
-		socket.send(&packet::server::Packet::Ready).await;
 
 		Ok(())
 	}
 
 	pub async fn remove_socket(
 		&mut self,
-		socket: &Arc<AuthedSocket>,
+		socket: &Arc<Socket>,
 	) {
 		self.connections.remove(socket).await
 	}

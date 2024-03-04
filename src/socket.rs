@@ -1,16 +1,14 @@
-pub mod packet;
+mod packet;
 
 use core::hash::Hash;
 use std::{
-	sync::{Arc, Weak},
-	time::Duration, fmt,
+	sync::Arc,
+	time::Duration,
 };
 
 use async_trait::async_trait;
-use enum_map::Enum;
 use enumset::{EnumSet, EnumSetType};
 use futures_util::{stream::SplitStream, FutureExt, StreamExt};
-use serde::de::{Deserialize, Visitor};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -19,88 +17,12 @@ use warp::ws;
 use crate::{
 	permissions::Permission,
 	openid::{ValidationError, self},
-	board::Board,
 	filter::header::authorization::Bearer,
-	database::{BoardsConnection, UsersDatabase, UsersConnection, Database},
+	database::{UsersDatabase, UsersConnection, Database},
 };
 
-#[derive(Debug, EnumSetType, Enum)]
-#[enumset(serialize_repr = "list")]
-pub enum BoardSubscription {
-	DataColors,
-	DataTimestamps,
-	DataMask,
-	DataInitial,
-	Info,
-	Cooldown,
-}
-
-impl TryFrom<&str> for BoardSubscription {
-	type Error = ();
-
-	fn try_from(value: &str) -> Result<Self, Self::Error> {
-		match value {
-			"data.colors" => Ok(BoardSubscription::DataColors),
-			"data.timestamps" => Ok(BoardSubscription::DataTimestamps),
-			"data.mask" => Ok(BoardSubscription::DataMask),
-			"data.initial" => Ok(BoardSubscription::DataInitial),
-			"info" => Ok(BoardSubscription::Info),
-			"cooldown" => Ok(BoardSubscription::Cooldown),
-			_ => Err(()),
-		}
-	}
-}
-
-// TODO: this format is quite common for things — maybe check if there's a
-// crate to serialize with dots as separators already or create such a derive
-// macro yourself.
-// Update: strum looks maybe helpful but only has the same sort of
-// transformations as serde by default.
-impl<'de> Deserialize<'de> for BoardSubscription {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-	where D: serde::Deserializer<'de> {
-		struct V;
-		impl<'de> Visitor<'de> for V {
-			type Value = BoardSubscription;
-
-			fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-				write!(f, "A valid subscription string")
-			}
-
-			fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-			where E: serde::de::Error, {
-				BoardSubscription::try_from(v)
-					.map_err(|()| {
-						format!("Invalid permission string \"{}\"", v)
-					})
-					.map_err(E::custom)
-			}
-		}
-
-		deserializer.deserialize_str(V)
-	}
-}
-
-// NOTE: this is needed for the correct deserialization to be set on enumtype
-impl serde::Serialize for BoardSubscription {
-	fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
-	where S: serde::Serializer {
-		unimplemented!()
-	}
-}
-
-impl BoardSubscription {
-	pub fn permission(&self) -> Permission {
-		match self {
-			BoardSubscription::DataColors => Permission::BoardsEventsDataColors,
-			BoardSubscription::DataTimestamps => Permission::BoardsEventsDataTimestamps,
-			BoardSubscription::DataMask => Permission::BoardsEventsDataMask,
-			BoardSubscription::DataInitial => Permission::BoardsEventsDataInitial,
-			BoardSubscription::Info => Permission::BoardsEventsInfo,
-			BoardSubscription::Cooldown => Permission::BoardsEventsCooldown,
-		}
-	}
-}
+use packet::ClientPacket;
+pub use packet::ServerPacket;
 
 pub enum CloseReason {
 	ServerClosing,
@@ -124,8 +46,8 @@ impl From<CloseReason> for u16 {
 	}
 }
 
-#[derive(Debug)]
-enum AuthFailure {
+#[derive(Debug, Clone)]
+pub enum AuthFailure {
 	Timeout,
 	InvalidMessage,
 	Unauthorized,
@@ -152,7 +74,7 @@ impl From<AuthFailure> for Option<CloseReason> {
 enum Message {
 	Close,
 	Ping,
-	Packet(packet::client::Packet),
+	Packet(ClientPacket),
 	Invalid,
 }
 
@@ -160,7 +82,7 @@ impl From<ws::Message> for Message {
 	fn from(message: ws::Message) -> Message {
 		if message.is_text() {
 			let text = message.to_str().unwrap();
-			match serde_json::from_str::<packet::client::Packet>(text) {
+			match serde_json::from_str::<ClientPacket>(text) {
 				Ok(packet) => Self::Packet(packet),
 				Err(_) => Self::Invalid,
 			}
@@ -187,6 +109,7 @@ impl MessageStream for SplitStream<ws::WebSocket> {
 	}
 }
 
+// TODO: maybe move to auth module
 #[derive(Debug)]
 struct Authenticated(Bearer);
 
@@ -239,21 +162,72 @@ impl Authorized {
 	}
 }
 
-pub struct UnauthedSocket {
+#[must_use]
+pub struct SocketWrapperInit<S: EnumSetType> {
+	socket: Arc<Socket<S>>,
+	receiver: SplitStream<ws::WebSocket>,
+}
+
+impl<S: EnumSetType> SocketWrapperInit<S> where Permission: From<S> {
+	pub async fn init<F, O>(self, f: F) -> SocketWrapperShutdown<S>
+	where
+		F: FnOnce(Arc<Socket<S>>) -> O,
+		O: std::future::Future<Output = ()>,
+	{
+		f(self.socket.clone()).await;
+
+		self.socket.run(self.receiver).await;
+
+		SocketWrapperShutdown {
+			socket: self.socket,
+		}
+	}
+}
+
+#[must_use]
+pub struct SocketWrapperShutdown<S: EnumSetType> {
+	socket: Arc<Socket<S>>,
+}
+
+impl<S: EnumSetType> SocketWrapperShutdown<S> {
+	pub async fn shutdown<F, O>(self, f: F)
+	where
+		F: FnOnce(Arc<Socket<S>>) -> O,
+		O: std::future::Future<Output = ()>,
+	{
+		f(self.socket).await;
+	}
+}
+
+pub struct Socket<S: EnumSetType> {
+	uuid: Uuid,
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
-	subscriptions: EnumSet<BoardSubscription>,
+	pub subscriptions: EnumSet<S>,
+	credentials: RwLock<Authorized>,
 	users_db: Arc<UsersDatabase>,
 }
 
-impl UnauthedSocket {
+impl<S: EnumSetType> PartialEq for Socket<S> {
+	fn eq(&self, other: &Self) -> bool {
+		self.uuid == other.uuid
+	}
+}
+
+impl<S: EnumSetType> Eq for Socket<S> {}
+
+impl<S: EnumSetType> Hash for Socket<S> {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		self.uuid.hash(state);
+	}
+}
+
+impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 	pub async fn connect(
 		websocket: ws::WebSocket,
-		subscriptions: EnumSet<BoardSubscription>,
-		board: Weak<RwLock<Option<Board>>>,
-		connection: BoardsConnection,
+		subscriptions: EnumSet<S>,
 		users_db: Arc<UsersDatabase>,
 		anonymous: bool,
-	) {
+	) -> Result<SocketWrapperInit<S>, AuthFailure> {
 		let (ws_sender, mut ws_receiver) = websocket.split();
 		let (sender, sender_receiver) = mpsc::unbounded_channel();
 
@@ -269,56 +243,81 @@ impl UnauthedSocket {
 				}),
 		);
 
-		let socket = Self { sender, subscriptions, users_db };
+		let auth_result = Socket::auth(
+			&mut ws_receiver,
+			sender,
+			subscriptions,
+			users_db,
+			anonymous,
+		).await;
 
-		match socket.auth_socket(&mut ws_receiver, anonymous).await {
+		match auth_result {
 			Ok(socket) => {
-				let socket = Arc::new(socket);
-
-				// add socket
-				if let Some(board) = board.upgrade() {
-					let mut board = board.write().await;
-					if let Some(ref mut board) = *board {
-						let insert_result = board.insert_socket(
-							&socket,
-							&connection,
-						).await;
-
-						if let Err(err) = insert_result {
-							let message = ws::Message::close_with(
-								u16::from(CloseReason::ServerError),
-								"",
-							);
-							
-							let _ = socket.sender.send(Ok(message));
-							return;
-						}
-					}
-				}
-
-				socket.handle_packets(&mut ws_receiver).await;
-
-				// remove socket
-				if let Some(board) = board.upgrade() {
-					let mut board = board.write().await;
-					if let Some(ref mut board) = *board {
-						board.remove_socket(&socket).await;
-					}
-				}
+				Ok(SocketWrapperInit {
+					socket: Arc::new(socket),
+					receiver: ws_receiver,
+				})
 			},
-			Err((socket, err)) => {
-				let message = match Option::<CloseReason>::from(err) {
+			Err((err, sender)) => {
+				let message = match Option::<CloseReason>::from(err.clone()) {
 					Some(reason) => ws::Message::close_with(u16::from(reason), ""),
 					None => ws::Message::close(),
 				};
 
-				let _ = socket.sender.send(Ok(message));
+				let _ = sender.send(Ok(message));
+				Err(err)
 			}
 		}
 	}
 
+	async fn auth(
+		receiver: &mut SplitStream<ws::WebSocket>,
+		sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
+		subscriptions: EnumSet<S>,
+		users_db: Arc<UsersDatabase>,
+		anonymous: bool,
+	) -> Result<Self, (AuthFailure, mpsc::UnboundedSender<Result<ws::Message, warp::Error>>)> {
+
+		let credentials = if anonymous {
+			None
+		} else {
+			match Socket::authenticate_socket(receiver).await {
+				Ok(credentials) => credentials,
+				Err(err) => return Err((err, sender)),
+			}
+		};
+
+		let permissions = subscriptions.iter()
+			.map(Permission::from)
+			.collect::<Vec<_>>();
+	
+		let mut connection = match users_db.connection().await {
+			Ok(connection) => connection,
+			Err(err) => return Err((AuthFailure::ServerError, sender)),
+		};
+
+		let authorize_attempt = Authorized::authorize(
+			credentials,
+			&permissions,
+			&mut connection
+		).await;
+
+		match authorize_attempt {
+			Ok(credentials) => {
+				Ok(Socket {
+					uuid: Uuid::new_v4(),
+					sender,
+					subscriptions,
+					credentials: RwLock::new(credentials),
+					users_db,
+				})
+			},
+			Err(err) => Err((err, sender)),
+		}
+	}
+
+	// TODO: maybe move this to Authenticated
 	async fn authenticate_socket(
-		&self,
 		receiver: &mut SplitStream<ws::WebSocket>,
 	) -> Result<Option<Authenticated>, AuthFailure> {
 		let timeout = tokio::time::sleep(Duration::from_secs(5));
@@ -336,9 +335,8 @@ impl UnauthedSocket {
 				},
 			};
 
-			use packet::client::Packet;
 			match next {
-				Ok(Message::Packet(Packet::Authenticate { token })) => {
+				Ok(Message::Packet(ClientPacket::Authenticate { token })) => {
 					let credentials = match token {
 						Some(token) => {
 							Some(Authenticated::authenticate(token).await?)
@@ -357,84 +355,26 @@ impl UnauthedSocket {
 		}
 	}
 
-	async fn auth_socket(
-		self,
-		receiver: &mut SplitStream<ws::WebSocket>,
-		anonymous: bool,
-	) -> Result<AuthedSocket, (Self, AuthFailure)> {
-		let credentials = if anonymous {
-			None
-		} else {
-			match self.authenticate_socket(receiver).await {
-				Ok(credentials) => credentials,
-				Err(err) => return Err((self, err)),
-			}
-		};
-
-		let permissions = self.subscriptions.iter()
-			.map(|e| e.permission())
-			.collect::<Vec<_>>();
-	
-		let mut connection = match self.users_db.connection().await {
-			Ok(connection) => connection,
-			Err(err) => return Err((self, AuthFailure::ServerError)),
-		};
-
-		match Authorized::authorize(credentials, &permissions, &mut connection).await {
-			Ok(credentials) => {
-				Ok(AuthedSocket {
-					uuid: Uuid::new_v4(),
-					sender: self.sender,
-					subscriptions: self.subscriptions,
-					credentials: RwLock::new(credentials),
-					users_db: self.users_db,
-				})
-			},
-			Err(e) => Err((self, e)),
-		}
-		
-	}
-}
-
-pub struct AuthedSocket {
-	uuid: Uuid,
-	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
-	pub subscriptions: EnumSet<BoardSubscription>,
-	credentials: RwLock<Authorized>,
-	users_db: Arc<UsersDatabase>,
-}
-
-impl PartialEq for AuthedSocket {
-	fn eq(
-		&self,
-		other: &Self,
-	) -> bool {
-		self.uuid == other.uuid
-	}
-}
-
-impl Eq for AuthedSocket {}
-
-impl Hash for AuthedSocket {
-	fn hash<H: std::hash::Hasher>(
-		&self,
-		state: &mut H,
-	) {
-		self.uuid.hash(state);
-	}
-}
-
-impl AuthedSocket {
 	pub async fn user_id(&self) -> Option<String> {
 		self.credentials.read().await.user_id()
 	}
 
-	pub async fn send(
+	pub async fn send<P: ServerPacket>(
 		&self,
-		message: &packet::server::Packet,
+		message: &P,
 	) {
 		let content = serde_json::to_string(message).unwrap();
 		let message = ws::Message::text(content);
+
+		if self.auth_valid().await {
+			self.sender.send(Ok(message));
+		} else {
+			self.close(Some(CloseReason::InvalidToken));
+		}
+	}
+
+	async fn ready(&self) {
+		let message = ws::Message::text(r#"{"type":"ready"}"#);
 
 		if self.auth_valid().await {
 			self.sender.send(Ok(message));
@@ -466,7 +406,7 @@ impl AuthedSocket {
 		}
 
 		let permissions = self.subscriptions.iter()
-			.map(|e| e.permission())
+			.map(Permission::from)
 			.collect::<Vec<_>>();
 
 		let mut connection = match self.users_db.connection().await {
@@ -498,14 +438,14 @@ impl AuthedSocket {
 		}
 	} 
 
-	async fn handle_packets(
+	async fn run(
 		&self,
-		receiver: &mut SplitStream<ws::WebSocket>,
+		mut receiver: SplitStream<ws::WebSocket>,
 	) {
+		self.ready().await;
 		while let Some(Ok(msg)) = receiver.receive().await {
-			use packet::client::Packet;
 			match msg {
-				Message::Packet(Packet::Authenticate { token }) => {
+				Message::Packet(ClientPacket::Authenticate { token }) => {
 					if let Err(err) = self.reauthorize(token).await {
 						self.close(err.into());
 					}

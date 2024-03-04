@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::config::CONFIG;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DiscoveryError {
 	ContactFailed,
 	InvalidResponse,
@@ -93,7 +93,7 @@ pub struct Identity {
 	pub exp: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ValidationError {
 	JWTError(JWTError),
 	DiscoveryError(DiscoveryError),

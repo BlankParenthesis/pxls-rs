@@ -11,21 +11,21 @@ use tokio::{time::Instant, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::board::cooldown::CooldownInfo;
-use crate::socket::{
-	CloseReason,
-	AuthedSocket,
-	BoardSubscription,
-	packet::{self, server::DataType}
-};
+use crate::socket::CloseReason;
+
+use super::BoardSubscription;
+use super::packet::{Packet, DataType, BoardUpdateBuilder};
+
+pub type Socket = crate::socket::Socket<BoardSubscription>;
 
 struct UserConnections {
-	connections: HashSet<Arc<AuthedSocket>>,
+	connections: HashSet<Arc<Socket>>,
 	cooldown_timer: Option<CancellationToken>,
 }
 
 impl UserConnections {
 	async fn new(
-		socket: Arc<AuthedSocket>,
+		socket: Arc<Socket>,
 		cooldown_info: Option<CooldownInfo>,
 	) -> Arc<RwLock<Self>> {
 		// NOTE: AuthedSocket hashes as the uuid, which is never mutated
@@ -50,14 +50,14 @@ impl UserConnections {
 
 	fn insert(
 		&mut self,
-		socket: Arc<AuthedSocket>,
+		socket: Arc<Socket>,
 	) {
 		self.connections.insert(socket);
 	}
 
 	fn remove(
 		&mut self,
-		socket: Arc<AuthedSocket>,
+		socket: Arc<Socket>,
 	) {
 		self.connections.remove(&socket);
 	}
@@ -89,7 +89,7 @@ impl UserConnections {
 			cancellable.cancel();
 		}
 
-		let packet = packet::server::Packet::PixelsAvailable {
+		let packet = Packet::PixelsAvailable {
 			count: u32::try_from(cooldown_info.pixels_available).unwrap(),
 			next: cooldown_info
 				.cooldown()
@@ -113,7 +113,7 @@ impl UserConnections {
 
 	async fn send(
 		&self,
-		packet: &packet::server::Packet,
+		packet: &Packet,
 	) {
 		let subscription = BoardSubscription::from(packet);
 		for connection in &self.connections {
@@ -138,7 +138,7 @@ impl UserConnections {
 
 			next = cooldown_info.next();
 
-			let packet = packet::server::Packet::PixelsAvailable {
+			let packet = Packet::PixelsAvailable {
 				count: u32::try_from(count).unwrap(),
 				next: next.map(|time| {
 					time.duration_since(UNIX_EPOCH)
@@ -163,14 +163,14 @@ impl UserConnections {
 #[derive(Default)]
 pub struct Connections {
 	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
-	by_subscription: EnumMap<BoardSubscription, HashSet<Arc<AuthedSocket>>>,
-	by_board_update: HashMap<EnumSet<DataType>, HashSet<Arc<AuthedSocket>>>,
+	by_subscription: EnumMap<BoardSubscription, HashSet<Arc<Socket>>>,
+	by_board_update: HashMap<EnumSet<DataType>, HashSet<Arc<Socket>>>,
 }
 
 impl Connections {
 	pub async fn insert(
 		&mut self,
-		socket: &Arc<AuthedSocket>,
+		socket: &Arc<Socket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
 		let id = socket.user_id().await;
@@ -204,7 +204,7 @@ impl Connections {
 
 	pub async fn remove(
 		&mut self,
-		socket: &Arc<AuthedSocket>,
+		socket: &Arc<Socket>,
 	) {
 		let id = socket.user_id().await;
 		let connections = self.by_uid.get(&id).unwrap();
@@ -232,7 +232,7 @@ impl Connections {
 
 	pub async fn send(
 		&self,
-		packet: packet::server::Packet,
+		packet: Packet,
 	) {
 		let subscription = BoardSubscription::from(&packet);
 		for connection in self.by_subscription[subscription].iter() {
@@ -242,7 +242,7 @@ impl Connections {
 
 	pub async fn send_board_update(
 		&self,
-		data: packet::server::BoardUpdateBuilder,
+		data: BoardUpdateBuilder,
 	) {
 		for (combination, packet) in data.build_combinations() {
 			if let Some(sockets) = self.by_board_update.get(&combination) {
@@ -256,7 +256,7 @@ impl Connections {
 	pub async fn send_to_user(
 		&self,
 		user_id: String,
-		packet: packet::server::Packet,
+		packet: Packet,
 	) {
 		if let Some(connections) = self.by_uid.get(&Some(user_id)) {
 			connections.read().await.send(&packet).await;

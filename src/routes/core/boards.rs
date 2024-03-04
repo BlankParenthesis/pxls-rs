@@ -18,9 +18,9 @@ use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::{board::{self, PassableBoard}, database};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::socket::{BoardSubscription, UnauthedSocket};
+use crate::socket::{Socket, CloseReason};
 use crate::filter::response::paginated_list::*;
-use crate::board::Board;
+use crate::board::{Board, BoardSubscription};
 
 use crate::{BoardRef, BoardDataMap};
 
@@ -214,7 +214,7 @@ pub fn events(
 					if anonymous {
 						let permissions = Permission::defaults();
 						let has_permissions = subscriptions.iter()
-							.map(|e| e.permission())
+							.map(Permission::from)
 							.all(|p| permissions.contains(p));
 					
 						if !has_permissions {
@@ -223,16 +223,54 @@ pub fn events(
 					}
 				
 					let users_db = Arc::clone(&users_db);
-					
-					Ok(ws.on_upgrade(move |websocket| {
-						UnauthedSocket::connect(
+					let init_board = Arc::downgrade(&*board);
+					let shutdown_board = Arc::downgrade(&*board);
+
+					Ok(ws.on_upgrade(move |websocket| async move {
+						let connect_result = Socket::connect(
 							websocket,
 							subscriptions,
-							Arc::downgrade(&*board),
-							connection,
 							users_db,
 							anonymous,
-						)
+						).await;
+
+						let socket = match connect_result {
+							Ok(socket) => socket,
+							Err(err) => return,
+						};
+						
+						socket.init(|socket| async move {
+							// add socket to board
+							if let Some(board) = init_board.upgrade() {
+								let mut board = board.write().await;
+								let board = match *board {
+									Some(ref mut board) => board,
+									None => {
+										let reason = Some(CloseReason::ServerClosing);
+										socket.close(reason);
+										return;
+									},
+								};
+								
+								let insert_result = board.insert_socket(
+									&socket,
+									&connection,
+								).await;
+
+								if let Err(err) = insert_result {
+									let reason = Some(CloseReason::ServerError);
+									socket.close(reason);
+								}
+							}
+						}).await.shutdown(|socket| async move {
+							// remove socket from board
+							if let Some(board) = shutdown_board.upgrade() {
+								let mut board = board.write().await;
+								if let Some(ref mut board) = *board {
+									board.remove_socket(&socket).await;
+								}
+							}
+						}).await;
 					}))
 				})
 		})

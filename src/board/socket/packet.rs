@@ -8,7 +8,9 @@ use enumset::{EnumSet, EnumSetType};
 
 use crate::board::Palette;
 use crate::board::Shape;
-use crate::socket::BoardSubscription;
+use crate::socket::ServerPacket;
+
+use super::BoardSubscription;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Change<T> {
@@ -176,7 +178,6 @@ pub enum Packet {
 		count: u32,
 		next: Option<u64>,
 	},
-	Ready,
 }
 
 impl From<&Packet> for BoardSubscription {
@@ -184,7 +185,8 @@ impl From<&Packet> for BoardSubscription {
 		match event {
 			Packet::BoardUpdate { .. } => BoardSubscription::DataColors,
 			Packet::PixelsAvailable { .. } => BoardSubscription::Cooldown,
-			Packet::Ready => todo!(),
 		}
 	}
 }
+
+impl ServerPacket for Packet {}
