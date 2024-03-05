@@ -6,6 +6,7 @@ mod boards;
 pub use users::{
 	UsersDatabase,
 	UsersConnection,
+	User,
 	Role,
 	UsersDatabaseError,
 	LdapPageToken,

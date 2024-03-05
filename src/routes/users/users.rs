@@ -166,5 +166,3 @@ pub fn delete(
 				.map(|_| StatusCode::NO_CONTENT)
 		})
 }
-
-// TODO: socket stuff 

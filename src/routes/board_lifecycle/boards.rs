@@ -4,7 +4,7 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 
 use warp::{
-	http::StatusCode,
+	http::{Uri, StatusCode},
 	reject::Rejection,
 	reply::Reply,
 	Filter,
@@ -15,9 +15,10 @@ use crate::board::Palette;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard, PendingDelete};
 use crate::filter::resource::database;
-use crate::filter::response::reference;
+use crate::filter::response::reference::{self, Reference};
 use crate::permissions::Permission;
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::routes::core::{EventPacket, Connections};
 
 #[derive(Deserialize, Debug)]
 pub struct BoardInfoPost {
@@ -28,6 +29,7 @@ pub struct BoardInfoPost {
 }
 
 pub fn post(
+	events_sockets: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
@@ -40,6 +42,7 @@ pub fn post(
 		.and(database::connection(boards_db))
 		.then(move |data: BoardInfoPost, _, _, connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
+			let events_sockets = Arc::clone(&events_sockets);
 			async move {
 				let board = connection.create_board(
 					data.name,
@@ -56,6 +59,11 @@ pub fn post(
 				let board = boards.get(&id).expect("Board went missing from list during creation")
 					.read().await;
 				let board = board.as_ref().expect("Board went missing during creation");
+
+				let packet = EventPacket::BoardCreated {
+					board: Reference::from(board),
+				};
+				events_sockets.read().await.send(&packet).await;
 
 				Ok::<_, StatusCode>(reference::created(board))
 			}
@@ -99,6 +107,7 @@ pub fn patch(
 }
 
 pub fn delete(
+	events_sockets: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
@@ -109,12 +118,21 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorized(users_db, Permission::BoardsDelete.into()))
 		.and(database::connection(boards_db))
-		.then(move |mut deletion: PendingDelete, _, _, connection: BoardsConnection| async move {
-			let board = deletion.perform();
-			let mut board = board.write().await;
-			board.take()
-				.expect("Board went missing during deletion")
-				.delete(&connection).await
-				.map(|_| StatusCode::NO_CONTENT)
+		.then(move |mut deletion: PendingDelete, _, _, connection: BoardsConnection| {
+			let events_sockets = events_sockets.clone();
+			async move {
+				let board = deletion.perform();
+				let mut board = board.write().await;
+				let board = board.take()
+					.expect("Board went missing during deletion");
+
+				let packet = EventPacket::BoardDeleted {
+					board: Uri::from(&board),
+				};
+				events_sockets.read().await.send(&packet).await;
+				
+				board.delete(&connection).await
+					.map(|_| StatusCode::NO_CONTENT)
+			}
 		})
 }

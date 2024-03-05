@@ -28,7 +28,7 @@ impl UserConnections {
 		socket: Arc<Socket>,
 		cooldown_info: Option<CooldownInfo>,
 	) -> Arc<RwLock<Self>> {
-		// NOTE: AuthedSocket hashes as the uuid, which is never mutated
+		// NOTE: Socket hashes as the uuid, which is never mutated
 		#[allow(clippy::mutable_key_type)]
 		let mut connections = HashSet::new();
 		connections.insert(socket);

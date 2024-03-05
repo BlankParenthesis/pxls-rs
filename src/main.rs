@@ -18,6 +18,7 @@ use std::{collections::HashMap, sync::Arc};
 use database::{BoardsDatabase, UsersDatabase, Database, UsersDatabaseError};
 use filter::header::authorization::{BearerError, PermissionsError};
 use futures_util::future;
+use routes::core::Connections;
 use tokio::sync::RwLock;
 use warp::body::BodyDeserializeError;
 use warp::{Filter, Rejection, Reply};
@@ -55,9 +56,11 @@ async fn main() {
 		.collect::<HashMap<_, _>>();
 
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
+	let sockets = Arc::new(RwLock::new(Connections::default()));
 
 	let routes_core = 
 		routes::core::info::get(Arc::clone(&users_db))
+		.or(routes::core::events(Arc::clone(&sockets), Arc::clone(&users_db)))
 		.or(routes::core::access::get(Arc::clone(&users_db)))
 		.or(routes::core::boards::list(Arc::clone(&boards), Arc::clone(&users_db)))
 		.or(routes::core::boards::get(
@@ -94,6 +97,7 @@ async fn main() {
 
 	let routes_lifecycle = 
 		routes::board_lifecycle::boards::post(
+			Arc::clone(&sockets),
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
@@ -104,6 +108,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		))
 		.or(routes::board_lifecycle::boards::delete(
+			Arc::clone(&sockets),
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
@@ -152,13 +157,13 @@ async fn main() {
 		
 	let routes_roles =
 		routes::roles::users::roles::list(Arc::clone(&users_db))
-		.or(routes::roles::users::roles::post(Arc::clone(&users_db)))
-		.or(routes::roles::users::roles::delete(Arc::clone(&users_db)))
+		.or(routes::roles::users::roles::post(Arc::clone(&sockets), Arc::clone(&users_db)))
+		.or(routes::roles::users::roles::delete(Arc::clone(&sockets), Arc::clone(&users_db)))
 		.or(routes::roles::roles::list(Arc::clone(&users_db)))
 		.or(routes::roles::roles::get(Arc::clone(&users_db)))
-		.or(routes::roles::roles::post(Arc::clone(&users_db)))
-		.or(routes::roles::roles::patch(Arc::clone(&users_db)))
-		.or(routes::roles::roles::delete(Arc::clone(&users_db)));
+		.or(routes::roles::roles::post(Arc::clone(&sockets), Arc::clone(&users_db)))
+		.or(routes::roles::roles::patch(Arc::clone(&sockets), Arc::clone(&users_db)))
+		.or(routes::roles::roles::delete(Arc::clone(&sockets), Arc::clone(&users_db)));
 	
 	let routes_usercount = 
 		routes::user_count::boards::users(

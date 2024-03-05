@@ -41,6 +41,13 @@ pub enum Permission {
 	BoardsEventsDataMask,
 	BoardsEventsInfo,
 	BoardsEventsCooldown,
+	EventsAccess,
+	EventsBoards,
+	EventsRoles,
+	EventsUsersRoles,
+	EventsUsersCurrentRoles,
+	EventsUsers,
+	EventsUsersCurrent,
 }
 
 impl Permission {
@@ -57,6 +64,8 @@ impl Permission {
 			Self::UsersRolesGet => Some(Self::UsersCurrentRolesGet),
 			Self::UsersRolesPost => Some(Self::UsersCurrentRolesPost),
 			Self::UsersRolesDelete => Some(Self::UsersCurrentRolesDelete),
+			Self::EventsUsersRoles => Some(Self::EventsUsersCurrentRoles),
+			Self::EventsUsers => Some(Self::EventsUsersCurrent),
 			_ => None,
 		}
 	}
@@ -101,6 +110,13 @@ impl From<&Permission> for &str {
 			Permission::BoardsEventsDataMask => "boards.events.data.mask",
 			Permission::BoardsEventsInfo => "boards.events.info",
 			Permission::BoardsEventsCooldown => "boards.events.cooldown",
+			Permission::EventsAccess => "events.access",
+			Permission::EventsBoards => "events.boards",
+			Permission::EventsRoles => "events.roles",
+			Permission::EventsUsersRoles => "events.users.roles",
+			Permission::EventsUsersCurrentRoles => "events.users.current.roles",
+			Permission::EventsUsers => "events.users",
+			Permission::EventsUsersCurrent => "events.users.current",
 		}
 	}
 }
@@ -146,6 +162,13 @@ impl TryFrom<&str> for Permission {
 			"boards.events.data.timestamps" => Ok(Permission::BoardsEventsDataTimestamps),
 			"boards.events.data.initial" => Ok(Permission::BoardsEventsDataInitial),
 			"boards.events.data.mask" => Ok(Permission::BoardsEventsDataMask),
+			"events.access" => Ok(Permission::EventsAccess),
+			"events.boards" => Ok(Permission::EventsBoards),
+			"events.roles" => Ok(Permission::EventsRoles),
+			"events.users.roles" => Ok(Permission::EventsUsersRoles),
+			"events.users.current.roles" => Ok(Permission::EventsUsersCurrentRoles),
+			"events.users" => Ok(Permission::EventsUsers),
+			"events.users.current" => Ok(Permission::EventsUsersCurrent),
 			_ => Err(()),
 		}
 	}

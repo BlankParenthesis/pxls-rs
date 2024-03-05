@@ -17,6 +17,12 @@ pub struct Reference<T: Serialize> {
 	view: T,
 }
 
+impl<T: Serialize> Reference<T> {
+	pub fn inner(&self) -> &T {
+		&self.view
+	}
+}
+
 impl<T: Serialize + Referenceable> From<T> for Reference<T> {
 	fn from(value: T) -> Self {
 		Self {

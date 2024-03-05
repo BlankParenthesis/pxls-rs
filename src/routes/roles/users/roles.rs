@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::sync::RwLock;
 use warp::{
 	Filter,
 	Reply,
@@ -16,7 +17,8 @@ use crate::filter::response::paginated_list::{
 };
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
+use crate::database::{UsersDatabase, UsersConnection, LdapPageToken, UsersDatabaseError};
+use crate::routes::core::{Connections, EventPacket};
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -66,6 +68,7 @@ struct RoleSpecifier {
 }
 
 pub fn post(
+	event_sockets: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersRolesPost;
@@ -95,14 +98,40 @@ pub fn post(
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
-			connection.add_user_role(&uid, &role.role).await?;
-			connection.list_user_roles(&uid, PageToken::start(), DEFAULT_PAGE_ITEM_LIMIT).await
-				.map(|page| warp::reply::json(&page.into_references()))
+		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection|{
+			let event_sockets = event_sockets.clone();
+			async move {
+				let prior = connection.user_permissions(&uid).await?;
+				connection.add_user_role(&uid, &role.role).await?;
+				let after = connection.user_permissions(&uid).await?;
+				let roles = connection.list_user_roles(
+					&uid,
+					PageToken::start(),
+					DEFAULT_PAGE_ITEM_LIMIT,
+				).await?;
+
+				let connections = event_sockets.read().await;
+				if prior != after {
+					let packet = EventPacket::AccessUpdate {
+						user_id: Some(uid.clone()),
+						permissions: after,
+					};
+					connections.send(&packet).await;
+				}
+				
+				let packet = EventPacket::UserRolesUpdated {
+					user: format!("/users/{}", uid).parse().unwrap(),
+					user_id: Some(uid),
+				};
+				connections.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles.into_references()))
+			}
 		})
 }
 
 pub fn delete(
+	event_sockets: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersRolesDelete;
@@ -133,10 +162,34 @@ pub fn delete(
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| async move {
-			connection.remove_user_role(&uid, &role.role).await?;
-			connection.list_user_roles(&uid, PageToken::start(), DEFAULT_PAGE_ITEM_LIMIT)
-				.await
-				.map(|page| warp::reply::json(&page.into_references()))
+		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| {
+			let event_sockets = event_sockets.clone();
+			async move {
+				let prior = connection.user_permissions(&uid).await?;
+				connection.remove_user_role(&uid, &role.role).await?;
+				let after = connection.user_permissions(&uid).await?;
+				let roles = connection.list_user_roles(
+					&uid,
+					PageToken::start(),
+					DEFAULT_PAGE_ITEM_LIMIT,
+				).await?;
+
+				let connections = event_sockets.read().await;
+				if prior != after {
+					let packet = EventPacket::AccessUpdate {
+						permissions: after,
+						user_id: Some(uid.clone()),
+					};
+					connections.send(&packet).await;
+				}
+
+				let packet = EventPacket::UserRolesUpdated {
+					user: format!("/users/{}", uid).parse().unwrap(),
+					user_id: Some(uid),
+				};
+				connections.send(&packet).await;
+				
+				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles.into_references()))
+			}
 		})
 }
