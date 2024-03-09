@@ -5,6 +5,7 @@ mod m0_create_boards_colors_placements;
 mod m1_advanced_shapes;
 mod m2_max_stacked_board_property;
 mod m3_json_shape;
+mod m4_system_colors;
 
 pub struct Migrator;
 
@@ -30,6 +31,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m1_advanced_shapes::Migration),
 			Box::new(m2_max_stacked_board_property::Migration),
 			Box::new(m3_json_shape::Migration),
+			Box::new(m4_system_colors::Migration),
 		]
 	}
 }

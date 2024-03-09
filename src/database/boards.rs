@@ -139,7 +139,8 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				let index = color.index as u32;
 				let color = Color {
 					name: color.name,
-					value: color.value as u32
+					value: color.value as u32,
+					system_only: color.system_only,
 				};
 
 				(index, color)
@@ -200,12 +201,13 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.filter(color::Column::Board.eq(board_id))
 			.exec(&transaction.connection).await?;
 	
-		for (index, Color { name, value }) in palette {
+		for (index, Color { name, value, system_only }) in palette {
 			let color = color::ActiveModel {
 				board: Set(board_id),
 				index: Set(index as i32),
 				name: Set(name.clone()),
 				value: Set(value as i32),
+				system_only: Set(system_only),
 			};
 	
 			color::Entity::insert(color)
