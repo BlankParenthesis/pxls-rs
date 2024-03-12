@@ -326,8 +326,8 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		let compare_lhs = column_timestamp_id_pair.clone();
 		let compare_rhs = value_timestamp_id_pair;
 		let compare = match order {
-			Order::Forward => Expr::lt(compare_lhs, compare_rhs),
-			Order::Reverse => Expr::gte(compare_lhs, compare_rhs),
+			Order::Forward => Expr::gte(compare_lhs, compare_rhs),
+			Order::Reverse => Expr::lt(compare_lhs, compare_rhs),
 		};
 
 		let order = match order {
