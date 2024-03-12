@@ -83,7 +83,7 @@ pub fn post(
 #[derive(Deserialize)]
 struct RoleUpdate {
 	name: Option<String>,
-	#[serde(with = "serde_with::rust::double_option")]
+	#[serde(default, with = "serde_with::rust::double_option")]
 	icon: Option<Option<Url>>,
 	permissions: Option<Vec<Permission>>,
 }
