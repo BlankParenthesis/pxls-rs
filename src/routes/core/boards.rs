@@ -185,6 +185,7 @@ pub fn get(
 #[derive(Debug, Deserialize)]
 struct SocketOptions {
 	subscribe: Option<EnumSet<BoardSubscription>>,
+	// TODO: use #serde(default) for this and similar
 	authenticate: Option<bool>,
 }
 

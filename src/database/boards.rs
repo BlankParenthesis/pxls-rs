@@ -413,6 +413,37 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		.map_err(BoardsDatabaseError::from)
 	}
 
+	pub async fn insert_placements(
+		&self,
+		board_id: i32,
+		placements: &[(u64, u8)],
+		timestamp: u32,
+		user_id: String,
+	) -> DbResult<Placement> {
+		placement::Entity::insert_many(
+			placements.iter().map(|(position, color)| {
+				placement::ActiveModel {
+					id: NotSet,
+					board: Set(board_id),
+					position: Set(*position as i64),
+					color: Set(*color as i16),
+					timestamp: Set(timestamp as i32),
+					// TODO: this makes it clear that storing the user id as a
+					// field is a *terrible* idea and it should be moved to it's
+					// own table.
+					user_id: Set(user_id.clone()),
+				}
+			})
+		)
+		.exec_with_returning(&self.connection).await
+		.map(|placement| Placement {
+			position: placement.position as u64,
+			color: placement.color as u8,
+			timestamp: placement.timestamp as u32,
+		})
+		.map_err(BoardsDatabaseError::from)
+	}
+
 	pub async fn count_placements(
 		&self,
 		board_id: i32,

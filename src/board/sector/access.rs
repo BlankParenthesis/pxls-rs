@@ -164,7 +164,8 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 
 			let mut sector = self.sectors
 				.get_sector_mut(sector_index, &transaction)
-				.await.unwrap();
+				.await?
+				.expect("Missing sector");
 
 			let buf = &mut match self.buffer {
 				SectorBuffer::Colors => &mut sector.colors,

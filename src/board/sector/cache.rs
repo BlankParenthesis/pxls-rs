@@ -114,21 +114,21 @@ impl SectorCache {
 		&self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Option<RwLockMappedWriteGuard<Sector>> {
+	) -> Result<Option<RwLockMappedWriteGuard<Sector>>, BoardsDatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.write().await;
 			if option.is_some() {
-				Some(RwLockWriteGuard::map(option, |o| o.as_mut().unwrap()))
+				Ok(Some(RwLockWriteGuard::map(option, |o| o.as_mut().unwrap())))
 			} else {
 				drop(option);
 
 				let sector = self.cache_sector(sector_index, connection)
-					.await.unwrap();
+					.await?;
 
-				Some(RwLockWriteGuard::map(sector, |o| o.as_mut().unwrap()))
+				Ok(Some(RwLockWriteGuard::map(sector, |o| o.as_mut().unwrap())))
 			}
 		} else {
-			None
+			Ok(None)
 		}
 	}
 

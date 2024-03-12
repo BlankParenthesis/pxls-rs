@@ -10,7 +10,7 @@ use std::{
 	convert::TryFrom,
 	io::{Seek, SeekFrom},
 	sync::Arc,
-	time::{Duration, SystemTime, UNIX_EPOCH},
+	time::{Duration, SystemTime, UNIX_EPOCH}, collections::{HashMap, hash_map::Entry, HashSet},
 };
 
 use bytes::BufMut;
@@ -18,7 +18,7 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::filter::body::patch::BinaryPatch;
+use crate::{filter::body::patch::BinaryPatch, routes::board_moderation::boards::pixels::Overrides};
 use crate::filter::response::{paginated_list::Page, reference::Referenceable};
 use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
@@ -292,58 +292,179 @@ impl Board {
 		connection.last_place_time(self.id, user_id.to_owned()).await
 	}
 
+	fn check_placement_palette(
+		&self,
+		color: u8,
+		color_override: bool,
+	) -> Result<(), PlaceError> {
+		let palette_entry = self.info.palette.get(&(color as u32));
+		match palette_entry {
+			Some(color) => {
+				if !color.system_only || color_override {
+					Ok(())
+				} else {
+					Err(PlaceError::Unplacable)
+				}
+			},
+			Some(_) => Ok(()),
+			None => Err(PlaceError::InvalidColor),
+		}
+	}
+
+	pub async fn mass_place(
+		&self,
+		user_id: &str,
+		placements: &[(u64, u8)],
+		overrides: Overrides,
+		connection: &BoardsConnection,
+	) -> Result<usize, PlaceError> {
+		// preliminary checks and mapping to sector local values
+		let sector_placements = placements.iter()
+			.copied()
+			.map(|(position, color)| {
+				self.check_placement_palette(color, overrides.color)
+					.and_then(|()| {
+						self.info.shape.to_local(position as usize)
+							.ok_or(PlaceError::OutOfBounds)
+					})
+					.map(|(s_i, s_o)| ((s_i, s_o), color))
+			})
+			.collect::<Result<Vec<_>, _>>()?;
+
+		let used_sectors = sector_placements.iter()
+			.map(|((i, _), _)| *i)
+			.collect::<HashSet<_>>();
+
+		// lock all the relevant sectors
+		let mut sectors = HashMap::new();
+		for sector_index in used_sectors {
+			if let Entry::Vacant(vacant) = sectors.entry(sector_index) {
+				let sector =  self.sectors
+					.get_sector_mut(sector_index, connection).await
+					.map_err(PlaceError::DatabaseError)?
+					.expect("Missing sector");
+
+				vacant.insert(sector);
+			}
+		}
+
+		let mut changes = 0;
+		// final checks
+		for ((sector_index, sector_offset), color) in sector_placements.iter() {
+			let sector = sectors.get(sector_index).unwrap();
+
+			if !overrides.mask {
+				match MaskValue::try_from(sector.mask[*sector_offset]).ok() {
+					Some(MaskValue::Place) => Ok(()),
+					Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
+					Some(MaskValue::Adjacent) => unimplemented!(),
+					None => Err(PlaceError::UnknownMaskValue),
+				}?;
+			}
+
+			if sector.colors[*sector_offset] != *color {
+				changes += 1;
+			}
+		}
+
+		if changes == 0 {
+			return Err(PlaceError::NoOp);
+		}
+
+		if !overrides.cooldown {
+			let cooldown_info = self.user_cooldown_info(
+				user_id,
+				connection,
+			).await.map_err(PlaceError::DatabaseError)?;
+
+			if cooldown_info.pixels_available < changes {
+				return Err(PlaceError::Cooldown);
+			}
+		}
+
+		let timestamp = self.current_timestamp();
+		
+		// commit the placements
+		connection.insert_placements(
+			self.id,
+			placements,
+			timestamp,
+			user_id.to_owned(),
+		).await.map_err(PlaceError::DatabaseError)?;
+		
+		for ((sector_index, sector_offset), color) in sector_placements {
+			let sector = sectors.get_mut(&sector_index).unwrap();
+
+			sector.colors[sector_offset] = color;
+			
+			let timestamp_slice =
+				&mut sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)];
+			
+			timestamp_slice
+				.as_mut()
+				.put_u32_le(timestamp);
+		}
+
+		Ok(changes)
+	}
+
 	// TODO: re-evaluate anonymous placing, maybe try and implement it again
 	pub async fn try_place(
 		&self,
 		user_id: &str,
 		position: u64,
 		color: u8,
+		overrides: Overrides,
 		connection: &BoardsConnection,
 	) -> Result<Placement, PlaceError> {
 		// TODO: I hate most things about how this is written.
 		// Redo it and/or move stuff.
 
-		let (sector_index, sector_offset) = self
-			.info
-			.shape
+		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
 			.ok_or(PlaceError::OutOfBounds)?;
 
-		if !self.info.palette.contains_key(&(color as u32)) {
-			return Err(PlaceError::InvalidColor);
-		}
+		self.check_placement_palette(color, overrides.color)?;
 		
 		let mut sector = self.sectors
 			.get_sector_mut(sector_index, connection).await
-			.expect("Failed to load sector");
+			.map_err(PlaceError::DatabaseError)?
+			.expect("Missing sector");
 
-		match MaskValue::try_from(sector.mask[sector_offset]).ok() {
-			Some(MaskValue::Place) => Ok(()),
-			Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
-			// NOTE: there exists an old implementation in the version
-			// control history. It's messy and would need to load adjacent
-			// sectors now so I'm dropping it for now.
-			Some(MaskValue::Adjacent) => unimplemented!(),
-			None => Err(PlaceError::UnknownMaskValue),
-		}?;
+		if !overrides.mask {
+			match MaskValue::try_from(sector.mask[sector_offset]).ok() {
+				Some(MaskValue::Place) => Ok(()),
+				Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
+				// NOTE: there exists an old implementation in the version
+				// control history. It's messy and would need to load adjacent
+				// sectors now so I'm dropping it for now.
+				Some(MaskValue::Adjacent) => unimplemented!(),
+				None => Err(PlaceError::UnknownMaskValue),
+			}?;
+		}
 
 		if sector.colors[sector_offset] == color {
 			return Err(PlaceError::NoOp);
 		}
 
 		let timestamp = self.current_timestamp();
-		let cooldown_info = self.user_cooldown_info(
-			user_id,
-			connection,
-		).await.map_err(PlaceError::DatabaseError)?;
+		// TODO: ignore cooldown should probably also mark the pixel as not
+		// contributing to the pixels available
+		if !overrides.cooldown {
+			let cooldown_info = self.user_cooldown_info(
+				user_id,
+				connection,
+			).await.map_err(PlaceError::DatabaseError)?;
 
-		if cooldown_info.pixels_available == 0 {
-			return Err(PlaceError::Cooldown);
+			if cooldown_info.pixels_available == 0 {
+				return Err(PlaceError::Cooldown);
+			}
 		}
 
-		// Race conditions on this are guarded by the writable sector above,
-		// so there's no need for a transaction.
-		// (Given the invariant that we are the only application writing to db)
+		// FIXME: the sector write guard prevents double writes to this sector,
+		// but not across multiple sectors, so a user could place twice at once
+		// in two different sectors.
+		// Could probably solve this with sql transactions and select's `lock`
 		let new_placement = connection.insert_placement(
 			self.id,
 			position,

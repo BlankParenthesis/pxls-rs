@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use serde::{Serialize, Deserialize};
 
+// TODO: these should probably be u64
 #[derive(Debug, Clone)]
 pub struct Shape {
 	sector_size: usize,

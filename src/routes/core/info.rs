@@ -40,6 +40,7 @@ lazy_static! {
 			"users",
 			"roles",
 			"user_count",
+			"board_moderation",
 		],
 	};
 }

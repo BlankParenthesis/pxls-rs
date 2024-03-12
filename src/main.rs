@@ -172,6 +172,13 @@ async fn main() {
 			Arc::clone(&users_db),
 		);
 
+	let routes_board_moderation =
+		routes::board_moderation::boards::pixels::patch(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
+		);
+
 	let routes = 
 		routes_core
 		.or(routes_lifecycle)
@@ -182,6 +189,7 @@ async fn main() {
 		.or(routes_users)
 		.or(routes_roles)
 		.or(routes_usercount)
+		.or(routes_board_moderation)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

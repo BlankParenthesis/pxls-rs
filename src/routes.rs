@@ -7,3 +7,4 @@ pub mod board_lifecycle;
 pub mod users;
 pub mod roles;
 pub mod user_count;
+pub mod board_moderation;

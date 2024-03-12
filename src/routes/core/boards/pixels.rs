@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use enumset::EnumSet;
 use reqwest::StatusCode;
 use warp::{Reply, Rejection};
 use warp::Filter;
 use serde::Deserialize;
 
 use crate::board::PlacementPageToken;
-use crate::filter::header::authorization::{Bearer, authorized};
+use crate::filter::header::authorization::{Bearer, authorized, self, PermissionsError};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::filter::response::paginated_list::{
@@ -18,6 +19,7 @@ use crate::permissions::Permission;
 use crate::BoardDataMap;
 
 use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::routes::board_moderation::boards::pixels::Overrides;
 
 pub fn list(
 	boards: BoardDataMap,
@@ -71,8 +73,10 @@ pub fn get(
 }
 
 #[derive(Deserialize, Debug)]
-pub struct PlacementRequest {
-	pub color: u8,
+struct PlacementRequest {
+	color: u8,
+	#[serde(default)]
+	overrides: Overrides,
 }
 
 pub fn post(
@@ -87,9 +91,22 @@ pub fn post(
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorized(users_db, Permission::BoardsPixelsPost.into()))
+		.and(authorization::permissions(users_db))
+		.and_then(|board, position, placement: PlacementRequest, permissions: EnumSet<Permission>, user, _| async move {
+			let authorized = authorization::has_permissions(
+				permissions,
+				EnumSet::from(placement.overrides) | Permission::BoardsPixelsPost,
+			);
+
+			if authorized {
+				Ok((board, position, placement, user))
+			} else {
+				Err(warp::reject::custom(PermissionsError::MissingPermission))
+			}
+		})
+		.untuple_one()
 		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, connection: BoardsConnection| async move {
 			let user = user.expect("Default user shouldn't have place permisisons");
 
 			let board = board.read().await;
@@ -100,6 +117,7 @@ pub fn post(
 				&user.id,
 				position,
 				placement.color,
+				placement.overrides,
 				&connection,
 			).await;
 
