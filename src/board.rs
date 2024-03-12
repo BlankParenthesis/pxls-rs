@@ -162,7 +162,7 @@ impl Board {
 
 		let end = patch.start + patch.data.len();
 		let total_pixels = self.sectors.total_size();
-		if end >= total_pixels {
+		if end > total_pixels {
 			return Err(PatchError::WriteOutOfBounds);
 		}
 
