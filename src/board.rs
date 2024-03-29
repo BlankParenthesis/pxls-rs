@@ -18,7 +18,7 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{filter::body::patch::BinaryPatch, routes::board_moderation::boards::pixels::Overrides};
+use crate::{filter::body::patch::BinaryPatch, routes::board_moderation::boards::pixels::Overrides, config::CONFIG};
 use crate::filter::response::{paginated_list::Page, reference::Referenceable};
 use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
@@ -67,6 +67,31 @@ impl Reply for PlaceError {
 		.into_response()
 	}
 }
+
+#[derive(Debug)]
+pub enum UndoError {
+	OutOfBounds,
+	WrongUser,
+	Expired,
+	DatabaseError(BoardsDatabaseError),
+}
+
+impl Reject for UndoError {}
+
+impl Reply for UndoError {
+	fn into_response(self) -> Response {
+		match self {
+			Self::OutOfBounds => StatusCode::NOT_FOUND,
+			Self::WrongUser => StatusCode::FORBIDDEN,
+			Self::Expired => StatusCode::CONFLICT,
+			Self::DatabaseError(_) => {
+				StatusCode::INTERNAL_SERVER_ERROR
+			},
+		}
+		.into_response()
+	}
+}
+
 
 #[derive(Debug)]
 pub enum PatchError {
@@ -311,13 +336,16 @@ impl Board {
 		}
 	}
 
+	// Returns a tuple of:
+	// - the number of placements that changed the board 
+	// - the timestamp they were placed at
 	pub async fn mass_place(
 		&self,
 		user_id: &str,
 		placements: &[(u64, u8)],
 		overrides: Overrides,
 		connection: &BoardsConnection,
-	) -> Result<usize, PlaceError> {
+	) -> Result<(usize, u32), PlaceError> {
 		// preliminary checks and mapping to sector local values
 		let sector_placements = placements.iter()
 			.copied()
@@ -405,7 +433,40 @@ impl Board {
 				.put_u32_le(timestamp);
 		}
 
-		Ok(changes)
+		Ok((changes, timestamp))
+	}
+
+	pub async fn try_undo(
+		&self,
+		user_id: &str,
+		position: u64,
+		connection: &BoardsConnection,
+	) -> Result<(), UndoError> {
+		self.info.shape
+			.to_local(position as usize)
+			.ok_or(UndoError::OutOfBounds)?;
+
+		let transaction = connection.begin().await
+			.map_err(UndoError::DatabaseError)?;
+		
+		let placement = transaction.get_placement(self.id, position).await
+			.map_err(UndoError::DatabaseError)?;
+
+		let placement_id = match placement {
+			Some(Placement { id, user, timestamp, .. }) if &user == user_id => {
+				let deadline = timestamp + CONFIG.undo_deadline_seconds;
+				if deadline > self.current_timestamp() {
+					return Err(UndoError::Expired)
+				}
+				id
+			}
+			_ => return Err(UndoError::WrongUser)
+		};
+
+		transaction.delete_placement(placement_id);
+
+		transaction.commit().await
+			.map_err(UndoError::DatabaseError)
 	}
 
 	// TODO: re-evaluate anonymous placing, maybe try and implement it again

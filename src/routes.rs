@@ -8,3 +8,4 @@ pub mod users;
 pub mod roles;
 pub mod user_count;
 pub mod board_moderation;
+pub mod board_undo;

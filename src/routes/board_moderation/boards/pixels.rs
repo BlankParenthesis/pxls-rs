@@ -6,6 +6,7 @@ use warp::{Reply, Rejection};
 use warp::Filter;
 use serde::Deserialize;
 
+use crate::config::CONFIG;
 use crate::filter::header::authorization::{Bearer, self, PermissionsError};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
@@ -101,7 +102,6 @@ pub fn patch(
 						},
 						RangeEdit::Uniform { position, value, length } => {
 							(0..length)
-								.into_iter()
 								.map(|i| (position + i, value))
 								.collect::<Vec<_>>()
 						},
@@ -120,11 +120,19 @@ pub fn patch(
 			).await;
 
 			match place_attempt {
-				Ok(placement) => {
+				Ok((pixels_changed, timestamp)) => {
 					let mut response = warp::reply::with_status(
-						warp::reply::json(&placement).into_response(),
+						warp::reply::json(&pixels_changed).into_response(),
 						StatusCode::CREATED,
 					).into_response();
+
+					if CONFIG.undo_deadline_seconds != 0 {
+						response = warp::reply::with_header(
+							response,
+							"Pxls-Undo-Deadline",
+							timestamp + CONFIG.undo_deadline_seconds,
+						).into_response();
+					}
 
 					let cooldown_info = board.user_cooldown_info(
 						&user.id,

@@ -356,9 +356,11 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 
 		let placements = placements.into_iter()
 			.map(|placement| Placement {
+				id: placement.id,
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
+				user: placement.user_id,
 			})
 			.collect();
 		
@@ -380,10 +382,18 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.one(&self.connection).await?;
 
 		Ok(placement.map(|placement| Placement {
+			id: placement.id,
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user: placement.user_id,
 		}))
+	}
+
+	pub async fn delete_placement(&self, placement_id: i64,) -> DbResult<()> {
+		placement::Entity::delete_by_id(placement_id)
+			.exec(&self.connection).await?;
+		Ok(())
 	}
 
 	pub async fn insert_placement(
@@ -406,9 +416,11 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		)
 		.exec_with_returning(&self.connection).await
 		.map(|placement| Placement {
+			id: placement.id,
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user: placement.user_id,
 		})
 		.map_err(BoardsDatabaseError::from)
 	}
@@ -437,9 +449,11 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		)
 		.exec_with_returning(&self.connection).await
 		.map(|placement| Placement {
+			id: placement.id,
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user: placement.user_id,
 		})
 		.map_err(BoardsDatabaseError::from)
 	}
@@ -478,9 +492,11 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.all(&self.connection).await?;
 
 		Ok(placements.into_iter().rev().map(|placement| Placement {
+			id: placement.id,
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user: placement.user_id,
 		}).collect())
 	}
 

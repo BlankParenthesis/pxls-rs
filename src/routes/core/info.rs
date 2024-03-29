@@ -41,6 +41,7 @@ lazy_static! {
 			"roles",
 			"user_count",
 			"board_moderation",
+			"undo",
 		],
 	};
 }

@@ -7,6 +7,7 @@ use warp::Filter;
 use serde::Deserialize;
 
 use crate::board::PlacementPageToken;
+use crate::config::CONFIG;
 use crate::filter::header::authorization::{Bearer, authorized, self, PermissionsError};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
@@ -127,6 +128,14 @@ pub fn post(
 						warp::reply::json(&placement).into_response(),
 						StatusCode::CREATED,
 					).into_response();
+
+					if CONFIG.undo_deadline_seconds != 0 {
+						response = warp::reply::with_header(
+							response,
+							"Pxls-Undo-Deadline",
+							placement.timestamp + CONFIG.undo_deadline_seconds,
+						).into_response();
+					}
 
 					let cooldown_info = board.user_cooldown_info(
 						&user.id,

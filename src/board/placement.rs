@@ -5,11 +5,14 @@ use serde::de::{self, Deserializer, Visitor};
 
 use crate::filter::response::paginated_list::PageToken;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct Placement {
+	#[serde(skip_serializing)]
+	pub id: i64,
 	pub position: u64,
 	pub color: u8,
 	pub timestamp: u32,
+	pub user: String, // TODO: serialize as a reference properly
 }
 
 pub struct PlacementPageToken {

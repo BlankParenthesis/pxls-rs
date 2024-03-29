@@ -16,6 +16,7 @@ pub struct Config {
 	pub ldap_users_id_field: String,
 	pub ldap_users_username_field: String,
 	pub ldap_roles_ou: String,
+	pub undo_deadline_seconds: u32,
 }
 
 impl Config {
