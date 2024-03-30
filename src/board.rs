@@ -442,18 +442,24 @@ impl Board {
 		position: u64,
 		connection: &BoardsConnection,
 	) -> Result<(), UndoError> {
-		self.info.shape
+		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
 			.ok_or(UndoError::OutOfBounds)?;
+
+		let mut sector = self.sectors
+			.get_sector_mut(sector_index, connection).await
+			.map_err(UndoError::DatabaseError)?
+			.expect("Missing sector");
 
 		let transaction = connection.begin().await
 			.map_err(UndoError::DatabaseError)?;
 		
-		let placement = transaction.get_placement(self.id, position).await
+		let (undone_placement, last_placement) = transaction
+			.get_two_placements(self.id, position).await
 			.map_err(UndoError::DatabaseError)?;
 
-		let placement_id = match placement {
-			Some(Placement { id, user, timestamp, .. }) if &user == user_id => {
+		let placement_id = match undone_placement {
+			Some(Placement { id, user, timestamp, .. }) if user == user_id => {
 				let deadline = timestamp + CONFIG.undo_deadline_seconds;
 				if deadline > self.current_timestamp() {
 					return Err(UndoError::Expired)
@@ -463,10 +469,46 @@ impl Board {
 			_ => return Err(UndoError::WrongUser)
 		};
 
-		transaction.delete_placement(placement_id);
+		transaction.delete_placement(placement_id).await
+			.map_err(UndoError::DatabaseError)?;
+
+		let (color, timestamp) = match last_placement {
+			Some(placement) => (placement.color, placement.timestamp),
+			None => (sector.initial[sector_offset], 0),
+		};
+
+		sector.colors[sector_offset] = color;
+		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
+			.as_mut()
+			.put_u32_le(timestamp);
 
 		transaction.commit().await
-			.map_err(UndoError::DatabaseError)
+			.map_err(UndoError::DatabaseError)?;
+
+		let color = socket::Change {
+			position,
+			values: vec![color],
+		};
+
+		let timestamp = socket::Change {
+			position,
+			values: vec![timestamp],
+		};
+
+		let data = socket::BoardData::builder()
+			.colors(vec![color])
+			.timestamps(vec![timestamp]);
+
+		self.connections.send_board_update(data).await;
+
+		let cooldown_info = self.user_cooldown_info(
+			user_id,
+			connection,
+		).await.map_err(UndoError::DatabaseError)?;
+
+		self.connections.set_user_cooldown(user_id, cooldown_info).await;
+		
+		Ok(())
 	}
 
 	// TODO: re-evaluate anonymous placing, maybe try and implement it again
@@ -535,9 +577,7 @@ impl Board {
 		).await.map_err(PlaceError::DatabaseError)?;
 
 		sector.colors[sector_offset] = color;
-		let timestamp_slice =
-			&mut sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)];
-		timestamp_slice
+		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
 			.as_mut()
 			.put_u32_le(timestamp);
 

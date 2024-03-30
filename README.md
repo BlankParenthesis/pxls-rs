@@ -18,7 +18,7 @@ Important missing features:
 	- [X] [board_lifecycle](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_lifecycle.md)
 	- [X] [board_moderation](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_moderation.md)
 	- [ ] [board_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_notices.md)
-	- [ ] [board_undo](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_undo.md)
+	- [X] [board_undo](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_undo.md)
 	- [ ] [cooldown_info](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/cooldown_info.md)
 	- [ ] [factions](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/factions.md)
 	- [ ] [list_filtering](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/list_filtering.md)

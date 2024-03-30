@@ -390,6 +390,33 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		}))
 	}
 
+	pub async fn get_two_placements(
+		&self,
+		board_id: i32,
+		position: u64,
+	) -> DbResult<(Option<Placement>, Option<Placement>)> {
+		let mut placements = placement::Entity::find()
+			.filter(
+				placement::Column::Board.eq(board_id)
+					.and(placement::Column::Position.eq(position as i64)),
+			)
+			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
+			.order_by(placement::Column::Id, sea_orm::Order::Desc)
+			.limit(2)
+			.all(&self.connection).await?
+			.into_iter()
+			.take(2)
+			.map(|placement| Placement {
+				id: placement.id,
+				position: placement.position as u64,
+				color: placement.color as u8,
+				timestamp: placement.timestamp as u32,
+				user: placement.user_id,
+			});
+
+		Ok((placements.next(), placements.next()))
+	}
+
 	pub async fn delete_placement(&self, placement_id: i64,) -> DbResult<()> {
 		placement::Entity::delete_by_id(placement_id)
 			.exec(&self.connection).await?;
