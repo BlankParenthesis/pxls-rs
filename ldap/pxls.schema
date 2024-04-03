@@ -15,6 +15,21 @@ attributeType (
 	SUBSTR caseIgnoreSubstringsMatch
 	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64} )
 
+attributeType (
+	1.3.6.1.4.1.164036.1.3
+	NAME 'pxlsspaceFactionName'
+	DESC 'The assigned name of a faction'
+	EQUALITY caseIgnoreMatch
+	SUBSTR caseIgnoreSubstringsMatch
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64} )
+
+attributeType (
+	1.3.6.1.4.1.164036.1.4
+	NAME 'pxlsspaceFactionOwner'
+	EQUALITY distinguishedNameMatch
+	DESC 'A user with administrative access to a faction'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )
+
 objectclass (
 	1.3.6.1.4.1.164036.2.1
 	NAME 'pxlsspaceRole'
@@ -23,3 +38,12 @@ objectclass (
 	STRUCTURAL
 	MUST cn
 	MAY ( pxlsspaceIcon $ pxlsspacePermission $ member ) )
+
+objectclass (
+	1.3.6.1.4.1.164036.2.2
+	NAME 'pxlsspaceFaction'
+	DESC 'A group which uses may belong to that has permissions associated with it'
+	SUP top
+	STRUCTURAL
+	MUST ( cn $ pxlsspaceFactionName )
+	MAY ( pxlsspaceIcon $ member $ pxlsspaceFactionOwner ) )

@@ -40,7 +40,7 @@ pub fn list(
 pub fn get(
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	let permissions = Permission::UsersGet | Permission::UsersPatch;
+	let permissions = Permission::UsersGet.into();
 
 	warp::path("users")
 		.and(warp::path::param())

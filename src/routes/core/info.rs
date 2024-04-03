@@ -42,6 +42,7 @@ lazy_static! {
 			"user_count",
 			"board_moderation",
 			"undo",
+			"factions",
 		],
 	};
 }

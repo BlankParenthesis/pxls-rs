@@ -12,6 +12,7 @@ use crate::permissions::Permission;
 pub enum ParseError {
 	User(UserParseError),
 	Role(RoleParseError),
+	Faction(FactionParseError),
 }
 
 impl From<UserParseError> for ParseError {
@@ -23,6 +24,12 @@ impl From<UserParseError> for ParseError {
 impl From<RoleParseError> for ParseError {
 	fn from(value: RoleParseError) -> Self {
 		Self::Role(value)
+	}
+}
+
+impl From<FactionParseError> for ParseError {
+	fn from(value: FactionParseError) -> Self {
+		Self::Faction(value)
 	}
 }
 
@@ -202,9 +209,10 @@ impl TryFrom<SearchEntry> for Role {
 			.filter_map(|v| Permission::try_from(v.as_str()).ok())
 			.collect();
 
-		Ok(Role{ name, icon, permissions })
+		Ok(Role { name, icon, permissions })
 	}
 }
+
 impl From<&Role> for Uri {
 	fn from(role: &Role) -> Self {
 		format!("/roles/{}", role.name).parse().unwrap()
@@ -212,5 +220,122 @@ impl From<&Role> for Uri {
 }
 
 impl Referenceable for Role {
+	fn location(&self) -> Uri { Uri::from(self) }
+}
+
+
+#[derive(Debug)]
+pub enum FactionParseError {
+	MissingId,
+	MissingName,
+	InvalidIcon(UrlParseError),
+	MissingTimestamp,
+	BadTimestamp(TimestampParseError),
+}
+
+#[derive(Debug, Serialize)]
+pub struct Faction {
+	#[serde(skip_serializing)]
+	pub id: String,
+	pub name: String,
+	pub created_at: i64,
+	pub size: usize,
+}
+
+lazy_static! {
+	static ref FACTION_FIELDS: [&'static str; 4] = [
+		"cn",
+		"pxlsspaceFactionName",
+		//"pxlsspaceIcon",
+		"createTimestamp",
+		"member",
+	];
+}
+
+impl Faction {
+	pub fn search_fields() -> [&'static str; 4] {
+		*FACTION_FIELDS
+	}
+}
+
+impl TryFrom<SearchEntry> for Faction {
+	type Error = FactionParseError;
+
+	fn try_from(value: SearchEntry) -> Result<Self, Self::Error> {
+		let id = value.attrs.get("cn")
+			.and_then(|v| v.first())
+			.ok_or(FactionParseError::MissingId)?
+			.to_owned();
+		let name = value.attrs.get("pxlsspaceFactionName")
+			.and_then(|v| v.first())
+			.ok_or(FactionParseError::MissingName)?
+			.to_owned();
+		//let icon = value.attrs.get("pxlsspaceIcon")
+		//	.and_then(|v| v.first())
+		//	.map(|v| v.parse::<Url>())
+		//	.transpose()
+		//	.map_err(FactionParseError::InvalidIcon)?;
+		let created_at = value.attrs.get("createTimestamp")
+			.and_then(|v| v.first())
+			.ok_or(FactionParseError::MissingTimestamp)
+			.and_then(|s| {
+				LDAPTimestamp::try_from(s.as_str())
+					.and_then(|t| t.unix_time())
+					.map_err(FactionParseError::BadTimestamp)
+			})?;
+		let size = value.attrs.get("member")
+			.map(|v| v.len())
+			.unwrap_or(0);
+
+		Ok(Faction { id, name, created_at, size })
+	}
+}
+
+impl From<&Faction> for Uri {
+	fn from(faction: &Faction) -> Self {
+		format!("/factions/{}", faction.id).parse().unwrap()
+	}
+}
+
+impl Referenceable for Faction {
+	fn location(&self) -> Uri { Uri::from(self) }
+}
+
+#[derive(Debug, Serialize)]
+pub struct JoinIntent {
+	member: bool,
+	faction: bool,
+}
+
+impl Default for JoinIntent {
+	fn default() -> Self {
+		Self { member: true, faction: true }
+	}
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactionMember {
+	#[serde(skip_serializing)]
+	faction_id: String,
+	#[serde(skip_serializing)]
+	user_id: String,
+	owner: bool,
+	join_intent: JoinIntent,
+}
+
+impl FactionMember {
+	pub fn new(faction_id: String, user_id: String, owner: bool) -> Self {
+		let join_intent = JoinIntent::default();
+		Self { owner, join_intent, faction_id, user_id }
+	}
+}
+
+impl From<&FactionMember> for Uri {
+	fn from(member: &FactionMember) -> Self {
+		format!("/factions/{}/members/{}", member.faction_id, member.user_id).parse().unwrap()
+	}
+}
+
+impl Referenceable for FactionMember {
 	fn location(&self) -> Uri { Uri::from(self) }
 }

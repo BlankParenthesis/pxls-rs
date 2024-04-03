@@ -12,10 +12,12 @@ pub struct Config {
 	pub ldap_manager_user: String,
 	pub ldap_manager_password: String,
 	pub ldap_base: String,
+	// TODO: defaults for ldap stuff
 	pub ldap_users_ou: String,
 	pub ldap_users_id_field: String,
 	pub ldap_users_username_field: String,
 	pub ldap_roles_ou: String,
+	pub ldap_factions_ou: String,
 	pub undo_deadline_seconds: u32,
 }
 

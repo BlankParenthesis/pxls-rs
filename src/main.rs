@@ -186,18 +186,31 @@ async fn main() {
 			Arc::clone(&users_db),
 		);
 
+	let routes_factions =
+		routes::factions::factions::list(Arc::clone(&users_db))
+		.or(routes::factions::factions::get(Arc::clone(&users_db)))
+		.or(routes::factions::factions::post(Arc::clone(&users_db)))
+		.or(routes::factions::factions::patch(Arc::clone(&users_db)))
+		.or(routes::factions::factions::delete(Arc::clone(&users_db)))
+		.or(routes::factions::factions::members::list(Arc::clone(&users_db)))
+		.or(routes::factions::factions::members::get(Arc::clone(&users_db)))
+		.or(routes::factions::factions::members::post(Arc::clone(&users_db)))
+		.or(routes::factions::factions::members::patch(Arc::clone(&users_db)))
+		.or(routes::factions::factions::members::delete(Arc::clone(&users_db)));
+
 	let routes = 
 		routes_core
-		.or(routes_lifecycle)
-		.or(routes_data_initial)
-		.or(routes_data_mask)
-		.or(routes_data_timestamps)
-		.or(routes_authentication)
-		.or(routes_users)
-		.or(routes_roles)
-		.or(routes_usercount)
-		.or(routes_board_moderation)
-		.or(routes_undo)
+		.or(routes_lifecycle.boxed())
+		.or(routes_data_initial.boxed())
+		.or(routes_data_mask.boxed())
+		.or(routes_data_timestamps.boxed())
+		.or(routes_authentication.boxed())
+		.or(routes_users.boxed())
+		.or(routes_roles.boxed())
+		.or(routes_usercount.boxed())
+		.or(routes_board_moderation.boxed())
+		.or(routes_undo.boxed())
+		.or(routes_factions.boxed())
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

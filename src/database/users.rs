@@ -14,7 +14,7 @@ use ldap3::{
 mod connection;
 mod entities;
 
-pub use entities::{User, Role, ParseError};
+pub use entities::{User, Role, Faction, ParseError};
 use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
@@ -26,6 +26,8 @@ use warp::{reject::Reject, reply::Reply};
 use crate::config::CONFIG;
 use crate::permissions::Permission;
 use crate::filter::response::paginated_list::{Page, PageToken};
+
+use self::entities::FactionMember;
 
 #[derive(Debug, Default)]
 pub struct LdapPageToken(Vec<u8>);
@@ -226,6 +228,8 @@ impl UsersConnection {
 			.map_err(FetchError::LdapError)?
 			.success()
 			// a bit presumptuous, but should be correct enough
+			// Update: too presumptuous, this errors if the ou doesn't exist
+			// TODO: try to determine error type and use that
 			.map_err(|_| FetchError::InvalidPage)?;
 
 		let page_data = status.ctrls.iter()
@@ -680,6 +684,408 @@ impl UsersConnection {
 			.modify(role_dn.as_str(), vec![
 				Mod::Delete("member", HashSet::from([user_dn(uid).as_str()])),
 			]).await
+			.map_err(UpdateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(UpdateError::NoItem.into()),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(UpdateError::LdapError)
+				.map_err(UsersDatabaseError::from),
+		}
+	}
+
+	pub async fn list_factions(
+		&mut self,
+		page: LdapPageToken,
+		limit: usize,
+	) -> Result<Page<Faction>, UsersDatabaseError> {
+		let pager = PagedResults {
+			size: limit as i32,
+			cookie: page.0,
+		};
+
+		let (results, status) = self.connection.with_controls(pager)
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				"(cn=*)",
+				Faction::search_fields(),
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			// a bit presumptuous, but should be correct enough
+			// Update: too presumptuous, this errors if the ou doesn't exist
+			// TODO: try to determine error type and use that
+			.map_err(|_| FetchError::InvalidPage)?;
+
+		let page_data = status.ctrls.iter()
+			.find(|Control(t, _)| matches!(t, Some(ControlType::PagedResults)))
+			.map(|Control(_, d)| d.parse::<PagedResults>())
+			.ok_or(FetchError::MissingPagerData)?;
+
+		let items = results.into_iter()
+			.map(SearchEntry::construct)
+			.map(Faction::try_from)
+			.map(|r| r.map_err(ParseError::from))
+			.map(|r| r.map_err(FetchError::ParseError))
+			.collect::<Result<_, _>>()?;
+		
+
+		let next = if page_data.cookie.is_empty() {
+			None
+		} else {
+			let page = LdapPageToken(page_data.cookie);
+			Some(format!(
+				"/factions?limit={}&page={}",
+				limit, page
+			).parse().unwrap())
+		};
+
+		Ok(Page { items, next, previous: None })
+	}
+
+	pub async fn get_faction(
+		&mut self,
+		id: &str,
+	) -> Result<Faction, UsersDatabaseError> {
+		let filter = format!("(cn={})", ldap_escape(id));
+		let (results, _) = self.connection
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				filter.as_str(),
+				Faction::search_fields(),
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map_err(FetchError::LdapError)?;
+
+		match results.len() {
+			0 => Err(FetchError::NoItems.into()),
+			1 => {
+				let result = results.into_iter()
+					.next()
+					.map(SearchEntry::construct)
+					.unwrap();
+
+				Faction::try_from(result)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)
+					.map_err(UsersDatabaseError::from)
+			},
+			_ => Err(FetchError::AmbiguousItems.into()),
+		}
+	}
+
+	pub async fn create_faction(
+		&mut self,
+		name: &str,
+	) -> Result<String, UsersDatabaseError> {
+		let name = ldap_escape(name).to_string();
+		let id = uuid::Uuid::new_v4().to_string();
+
+		let faction_dn = format!(
+			"cn={},ou={},{}",
+			id,
+			CONFIG.ldap_factions_ou,
+			CONFIG.ldap_base,
+		);
+
+		let mut attributes = vec![];
+		
+		attributes.push(("objectClass", HashSet::from(["pxlsspaceFaction"])));
+		attributes.push(("cn", HashSet::from([id.as_str()])));
+		attributes.push(("pxlsspaceFactionName", HashSet::from([name.as_str()])));
+
+		//let icon = icon.as_ref()
+		//	.map(|icon| ldap_escape(icon.as_str()).to_string());
+		//if let Some(ref icon) = icon {
+		//	let value = HashSet::from([icon.as_str()]);
+		//	attributes.push(("pxlsspaceIcon", value));
+		//};
+
+		let result = self.connection
+			.add(&faction_dn, attributes).await
+			.map_err(CreateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(id),
+			68 => Err(CreateError::AlreadyExists.into()),
+			_ => result.success()
+				.map(|_| id)
+				.map_err(CreateError::LdapError)
+				.map_err(UsersDatabaseError::from),
+		}
+	}
+
+	pub async fn update_faction(
+		&mut self,
+		name: &str,
+		new_name: &str,
+	) -> Result<(), UsersDatabaseError> {
+		let new_name = ldap_escape(new_name).to_string();
+
+		let faction_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(name),
+			CONFIG.ldap_factions_ou,
+			CONFIG.ldap_base,
+		);
+
+		let mut modifications = vec![];
+		
+		modifications.push(Mod::Replace("pxlsspaceFactionName", HashSet::from([new_name.as_str()])));
+
+		let result = self.connection
+			.modify(&faction_dn, modifications).await
+			.map_err(UpdateError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(UpdateError::NoItem.into()),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(UpdateError::LdapError)
+				.map_err(UsersDatabaseError::from),
+		}
+	}
+
+	pub async fn delete_faction(
+		&mut self,
+		id: &str,
+	) -> Result<(), UsersDatabaseError> {
+		let faction_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(id),
+			CONFIG.ldap_factions_ou,
+			CONFIG.ldap_base,
+		);
+
+		let result = self.connection
+			.delete(&faction_dn).await
+			.map_err(DeleteError::LdapError)?;
+
+		match result.rc {
+			0 => Ok(()),
+			32 => Err(DeleteError::NoItem.into()),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(DeleteError::LdapError)
+				.map_err(UsersDatabaseError::from),
+		}
+	}
+
+	pub async fn list_faction_members(
+		&mut self,
+		fid: &str,
+		page: LdapPageToken,
+		limit: usize,
+	) -> Result<Page<FactionMember>, UsersDatabaseError> {
+		let pager = PagedResults {
+			size: limit as i32,
+			cookie: page.0,
+		};
+
+		let (results, status) = self.connection.with_controls(pager)
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				&format!("(cn={})", ldap_escape(fid)),
+				["member", "pxlsspaceFactionOwner"],
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			// a bit presumptuous, but should be correct enough
+			// Update: too presumptuous, this errors if the ou doesn't exist
+			// TODO: try to determine error type and use that
+			.map_err(|_| FetchError::InvalidPage)?;
+
+		let page_data = status.ctrls.iter()
+			.find(|Control(t, _)| matches!(t, Some(ControlType::PagedResults)))
+			.map(|Control(_, d)| d.parse::<PagedResults>())
+			.ok_or(FetchError::MissingPagerData)?;
+
+		let entry = results.into_iter()
+			.map(SearchEntry::construct)
+			.next()
+			.ok_or_else(|| FetchError::NoItems)?;
+
+		let owners = entry.attrs.get("pxlsspaceFactionOwner")
+			.cloned()
+			.unwrap_or_default();
+		let items = entry.attrs.get("member")
+			.cloned()
+			.unwrap_or_default()
+			.into_iter()
+			.map(|m| {
+				let owner = owners.contains(&m);
+				let uid = &m.split_once(',').unwrap().0[4..];
+				FactionMember::new(fid.to_string(), uid.to_string(), owner)
+			})
+			.collect::<Vec<_>>();
+
+		let next = if page_data.cookie.is_empty() {
+			None
+		} else {
+			let page = LdapPageToken(page_data.cookie);
+			Some(format!(
+				"/factions?limit={}&page={}",
+				limit, page
+			).parse().unwrap())
+		};
+
+		Ok(Page { items, next, previous: None })
+	}
+
+	pub async fn get_faction_member(
+		&mut self,
+		fid: &str,
+		uid: &str,
+	) -> Result<FactionMember, UsersDatabaseError> {
+		let user_dn = user_dn(uid);
+		
+		let (entries, _result) = self.connection
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				&format!("(cn={})", ldap_escape(fid)),
+				["member", "pxlsspaceFactionOwner"],
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map_err(FetchError::LdapError)?;
+
+		entries.into_iter()
+			.next()
+			.ok_or(FetchError::NoItems)
+			.map(SearchEntry::construct)
+			.and_then(|e| {
+				let member = e.attrs.get("member")
+					.cloned()
+					.unwrap_or_default()
+					.contains(&user_dn);
+
+				if !member {
+					return Err(FetchError::NoItems)
+				}
+
+				let fid = fid.to_string();
+				let uid = uid.to_string();
+
+				let owner = e.attrs.get("pxlsspaceFactionOwner")
+					.cloned()
+					.unwrap_or_default()
+					.contains(&user_dn);
+
+				Ok(FactionMember::new(fid, uid, owner))
+			})
+			.map_err(UsersDatabaseError::from)
+	}
+
+	pub async fn add_faction_member(
+		&mut self,
+		fid: &str,
+		uid: &str,
+		owner: bool,
+	) -> Result<FactionMember, UsersDatabaseError> {
+		let faction_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(fid),
+			CONFIG.ldap_factions_ou,
+			CONFIG.ldap_base,
+		);
+
+		let user_dn = user_dn(uid);
+		
+		let mut attributes = vec![];
+		attributes.push(Mod::Add("member", HashSet::from([user_dn.as_str()])));
+		if owner {
+			attributes.push(Mod::Add("pxlsspaceFactionOwner", HashSet::from([user_dn.as_str()])));
+		}
+
+		let result = self.connection
+			.modify(faction_dn.as_str(), attributes).await
+			.map_err(UpdateError::LdapError)?;
+
+		let member = FactionMember::new(fid.to_string(), uid.to_string(), owner);
+
+
+		// TODO: if user doesn't exist, this might internal server error
+		match result.rc {
+			0 => Ok(member),
+			20 => Err(CreateError::AlreadyExists.into()),
+			32 => Err(UpdateError::NoItem.into()),
+			_ => result.success()
+				.map(|_| member)
+				.map_err(UpdateError::LdapError)
+				.map_err(UsersDatabaseError::from),
+		}
+	}
+
+	pub async fn edit_faction_member(
+		&mut self,
+		fid: &str,
+		uid: &str,
+		owner: bool,
+	) -> Result<FactionMember, UsersDatabaseError> {
+		let faction_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(fid),
+			CONFIG.ldap_factions_ou,
+			CONFIG.ldap_base,
+		);
+
+		let user_dn = user_dn(uid);
+		
+		let mut attributes = vec![];
+		if owner {
+			attributes.push(Mod::Add("pxlsspaceFactionOwner", HashSet::from([user_dn.as_str()])));
+		} else {
+			attributes.push(Mod::Delete("pxlsspaceFactionOwner", HashSet::from([user_dn.as_str()])));
+		}
+
+		let result = self.connection
+			.modify(faction_dn.as_str(), attributes).await
+			.map_err(UpdateError::LdapError)?;
+
+		let member = FactionMember::new(fid.to_string(), uid.to_string(), owner);
+
+		// TODO: if user doesn't exist, this might internal server error
+		match result.rc {
+			0 => Ok(member),
+			20 => Ok(member), // TODO: this might not be correct
+			32 => Err(UpdateError::NoItem.into()),
+			_ => result.success()
+				.map(|_| member)
+				.map_err(UpdateError::LdapError)
+				.map_err(UsersDatabaseError::from),
+		}
+	}
+
+
+	pub async fn remove_faction_member(
+		&mut self,
+		fid: &str,
+		uid: &str,
+	) -> Result<(), UsersDatabaseError> {
+		let faction_dn = format!(
+			"cn={},ou={},{}",
+			ldap_escape(fid),
+			CONFIG.ldap_factions_ou,
+			CONFIG.ldap_base,
+		);
+
+		let user_dn = user_dn(uid);
+		
+		let attributes = vec![
+			Mod::Delete("member", HashSet::from([user_dn.as_str()])),
+			Mod::Delete("pxlsspaceFactionOwner", HashSet::from([user_dn.as_str()])),
+		];
+
+		let result = self.connection
+			.modify(faction_dn.as_str(), attributes).await
 			.map_err(UpdateError::LdapError)?;
 
 		match result.rc {
