@@ -10,7 +10,7 @@ impl<T: Referenceable> Referenceable for &T {
 	fn location(&self) -> Uri { (*self).location() }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Reference<T: Serialize> {
 	#[serde(with = "http_serde::uri")]
 	uri: Uri,

@@ -17,10 +17,12 @@ use crate::board::Board;
 use crate::database::{UsersDatabase, Role, User};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
+use crate::routes::site_notices::notices::Notice;
 use crate::socket::ServerPacket;
 
 type Socket = crate::socket::Socket<Subscription>;
 
+// TODO: move this elsewhere
 #[derive(Default)]
 pub struct Connections {
 	by_uid: HashMap<Option<String>, HashSet<Arc<Socket>>>,
@@ -103,6 +105,21 @@ impl Connections {
 					}
 				}
 			},
+			EventPacket::SiteNoticeCreated { .. } => {
+				for socket in self.by_subscription[Subscription::Notices].iter() {
+					socket.send(packet).await
+				}
+			},
+			EventPacket::SiteNoticeUpdated { .. } => {
+				for socket in self.by_subscription[Subscription::Notices].iter() {
+					socket.send(packet).await
+				}
+			},
+			EventPacket::SiteNoticeDeleted { .. } => {
+				for socket in self.by_subscription[Subscription::Notices].iter() {
+					socket.send(packet).await
+				}
+			},
 		};
 
 	}
@@ -143,6 +160,16 @@ pub enum EventPacket<'l> {
 	UserUpdated {
 		user: Reference<&'l User>,
 	},
+	SiteNoticeCreated {
+		notice: Reference<&'l Notice>,
+	},
+	SiteNoticeUpdated {
+		notice: Reference<&'l Notice>,
+	},
+	SiteNoticeDeleted {
+		#[serde(with = "http_serde::uri")]
+		notice: Uri,
+	},
 }
 
 impl<'l> ServerPacket for EventPacket<'l> {}
@@ -157,6 +184,7 @@ enum Subscription {
 	UsersCurrentRoles,
 	Users,
 	UsersCurrent,
+	Notices,
 }
 
 impl Subscription {
@@ -179,6 +207,7 @@ impl From<Subscription> for Permission {
 			Subscription::UsersCurrentRoles => Permission::EventsUsersCurrentRoles,
 			Subscription::Users => Permission::EventsUsers,
 			Subscription::UsersCurrent => Permission::EventsUsersCurrent,
+			Subscription::Notices => Permission::EventsNotices,
 		}
 	}
 }

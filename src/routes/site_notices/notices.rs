@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde::de::Visitor;
 use serde::{Deserialize, Serialize, de, Deserializer};
+use tokio::sync::RwLock;
 use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
@@ -13,10 +14,11 @@ use crate::filter::response::paginated_list::{
 	PageToken
 };
 use crate::filter::header::authorization::{self, Bearer};
-use crate::filter::response::reference::{self, Referenceable};
+use crate::filter::response::reference::{self, Referenceable, Reference};
 use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection};
+use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError};
+use crate::routes::core::{EventPacket, Connections};
 
 #[serde_with::skip_serializing_none]
 #[derive(Serialize)]
@@ -150,6 +152,7 @@ struct NoticePost {
 }
 
 pub fn post(
+	events: Arc<RwLock<Connections>>,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -159,14 +162,25 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPost))
 		.and(database::connection(boards_db))
-		.then(move |notice: NoticePost, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| async move {
-			// TODO: author
+		.then(move |notice: NoticePost, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				// TODO: author
+				
+				let notice = boards_connection.create_notice(
+					notice.title,
+					notice.content,
+					notice.expires_at,
+				).await?;
 
-			boards_connection.create_notice(
-				notice.title,
-				notice.content,
-				notice.expires_at,
-			).await.map(|notice| reference::created(&notice))
+				let packet = EventPacket::SiteNoticeCreated {
+					notice: Reference::from(&notice),
+				};
+				let events = events.write().await;
+				events.send(&packet).await;
+				
+				Ok::<_, BoardsDatabaseError>(reference::created(&notice))
+			}
 		})
 }
 
@@ -179,6 +193,7 @@ struct NoticePatch {
 }
 
 pub fn patch(
+	events: Arc<RwLock<Connections>>,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -189,19 +204,33 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPatch))
 		.and(database::connection(boards_db))
-		.then(move |id: usize, notice: NoticePatch, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| async move {
-			// TODO: author
+		.then(move |id: usize, notice: NoticePatch, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				// TODO: author
 
-			boards_connection.edit_notice(
-				id,
-				notice.title,
-				notice.content,
-				notice.expires_at,
-			).await.map(|notice| reference::created(&notice))
+				let notice = boards_connection.edit_notice(
+					id,
+					notice.title,
+					notice.content,
+					notice.expires_at,
+				).await?;
+
+				let reference = Reference::from(&notice);
+				
+				let packet = EventPacket::SiteNoticeUpdated {
+					notice: reference.clone(),
+				};
+				let events = events.write().await;
+				events.send(&packet).await;
+				
+				Ok::<_, BoardsDatabaseError>(warp::reply::json(&reference))
+			}
 		})
 }
 
 pub fn delete(
+	events: Arc<RwLock<Connections>>,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -211,14 +240,23 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesDelete))
 		.and(database::connection(boards_db))
-		.then(move |id: usize, _: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| async move {
-			boards_connection.delete_notice(id).await
-				.map(|was_deleted| {
-					if was_deleted {
-						StatusCode::NO_CONTENT
-					} else {
-						StatusCode::NOT_FOUND
-					}
-				})
+		.then(move |id: usize, _: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				let was_deleted = boards_connection.delete_notice(id).await?;
+
+				if was_deleted {
+					let packet = EventPacket::SiteNoticeDeleted {
+						notice: format!("/notices/{}", id)
+							.parse::<Uri>().unwrap()
+					};
+					let events = events.write().await;
+					events.send(&packet).await;
+
+					Ok::<_, BoardsDatabaseError>(StatusCode::NO_CONTENT)
+				} else {
+					Ok::<_, BoardsDatabaseError>(StatusCode::NOT_FOUND)
+				}
+			}
 		})
 }

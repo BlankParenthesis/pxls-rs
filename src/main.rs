@@ -201,9 +201,9 @@ async fn main() {
 	let routes_site_notices = 
 		routes::site_notices::notices::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
 		.or(routes::site_notices::notices::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
-		.or(routes::site_notices::notices::post(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
-		.or(routes::site_notices::notices::patch(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
-		.or(routes::site_notices::notices::delete(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
+		.or(routes::site_notices::notices::post(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::site_notices::notices::patch(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::site_notices::notices::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
 	let routes = 
 		routes_core

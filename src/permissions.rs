@@ -68,6 +68,7 @@ pub enum Permission {
 	EventsUsersCurrentRoles,
 	EventsUsers,
 	EventsUsersCurrent,
+	EventsNotices,
 }
 
 impl Permission {
@@ -157,6 +158,7 @@ impl From<&Permission> for &str {
 			Permission::EventsUsersCurrentRoles => "events.users.current.roles",
 			Permission::EventsUsers => "events.users",
 			Permission::EventsUsersCurrent => "events.users.current",
+			Permission::EventsNotices => "events.notices",
 		}
 	}
 }
@@ -229,6 +231,7 @@ impl TryFrom<&str> for Permission {
 			"events.users.current.roles" => Ok(Permission::EventsUsersCurrentRoles),
 			"events.users" => Ok(Permission::EventsUsers),
 			"events.users.current" => Ok(Permission::EventsUsersCurrent),
+			"events.notices" => Ok(Permission::EventsNotices),
 			_ => Err(()),
 		}
 	}
