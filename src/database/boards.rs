@@ -25,8 +25,9 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, filter::response::paginated_list::Page};
+use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::site_notices::notices::Notice};
 use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
+use crate::routes::site_notices::notices::NoticePageToken;
 
 mod entities;
 
@@ -662,6 +663,136 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.filter(Self::find_sector(board_id, sector_index))
 			.exec(&self.connection).await
 			.map(|_| ())
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn list_notices(
+		&self,
+		token: NoticePageToken,
+		limit: usize,
+	) -> DbResult<Page<Notice>> {
+		let column_timestamp_id_pair = Expr::tuple([
+			Expr::col(notice::Column::CreatedAt).into(),
+			Expr::col(notice::Column::Id).into(),
+		]);
+
+		let value_timestamp_id_pair = Expr::tuple([
+			(token.timestamp as i64).into(),
+			(token.id as i32).into(),
+		]);
+
+		let notices = notice::Entity::find()
+			.filter(Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair))
+			.order_by(column_timestamp_id_pair, sea_orm::Order::Asc)
+			.limit(limit as u64)
+			.all(&self.connection).await?;
+
+		let token = notices.last()
+			.map(|notice| NoticePageToken {
+				id: notice.id as _,
+				timestamp: notice.created_at as _,
+			})
+			.map(|token| {
+				format!(
+					"/notices?page={}&limit={}",
+					token, limit,
+				).parse().unwrap()
+			});
+
+		let notices = notices.into_iter()
+			.map(|notice| Notice {
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			})
+			.collect();
+		
+		Ok(Page { items: notices, next: token, previous: None })
+	}
+
+	pub async fn get_notice(&self, id: usize) -> DbResult<Option<Notice>> {
+		notice::Entity::find_by_id(id as i32)
+			.one(&self.connection).await
+			.map(|n| n.map(|notice| Notice {
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			}))
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn create_notice(
+		&self,
+		title: String,
+		content: String,
+		expiry: Option<u64>,
+	) -> DbResult<Notice> {
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_secs();
+
+		notice::Entity::insert(notice::ActiveModel {
+				id: NotSet,
+				title: Set(title),
+				content: Set(content),
+				created_at: Set(now as _),
+				expires_at: Set(expiry.map(|v| v as _)),
+				author: NotSet, // TODO: set this
+			})
+			.exec_with_returning(&self.connection).await
+			.map(|notice| Notice {
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			})
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn edit_notice(
+		&self,
+		id: usize,
+		title: Option<String>,
+		content: Option<String>,
+		expiry: Option<Option<u64>>,
+	) -> DbResult<Notice> {
+		notice::Entity::update(notice::ActiveModel {
+				id: Set(id as _),
+				title: title.map(Set).unwrap_or(NotSet),
+				content: content.map(Set).unwrap_or(NotSet),
+				created_at: NotSet,
+				expires_at: expiry.map(|e| Set(e.map(|v| v as _))).unwrap_or(NotSet),
+				author: NotSet, // TODO: set this
+			})
+			.exec(&self.connection).await
+			.map(|notice| Notice {
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			})
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	// returns Ok(true) if the item was deleted or Ok(false) if it didn't exist
+	pub async fn delete_notice(
+		&self,
+		id: usize,
+	) -> DbResult<bool> {
+		notice::Entity::delete_by_id(id as i32)
+			.exec(&self.connection).await
+			.map(|result| result.rows_affected == 1)
 			.map_err(BoardsDatabaseError::from)
 	}
 }

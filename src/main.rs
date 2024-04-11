@@ -198,6 +198,12 @@ async fn main() {
 		.or(routes::factions::factions::members::patch(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::delete(Arc::clone(&users_db)).boxed());
 
+	let routes_site_notices = 
+		routes::site_notices::notices::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
+		.or(routes::site_notices::notices::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::site_notices::notices::post(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::site_notices::notices::patch(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::site_notices::notices::delete(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
 	let routes = 
 		routes_core
@@ -212,6 +218,7 @@ async fn main() {
 		.or(routes_board_moderation)
 		.or(routes_undo)
 		.or(routes_factions)
+		.or(routes_site_notices)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

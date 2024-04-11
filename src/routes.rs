@@ -10,3 +10,4 @@ pub mod user_count;
 pub mod board_moderation;
 pub mod board_undo;
 pub mod factions;
+pub mod site_notices;

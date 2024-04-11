@@ -43,6 +43,7 @@ lazy_static! {
 			"board_moderation",
 			"undo",
 			"factions",
+			"site_notices",
 		],
 	};
 }
