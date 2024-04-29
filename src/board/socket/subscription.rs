@@ -18,6 +18,7 @@ pub enum BoardSubscription {
 	DataInitial,
 	Info,
 	Cooldown,
+	Notices,
 }
 
 impl TryFrom<&str> for BoardSubscription {
@@ -31,6 +32,7 @@ impl TryFrom<&str> for BoardSubscription {
 			"data.initial" => Ok(BoardSubscription::DataInitial),
 			"info" => Ok(BoardSubscription::Info),
 			"cooldown" => Ok(BoardSubscription::Cooldown),
+			"notices" => Ok(BoardSubscription::Notices),
 			_ => Err(()),
 		}
 	}
@@ -83,6 +85,7 @@ impl From<BoardSubscription> for Permission {
 			BoardSubscription::DataInitial => Permission::BoardsEventsDataInitial,
 			BoardSubscription::Info => Permission::BoardsEventsInfo,
 			BoardSubscription::Cooldown => Permission::BoardsEventsCooldown,
+			BoardSubscription::Notices => Permission::BoardsEventsNotices,
 		}
 	}
 }

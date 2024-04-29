@@ -44,6 +44,7 @@ lazy_static! {
 			"undo",
 			"factions",
 			"site_notices",
+			"board_notices",
 		],
 	};
 }

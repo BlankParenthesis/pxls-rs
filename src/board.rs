@@ -18,7 +18,7 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{filter::body::patch::BinaryPatch, routes::board_moderation::boards::pixels::Overrides, config::CONFIG};
+use crate::{filter::{body::patch::BinaryPatch, response::reference::Reference}, routes::{board_moderation::boards::pixels::Overrides, site_notices::notices::Notice, board_notices::boards::notices::BoardsNotice}, config::CONFIG};
 use crate::filter::response::{paginated_list::Page, reference::Referenceable};
 use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
@@ -797,5 +797,69 @@ impl Board {
 		socket: &Arc<Socket>,
 	) {
 		self.connections.remove(socket).await
+	}
+
+	pub async fn create_notice(
+		&self,
+		title: String,
+		content: String,
+		expiry: Option<u64>,
+		connection: &BoardsConnection,
+	) -> Result<BoardsNotice, BoardsDatabaseError> {
+		let notice = connection.create_board_notice(
+			self.id,
+			title,
+			content,
+			expiry,
+		).await?;
+
+		let packet = Packet::BoardNoticeCreated {
+			notice: Reference::from(&notice),
+		};
+
+		self.connections.send(packet).await;
+
+		Ok(notice)
+	}
+
+	pub async fn edit_notice(
+		&self,
+		id: usize,
+		title: Option<String>,
+		content: Option<String>,
+		expiry: Option<Option<u64>>,
+		connection: &BoardsConnection,
+	) -> Result<BoardsNotice, BoardsDatabaseError> {
+		let notice = connection.edit_board_notice(
+			self.id,
+			id,
+			title,
+			content,
+			expiry,
+		).await?;
+
+		let packet = Packet::BoardNoticeUpdated {
+			notice: Reference::from(&notice),
+		};
+
+		self.connections.send(packet).await;
+
+		Ok(notice)
+	}
+
+	pub async fn delete_notice(
+		&self,
+		id: usize,
+		connection: &BoardsConnection,
+	) -> Result<bool, BoardsDatabaseError> {
+		let notice = connection.delete_board_notice(self.id, id).await?;
+
+		let packet = Packet::BoardNoticeDeleted {
+			notice: format!("/boards/{}/notices/{}", self.id, id).parse().unwrap(),
+		};
+
+		self.connections.send(packet).await;
+
+		Ok(notice)
 	}
 }

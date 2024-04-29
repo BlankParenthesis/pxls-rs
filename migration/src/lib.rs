@@ -7,6 +7,7 @@ mod m2_max_stacked_board_property;
 mod m3_json_shape;
 mod m4_system_colors;
 mod m5_notices;
+mod m6_board_notices;
 
 pub struct Migrator;
 
@@ -34,6 +35,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m3_json_shape::Migration),
 			Box::new(m4_system_colors::Migration),
 			Box::new(m5_notices::Migration),
+			Box::new(m6_board_notices::Migration),
 		]
 	}
 }

@@ -3,6 +3,7 @@
 pub mod prelude;
 
 pub mod board;
+pub mod board_notice;
 pub mod board_sector;
 pub mod color;
 pub mod notice;

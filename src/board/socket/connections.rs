@@ -111,9 +111,9 @@ impl UserConnections {
 		});
 	}
 
-	async fn send(
+	async fn send<'l>(
 		&self,
-		packet: &Packet,
+		packet: &Packet<'l>,
 	) {
 		let subscription = BoardSubscription::from(packet);
 		for connection in &self.connections {
@@ -230,9 +230,9 @@ impl Connections {
 			.remove(socket);
 	}
 
-	pub async fn send(
+	pub async fn send<'l>(
 		&self,
-		packet: Packet,
+		packet: Packet<'l>,
 	) {
 		let subscription = BoardSubscription::from(&packet);
 		for connection in self.by_subscription[subscription].iter() {
@@ -253,10 +253,10 @@ impl Connections {
 		}
 	}
 
-	pub async fn send_to_user(
+	pub async fn send_to_user<'l>(
 		&self,
 		user_id: String,
-		packet: Packet,
+		packet: Packet<'l>,
 	) {
 		if let Some(connections) = self.by_uid.get(&Some(user_id)) {
 			connections.read().await.send(&packet).await;

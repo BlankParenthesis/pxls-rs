@@ -25,7 +25,7 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::site_notices::notices::Notice};
+use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::Notice, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice}}};
 use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
 use crate::routes::site_notices::notices::NoticePageToken;
 
@@ -791,6 +791,150 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		id: usize,
 	) -> DbResult<bool> {
 		notice::Entity::delete_by_id(id as i32)
+			.exec(&self.connection).await
+			.map(|result| result.rows_affected == 1)
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn list_board_notices(
+		&self,
+		board_id: i32,
+		token: BoardsNoticePageToken,
+		limit: usize,
+	) -> DbResult<Page<BoardsNotice>> {
+		let column_timestamp_id_pair = Expr::tuple([
+			Expr::col(board_notice::Column::CreatedAt).into(),
+			Expr::col(board_notice::Column::Id).into(),
+		]);
+
+		let value_timestamp_id_pair = Expr::tuple([
+			(token.timestamp as i64).into(),
+			(token.id as i32).into(),
+		]);
+
+		let notices = board_notice::Entity::find()
+			.filter(board_notice::Column::Board.eq(board_id))
+			.filter(Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair))
+			.order_by(column_timestamp_id_pair, sea_orm::Order::Asc)
+			.limit(limit as u64)
+			.all(&self.connection).await?;
+
+		let token = notices.last()
+			.map(|notice| BoardsNoticePageToken {
+				id: notice.id as _,
+				timestamp: notice.created_at as _,
+			})
+			.map(|token| {
+				format!(
+					"/boards/{}/notices?page={}&limit={}",
+					board_id, token, limit,
+				).parse().unwrap()
+			});
+
+		let notices = notices.into_iter()
+			.map(|notice| BoardsNotice {
+				board: board_id as usize,
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			})
+			.collect();
+		
+		Ok(Page { items: notices, next: token, previous: None })
+	}
+
+	pub async fn get_board_notice(&self, board_id: i32, id: usize) -> DbResult<Option<BoardsNotice>> {
+		board_notice::Entity::find_by_id(id as i32)
+			.filter(board_notice::Column::Board.eq(board_id))
+			.one(&self.connection).await
+			.map(|n| n.map(|notice| BoardsNotice {
+				board: board_id as usize,
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			}))
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn create_board_notice(
+		&self,
+		board_id: i32,
+		title: String,
+		content: String,
+		expiry: Option<u64>,
+	) -> DbResult<BoardsNotice> {
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_secs();
+
+			board_notice::Entity::insert(board_notice::ActiveModel {
+				id: NotSet,
+				board: Set(board_id),
+				title: Set(title),
+				content: Set(content),
+				created_at: Set(now as _),
+				expires_at: Set(expiry.map(|v| v as _)),
+				author: NotSet, // TODO: set this
+			})
+			.exec_with_returning(&self.connection).await
+			.map(|notice| BoardsNotice {
+				board: board_id as usize,
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			})
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn edit_board_notice(
+		&self,
+		board_id: i32,
+		id: usize,
+		title: Option<String>,
+		content: Option<String>,
+		expiry: Option<Option<u64>>,
+	) -> DbResult<BoardsNotice> {
+		board_notice::Entity::update(board_notice::ActiveModel {
+				board: NotSet,
+				id: Set(id as _),
+				title: title.map(Set).unwrap_or(NotSet),
+				content: content.map(Set).unwrap_or(NotSet),
+				created_at: NotSet,
+				expires_at: expiry.map(|e| Set(e.map(|v| v as _))).unwrap_or(NotSet),
+				author: NotSet, // TODO: set this
+			})
+			.filter(board_notice::Column::Board.eq(board_id))
+			.exec(&self.connection).await
+			.map(|notice| BoardsNotice {
+				board: board_id as usize,
+				id: notice.id as usize,
+				title: notice.title,
+				content: notice.content,
+				created_at: notice.created_at as _,
+				expires_at: notice.expires_at.map(|v| v as _),
+				author: notice.author,
+			})
+			.map_err(BoardsDatabaseError::from)
+	}
+
+	// returns Ok(true) if the item was deleted or Ok(false) if it didn't exist
+	pub async fn delete_board_notice(
+		&self,
+		board_id: i32,
+		id: usize,
+	) -> DbResult<bool> {
+		board_notice::Entity::delete_by_id(id as i32)
+			.filter(board_notice::Column::Board.eq(board_id))
 			.exec(&self.connection).await
 			.map(|result| result.rows_affected == 1)
 			.map_err(BoardsDatabaseError::from)

@@ -5,9 +5,12 @@ use serde_with::skip_serializing_none;
 
 use itertools::Itertools;
 use enumset::{EnumSet, EnumSetType};
+use warp::http::Uri;
 
 use crate::board::Palette;
 use crate::board::Shape;
+use crate::filter::response::reference::Reference;
+use crate::routes::board_notices::boards::notices::BoardsNotice;
 use crate::socket::ServerPacket;
 
 use super::BoardSubscription;
@@ -111,7 +114,7 @@ impl BoardUpdateBuilder {
 		self
 	}
 
-	pub fn build_combinations(self) -> HashMap<EnumSet<DataType>, Packet> {
+	pub fn build_combinations<'l>(self) -> HashMap<EnumSet<DataType>, Packet<'l>> {
 		let mut combinations = HashMap::new();
 
 		let colors = self.colors.map(Vec::into_boxed_slice);
@@ -169,7 +172,7 @@ impl BoardUpdateBuilder {
 #[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
-pub enum Packet {
+pub enum Packet<'l> {
 	BoardUpdate {
 		info: Option<BoardInfo>,
 		data: Option<BoardData>,
@@ -178,15 +181,28 @@ pub enum Packet {
 		count: u32,
 		next: Option<u64>,
 	},
+	BoardNoticeCreated {
+		notice: Reference<&'l BoardsNotice>,
+	},
+	BoardNoticeUpdated {
+		notice: Reference<&'l BoardsNotice>,
+	},
+	BoardNoticeDeleted {
+		#[serde(with = "http_serde::uri")]
+		notice: Uri,
+	},
 }
 
-impl From<&Packet> for BoardSubscription {
+impl<'l> From<&Packet<'l>> for BoardSubscription {
 	fn from(event: &Packet) -> Self {
 		match event {
 			Packet::BoardUpdate { .. } => BoardSubscription::DataColors,
 			Packet::PixelsAvailable { .. } => BoardSubscription::Cooldown,
+			Packet::BoardNoticeCreated { .. } => BoardSubscription::Notices,
+			Packet::BoardNoticeUpdated { .. } => BoardSubscription::Notices,
+			Packet::BoardNoticeDeleted { .. } => BoardSubscription::Notices,
 		}
 	}
 }
 
-impl ServerPacket for Packet {}
+impl<'l> ServerPacket for Packet<'l> {}
