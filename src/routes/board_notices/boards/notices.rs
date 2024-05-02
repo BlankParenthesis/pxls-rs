@@ -11,20 +11,17 @@ use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
 	MAX_PAGE_ITEM_LIMIT,
-	PageToken
+	PageToken, Page
 };
 use crate::filter::header::authorization::{self, Bearer};
 use crate::filter::response::reference::{self, Referenceable, Reference};
 use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection};
+use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, User, UsersDatabaseError};
 
-#[serde_with::skip_serializing_none]
-#[derive(Serialize, Debug)]
+#[derive(Debug)]
 pub struct BoardsNotice {
-	#[serde(skip_serializing)]
 	pub board: usize,
-	#[serde(skip_serializing)]
 	pub id: usize,
 	pub title: String,
 	pub content: String,
@@ -33,15 +30,54 @@ pub struct BoardsNotice {
 	pub author: Option<String>,
 }
 
-impl From<&BoardsNotice> for Uri {
-	fn from(notice: &BoardsNotice) -> Self {
+impl BoardsNotice {
+	pub async fn prepare(
+		self,
+		connection: &mut UsersConnection,
+	) -> Result<PreparedBoardsNotice, UsersDatabaseError> {
+		let Self { board, id, title, content, created_at, expires_at, .. } = self;
+		let author = if let Some(id) = self.author {
+			let user = connection.get_user(&id).await?;
+			Some(Reference::from(user))
+		} else {
+			None
+		};
+
+		Ok(PreparedBoardsNotice {
+			board,
+			id,
+			title,
+			content,
+			created_at,
+			expires_at,
+			author,
+		})
+	} 
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Debug)]
+pub struct PreparedBoardsNotice {
+	#[serde(skip_serializing)]
+	pub board: usize,
+	#[serde(skip_serializing)]
+	pub id: usize,
+	pub title: String,
+	pub content: String,
+	pub created_at: u64,
+	pub expires_at: Option<u64>,
+	pub author: Option<Reference<User>>,
+}
+
+impl From<&PreparedBoardsNotice> for Uri {
+	fn from(notice: &PreparedBoardsNotice) -> Self {
 		format!("/boards/{}/notices/{}", notice.board, notice.id)
 			.parse::<Uri>()
 			.unwrap()
 	}
 }
 
-impl Referenceable for BoardsNotice {
+impl Referenceable for PreparedBoardsNotice {
 	fn location(&self) -> Uri { Uri::from(self)}
 }
 
@@ -129,13 +165,27 @@ pub fn list(
 					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 					.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
-				// TODO: map author id to user
+				let page = boards_connection.list_board_notices(board as i32, page, limit).await
+					.map_err(Reply::into_response)?;
+					
 
-				boards_connection.list_board_notices(board as i32, page, limit).await
-					.map(|page| warp::reply::json(&page.into_references()))
-					.map_err(Reply::into_response)
+				let mut items = Vec::with_capacity(page.items.len());
+				
+				for item in page.items {
+					let notice = item.prepare(&mut users_connection).await
+						.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+					items.push(notice);
+				}
+
+				let page = Page {
+					next: page.next,
+					previous: page.previous,
+					items,
+				};
+
+				Ok::<_, warp::reply::Response>(warp::reply::json(&page.into_references()))
 			}
-	})
+		})
 }
 
 pub fn get(
@@ -150,14 +200,15 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::authorized(users_db, Permission::NoticesGet.into()))
 		.and(database::connection(boards_db))
-		.then(move |board: usize, id: usize, _: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| async move {
-			// TODO: map author id to user
-			boards_connection.get_board_notice(board as i32, id).await
+		.then(move |board: usize, id: usize, _: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+			let notice = boards_connection.get_board_notice(board as i32, id).await
 				.map_err(Reply::into_response)?
-				.map(|placement| warp::reply::json(&placement))
 				.ok_or(StatusCode::NOT_FOUND)
+				.map_err(Reply::into_response)?;
+			
+			notice.prepare(&mut users_connection).await
+				.map(|notice| warp::reply::json(&notice))
 				.map_err(Reply::into_response)
-
 		})
 }
 
@@ -182,7 +233,7 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPost))
 		.and(database::connection(boards_db))
-		.then(move |board: usize, notice: NoticePost, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+		.then(move |board: usize, notice: NoticePost, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
@@ -191,12 +242,14 @@ pub fn post(
 					.map_err(Reply::into_response)?;
 				let board = board.read().await;
 				let board = board.as_ref().expect("board went missing");
+
 				// TODO: author
 				board.create_notice(
 					notice.title,
 					notice.content,
 					notice.expires_at,
 					&boards_connection,
+					&mut users_connection
 				).await
 					.map(|notice| reference::created(&notice))
 					.map_err(Reply::into_response)
@@ -226,7 +279,7 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPatch))
 		.and(database::connection(boards_db))
-		.then(move |board: usize, id: usize, notice: NoticePatch, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+		.then(move |board: usize, id: usize, notice: NoticePatch, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
@@ -235,14 +288,15 @@ pub fn patch(
 					.map_err(Reply::into_response)?;
 				let board = board.read().await;
 				let board = board.as_ref().expect("board went missing");
+				
 				// TODO: author
-
 				board.edit_notice(
 					id,
 					notice.title,
 					notice.content,
 					notice.expires_at,
 					&boards_connection,
+					&mut users_connection
 				).await
 					.map(|notice| warp::reply::json(&Reference::from(&notice)))
 					.map_err(Reply::into_response)

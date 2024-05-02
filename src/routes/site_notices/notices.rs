@@ -11,19 +11,18 @@ use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
 	MAX_PAGE_ITEM_LIMIT,
-	PageToken
+	PageToken, Page
 };
 use crate::filter::header::authorization::{self, Bearer};
 use crate::filter::response::reference::{self, Referenceable, Reference};
 use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError};
+use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError, UsersDatabaseError, User};
 use crate::routes::core::{EventPacket, Connections};
 
-#[serde_with::skip_serializing_none]
-#[derive(Serialize, Debug)]
+
+#[derive(Debug)]
 pub struct Notice {
-	#[serde(skip_serializing)]
 	pub id: usize,
 	pub title: String,
 	pub content: String,
@@ -32,15 +31,51 @@ pub struct Notice {
 	pub author: Option<String>,
 }
 
-impl From<&Notice> for Uri {
-	fn from(notice: &Notice) -> Self {
+impl Notice {
+	async fn prepare(
+		self,
+		connection: &mut UsersConnection,
+	) -> Result<PreparedNotice, UsersDatabaseError> {
+		let Self { id, title, content, created_at, expires_at, .. } = self;
+		let author = if let Some(id) = self.author {
+			let user = connection.get_user(&id).await?;
+			Some(Reference::from(user))
+		} else {
+			None
+		};
+
+		Ok(PreparedNotice {
+			id,
+			title,
+			content,
+			created_at,
+			expires_at,
+			author,
+		})
+	} 
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Debug)]
+pub struct PreparedNotice {
+	#[serde(skip_serializing)]
+	pub id: usize,
+	pub title: String,
+	pub content: String,
+	pub created_at: u64,
+	pub expires_at: Option<u64>,
+	pub author: Option<Reference<User>>,
+}
+
+impl From<&PreparedNotice> for Uri {
+	fn from(notice: &PreparedNotice) -> Self {
 		format!("/notices/{}", notice.id)
 			.parse::<Uri>()
 			.unwrap()
 	}
 }
 
-impl Referenceable for Notice {
+impl Referenceable for PreparedNotice {
 	fn location(&self) -> Uri { Uri::from(self)}
 }
 
@@ -118,10 +153,24 @@ pub fn list(
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
-			// TODO: map author id to user
+			let page = boards_connection.list_notices(page, limit).await
+				.map_err(Reply::into_response)?;
+			
+			let mut items = Vec::with_capacity(page.items.len());
+			
+			for item in page.items {
+				let notice = item.prepare(&mut users_connection).await
+					.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+				items.push(notice);
+			}
 
-			boards_connection.list_notices(page, limit).await
-				.map(|page| warp::reply::json(&page.into_references()))
+			let page = Page {
+				next: page.next,
+				previous: page.previous,
+				items,
+			};
+
+			Ok::<_, warp::reply::Response>(warp::reply::json(&page.into_references()))
 		})
 }
 
@@ -135,11 +184,14 @@ pub fn get(
 		.and(warp::get())
 		.and(authorization::authorized(users_db, Permission::NoticesGet.into()))
 		.and(database::connection(boards_db))
-		.then(move |id: usize, _: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| async move {
-			// TODO: map author id to user
-			boards_connection.get_notice(id).await?
-				.map(|placement| warp::reply::json(&placement))
+		.then(move |id: usize, _: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+			let notice = boards_connection.get_notice(id).await
+				.map_err(Reply::into_response)?
 				.ok_or(StatusCode::NOT_FOUND)
+				.map_err(Reply::into_response)?;
+			notice.prepare(&mut users_connection).await
+				.map(|notice| warp::reply::json(&notice))
+				.map_err(Reply::into_response)
 		})
 }
 
@@ -162,16 +214,19 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPost))
 		.and(database::connection(boards_db))
-		.then(move |notice: NoticePost, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+		.then(move |notice: NoticePost, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {
-				// TODO: author
+				// TODO: author (requires spec decision)
 				
 				let notice = boards_connection.create_notice(
 					notice.title,
 					notice.content,
 					notice.expires_at,
-				).await?;
+				).await
+					.map_err(Reply::into_response)?
+					.prepare(&mut users_connection).await
+					.map_err(Reply::into_response)?;
 
 				let packet = EventPacket::SiteNoticeCreated {
 					notice: Reference::from(&notice),
@@ -179,7 +234,7 @@ pub fn post(
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, BoardsDatabaseError>(reference::created(&notice))
+				Ok::<_, warp::reply::Response>(reference::created(&notice))
 			}
 		})
 }
@@ -204,7 +259,7 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPatch))
 		.and(database::connection(boards_db))
-		.then(move |id: usize, notice: NoticePatch, user: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+		.then(move |id: usize, notice: NoticePatch, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {
 				// TODO: author
@@ -214,7 +269,10 @@ pub fn patch(
 					notice.title,
 					notice.content,
 					notice.expires_at,
-				).await?;
+				).await
+					.map_err(Reply::into_response)?
+					.prepare(&mut users_connection).await
+					.map_err(Reply::into_response)?;
 
 				let reference = Reference::from(&notice);
 				
@@ -224,7 +282,7 @@ pub fn patch(
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, BoardsDatabaseError>(warp::reply::json(&reference))
+				Ok::<_, warp::reply::Response>(warp::reply::json(&reference))
 			}
 		})
 }

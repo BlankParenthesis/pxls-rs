@@ -17,7 +17,7 @@ use crate::board::Board;
 use crate::database::{UsersDatabase, Role, User};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::routes::site_notices::notices::Notice;
+use crate::routes::site_notices::notices::PreparedNotice;
 use crate::socket::ServerPacket;
 
 type Socket = crate::socket::Socket<Subscription>;
@@ -161,10 +161,10 @@ pub enum EventPacket<'l> {
 		user: Reference<&'l User>,
 	},
 	SiteNoticeCreated {
-		notice: Reference<&'l Notice>,
+		notice: Reference<&'l PreparedNotice>,
 	},
 	SiteNoticeUpdated {
-		notice: Reference<&'l Notice>,
+		notice: Reference<&'l PreparedNotice>,
 	},
 	SiteNoticeDeleted {
 		#[serde(with = "http_serde::uri")]

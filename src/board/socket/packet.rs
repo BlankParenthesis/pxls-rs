@@ -10,7 +10,7 @@ use warp::http::Uri;
 use crate::board::Palette;
 use crate::board::Shape;
 use crate::filter::response::reference::Reference;
-use crate::routes::board_notices::boards::notices::BoardsNotice;
+use crate::routes::board_notices::boards::notices::PreparedBoardsNotice;
 use crate::socket::ServerPacket;
 
 use super::BoardSubscription;
@@ -182,10 +182,10 @@ pub enum Packet<'l> {
 		next: Option<u64>,
 	},
 	BoardNoticeCreated {
-		notice: Reference<&'l BoardsNotice>,
+		notice: Reference<&'l PreparedBoardsNotice>,
 	},
 	BoardNoticeUpdated {
-		notice: Reference<&'l BoardsNotice>,
+		notice: Reference<&'l PreparedBoardsNotice>,
 	},
 	BoardNoticeDeleted {
 		#[serde(with = "http_serde::uri")]

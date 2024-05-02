@@ -18,8 +18,11 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::{filter::{body::patch::BinaryPatch, response::reference::Reference}, routes::{board_moderation::boards::pixels::Overrides, site_notices::notices::Notice, board_notices::boards::notices::BoardsNotice}, config::CONFIG};
-use crate::filter::response::{paginated_list::Page, reference::Referenceable};
+use crate::routes::{board_moderation::boards::pixels::Overrides, board_notices::boards::notices::PreparedBoardsNotice};
+use crate::config::CONFIG;
+use crate::database::{UsersConnection, DatabaseError};
+use crate::filter::response::{paginated_list::Page, reference::{Referenceable, Reference}};
+use crate::filter::body::patch::BinaryPatch;
 use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
 use crate::database::{BoardsConnection, Order};
@@ -805,13 +808,15 @@ impl Board {
 		content: String,
 		expiry: Option<u64>,
 		connection: &BoardsConnection,
-	) -> Result<BoardsNotice, BoardsDatabaseError> {
+		users_connection: &mut UsersConnection,
+	) -> Result<PreparedBoardsNotice, DatabaseError> {
 		let notice = connection.create_board_notice(
 			self.id,
 			title,
 			content,
 			expiry,
-		).await?;
+		).await?
+			.prepare(users_connection).await?;
 
 		let packet = Packet::BoardNoticeCreated {
 			notice: Reference::from(&notice),
@@ -829,14 +834,16 @@ impl Board {
 		content: Option<String>,
 		expiry: Option<Option<u64>>,
 		connection: &BoardsConnection,
-	) -> Result<BoardsNotice, BoardsDatabaseError> {
+		users_connection: &mut UsersConnection,
+	) -> Result<PreparedBoardsNotice, DatabaseError> {
 		let notice = connection.edit_board_notice(
 			self.id,
 			id,
 			title,
 			content,
 			expiry,
-		).await?;
+		).await?
+			.prepare(users_connection).await?;
 
 		let packet = Packet::BoardNoticeUpdated {
 			notice: Reference::from(&notice),

@@ -13,13 +13,28 @@ where S: Serializer {
 }
 
 #[derive(Serialize, Debug)]
-pub struct Page<T: Serialize> {
+pub struct Page<T> {
 	pub items: Vec<T>,
 	#[serde(serialize_with = "optional_uri")]
 	pub next: Option<Uri>,
 	// TODO: either find some magical way to generate this or change the spec
 	#[serde(serialize_with = "optional_uri")]
 	pub previous: Option<Uri>,
+}
+
+impl<T> Page<T> {
+	pub async fn try_map<O, E, F: std::future::Future<Output = Result<O, E>>, M: Fn(T) -> F>(
+		self,
+		mapping: M,
+	) -> Result<Page<O>, E> {
+		let mut items = Vec::with_capacity(self.items.len());
+
+		for item in self.items {
+			items.push(mapping(item).await?);
+		}
+
+		Ok(Page { next: self.next, previous: self.previous, items })
+	}
 }
 
 impl <T> Page<T> 
