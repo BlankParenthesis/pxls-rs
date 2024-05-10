@@ -32,7 +32,7 @@ impl Default for PlacementPageToken {
 
 impl fmt::Display for PlacementPageToken {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}_{}", self.id, self.timestamp)
+		write!(f, "{}_{}", self.timestamp, self.id)
 	}
 }
 
