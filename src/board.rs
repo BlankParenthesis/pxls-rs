@@ -18,7 +18,7 @@ use serde::Serialize;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::routes::{board_moderation::boards::pixels::Overrides, board_notices::boards::notices::PreparedBoardsNotice};
+use crate::routes::{board_moderation::boards::pixels::Overrides, board_notices::boards::notices::PreparedBoardsNotice, core::boards::pixels::PlacementFilter};
 use crate::config::CONFIG;
 use crate::database::{UsersConnection, DatabaseError};
 use crate::filter::response::{paginated_list::Page, reference::{Referenceable, Reference}};
@@ -615,9 +615,10 @@ impl Board {
 		token: PlacementPageToken,
 		limit: usize,
 		order: Order,
+		filter: PlacementFilter,
 		connection: &BoardsConnection,
 	) -> Result<Page<Placement>, BoardsDatabaseError> {
-		connection.list_placements(self.id, token, limit, order).await
+		connection.list_placements(self.id, token, limit, order, filter).await
 	}
 
 	pub async fn lookup(

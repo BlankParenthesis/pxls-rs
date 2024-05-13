@@ -21,6 +21,14 @@ use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, Role, LdapPageToken};
 use crate::routes::core::EventPacket;
 
+#[derive(Deserialize, Debug, Default)]
+pub struct RoleFilter {
+	pub name: Option<String>,
+	pub icon: Option<String>, // TODO: handle explicit null?
+	// TODO: array stuff as mentioned elsewhere
+	// pub permissions: Vec<Permission>,
+}
+
 pub fn list(
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -28,14 +36,15 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorized(users_db, Permission::RolesList.into()))
-		.then(move |pagination: PaginationOptions<LdapPageToken>, _, mut connection: UsersConnection| async move {
+		.then(move |pagination: PaginationOptions<LdapPageToken>, filter: RoleFilter, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
-			connection.list_roles(page, limit).await
+			connection.list_roles(page, limit, filter).await
 				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }

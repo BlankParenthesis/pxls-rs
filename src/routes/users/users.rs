@@ -15,8 +15,16 @@ use crate::filter::response::paginated_list::{
 	MAX_PAGE_ITEM_LIMIT
 };
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
+use crate::filter::resource::filter::FilterRange;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
+
+#[derive(Deserialize, Debug)]
+pub struct UserFilter {
+	pub name: Option<String>,
+	#[serde(default)]
+	pub created_at: FilterRange<i64>,
+}
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -25,14 +33,15 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::UsersList.into()))
-		.then(move |pagination: PaginationOptions<LdapPageToken>, _, mut connection: UsersConnection| async move {
+		.then(move |pagination: PaginationOptions<LdapPageToken>, filter: UserFilter, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 			
-			connection.list_users(page, limit).await
+			connection.list_users(page, limit, filter).await
 				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }

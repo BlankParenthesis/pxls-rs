@@ -39,6 +39,8 @@ pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
 
 #[tokio::main]
 async fn main() {
+	crate::config::check();
+
 	let boards_db = BoardsDatabase::connect().await
 		.expect("Failed to connect to boards database");
 	let boards_db = Arc::new(boards_db);

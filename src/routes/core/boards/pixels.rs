@@ -11,6 +11,7 @@ use crate::config::CONFIG;
 use crate::filter::header::authorization::{Bearer, authorized, self, PermissionsError};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
+use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
@@ -21,6 +22,19 @@ use crate::BoardDataMap;
 
 use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase};
 use crate::routes::board_moderation::boards::pixels::Overrides;
+
+#[derive(Debug, Deserialize)]
+pub struct PlacementFilter {
+	#[serde(default)]
+	pub position: FilterRange<u64>,
+	#[serde(default)]
+	pub color: FilterRange<u8>,
+	#[serde(default)]
+	pub timestamp: FilterRange<u32>,
+	// TODO: use uri and extract id, maybe change comparison code or change deserialize code
+	pub user: Option<String>,
+}
+
 
 pub fn list(
 	boards: BoardDataMap,
@@ -33,9 +47,10 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, _, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, _, connection: BoardsConnection| async move {
 			let page = options.page;
 			let limit = options
 				.limit
@@ -45,7 +60,7 @@ pub fn list(
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when listing pixels");
 
-			board.list_placements(page, limit, Order::Forward, &connection)
+			board.list_placements(page, limit, Order::Forward, filter, &connection)
 				.await
 				.map(|page| warp::reply::json(&page))
 		})

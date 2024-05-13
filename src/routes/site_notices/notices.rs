@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
+use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
@@ -136,6 +137,16 @@ impl<'de> Deserialize<'de> for NoticePageToken {
 	}
 }
 
+#[derive(Deserialize, Debug)]
+pub struct NoticeFilter {
+	pub title: Option<String>,
+	pub content: Option<String>,
+	#[serde(default)]
+	pub created_at: FilterRange<u64>,
+	#[serde(default)]
+	pub expires_at: FilterRange<u64>, // TODO: explicit null?
+	pub author: Option<String>, // TODO: uri inference
+}
 
 pub fn list(
 	boards_db: Arc<BoardsDatabase>,
@@ -145,15 +156,16 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::NoticesList.into()))
 		.and(database::connection(boards_db))
-		.then(move |pagination: PaginationOptions<NoticePageToken>, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+		.then(move |pagination: PaginationOptions<NoticePageToken>, filter: NoticeFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
-			let page = boards_connection.list_notices(page, limit).await
+			let page = boards_connection.list_notices(page, limit, filter).await
 				.map_err(Reply::into_response)?;
 			
 			let mut items = Vec::with_capacity(page.items.len());

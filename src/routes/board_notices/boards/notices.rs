@@ -7,6 +7,7 @@ use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
 use crate::BoardDataMap;
+use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
@@ -138,6 +139,16 @@ impl<'de> Deserialize<'de> for BoardsNoticePageToken {
 	}
 }
 
+#[derive(Deserialize, Debug)]
+pub struct BoardNoticeFilter {
+	pub title: Option<String>,
+	pub content: Option<String>,
+	#[serde(default)]
+	pub created_at: FilterRange<u64>,
+	#[serde(default)]
+	pub expires_at: FilterRange<u64>, // TODO: explicit null?
+	pub author: Option<String>, // TODO: uri inference
+}
 
 pub fn list(
 	boards: BoardDataMap,
@@ -150,9 +161,10 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::NoticesList.into()))
 		.and(database::connection(boards_db))
-		.then(move |board: usize, pagination: PaginationOptions<BoardsNoticePageToken>, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
+		.then(move |board: usize, pagination: PaginationOptions<BoardsNoticePageToken>, filter: BoardNoticeFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
@@ -165,7 +177,7 @@ pub fn list(
 					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 					.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
-				let page = boards_connection.list_board_notices(board as i32, page, limit).await
+				let page = boards_connection.list_board_notices(board as i32, page, limit, filter).await
 					.map_err(Reply::into_response)?;
 					
 

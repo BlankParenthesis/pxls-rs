@@ -19,6 +19,7 @@ use crate::filter::response::paginated_list::{
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken, UsersDatabaseError};
 use crate::routes::core::{Connections, EventPacket};
+use crate::routes::roles::roles::RoleFilter;
 
 pub fn list(
 	users_db: Arc<UsersDatabase>,
@@ -31,8 +32,9 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, pagination, user_permissions, bearer: Option<Bearer>, connection| async move {
+		.and_then(move |uid: String, pagination, filter, user_permissions, bearer: Option<Bearer>, connection| async move {
 			let is_current_user = bearer.as_ref()
 				.map(|bearer| bearer.id == uid)
 				.unwrap_or(false);
@@ -45,19 +47,19 @@ pub fn list(
 
 
 			if check(user_permissions, permissions) {
-				Ok((uid, pagination, connection))
+				Ok((uid, pagination, filter, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, mut connection: UsersConnection| async move {
+		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, filter: RoleFilter, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
-			connection.list_user_roles(&uid, page, limit).await
+			connection.list_user_roles(&uid, page, limit, filter).await
 				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }
@@ -108,6 +110,7 @@ pub fn post(
 					&uid,
 					PageToken::start(),
 					DEFAULT_PAGE_ITEM_LIMIT,
+					RoleFilter::default(),
 				).await?;
 
 				let connections = event_sockets.read().await;
@@ -172,6 +175,7 @@ pub fn delete(
 					&uid,
 					PageToken::start(),
 					DEFAULT_PAGE_ITEM_LIMIT,
+					RoleFilter::default(),
 				).await?;
 
 				let connections = event_sockets.read().await;

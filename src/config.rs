@@ -31,3 +31,33 @@ lazy_static! {
 	pub static ref CONFIG: Config = envy::from_env::<Config>()
 		.expect("Incomplete config setup");
 }
+
+pub fn check() {
+	if CONFIG.host.is_empty() {
+		panic!("Missing HOST value");
+	}
+
+	if CONFIG.ldap_base.is_empty() {
+		panic!("Missing LDAP_BASE value");
+	}
+
+	if CONFIG.ldap_users_ou.is_empty() {
+		panic!("Missing LDAP_USERS_OU value");
+	}
+
+	if CONFIG.ldap_users_id_field.is_empty() {
+		panic!("Missing LDAP_USERS_ID_FIELD value");
+	}
+
+	if CONFIG.ldap_users_username_field.is_empty() {
+		panic!("Missing LDAP_USERS_USERNAME_FIELD value");
+	}
+
+	if CONFIG.ldap_roles_ou.is_empty() {
+		panic!("Missing LDAP_ROLES_OU value");
+	}
+
+	if CONFIG.ldap_factions_ou.is_empty() {
+		panic!("Missing LDAP_FACTIONS_OU value");
+	}
+}

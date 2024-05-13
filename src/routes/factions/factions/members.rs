@@ -14,6 +14,13 @@ use crate::filter::response::reference;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
+#[derive(Deserialize, Debug, Default)]
+pub struct MemberFilter {
+	pub owner: Option<bool>,
+	// TODO
+	// pub join_intent: JoinIntent,
+}
+
 pub fn list(
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -23,14 +30,15 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorization::authorized(users_db, Permission::FactionsMembersList.into()))
-		.then(move |fid: String, pagination: PaginationOptions<LdapPageToken>, _, mut connection: UsersConnection| async move {
+		.then(move |fid: String, pagination: PaginationOptions<LdapPageToken>, filter: MemberFilter, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 
-			connection.list_faction_members(&fid, page, limit).await
+			connection.list_faction_members(&fid, page, limit, filter).await
 				.map(|page| warp::reply::json(&page.into_references()))
 		})
 }

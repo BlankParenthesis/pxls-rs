@@ -20,12 +20,12 @@ use sea_orm::{
 	QueryOrder,
 	PaginatorTrait,
 	Iden,
-	ConnectionTrait,
+	ConnectionTrait, QueryTrait,
 };
 use sea_orm_migration::MigratorTrait;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::Notice, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice}}};
+use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}};
 use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
 use crate::routes::site_notices::notices::NoticePageToken;
 
@@ -313,6 +313,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		token: PlacementPageToken,
 		limit: usize,
 		order: Order,
+		filter: PlacementFilter,
 	) -> DbResult<Page<Placement>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(placement::Column::Timestamp).into(),
@@ -327,7 +328,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		let compare_lhs = column_timestamp_id_pair.clone();
 		let compare_rhs = value_timestamp_id_pair;
 		let compare = match order {
-			Order::Forward => Expr::gte(compare_lhs, compare_rhs),
+			Order::Forward => Expr::gt(compare_lhs, compare_rhs),
 			Order::Reverse => Expr::lt(compare_lhs, compare_rhs),
 		};
 
@@ -339,23 +340,49 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		let placements = placement::Entity::find()
 			.filter(placement::Column::Board.eq(board_id))
 			.filter(compare)
+			.apply_if(filter.color.start, |q, start| q.filter(placement::Column::Color.gte(start)))
+			.apply_if(filter.color.end, |q, end| q.filter(placement::Column::Color.lte(end)))
+			.apply_if(filter.user.as_ref(), |q, id| q.filter(placement::Column::UserId.eq(id)))
+			.apply_if(filter.position.start, |q, start| q.filter(placement::Column::Position.gte(start)))
+			.apply_if(filter.position.end, |q, end| q.filter(placement::Column::Position.lte(end)))
+			.apply_if(filter.timestamp.start, |q, start| q.filter(placement::Column::Timestamp.gte(start)))
+			.apply_if(filter.timestamp.end, |q, end| q.filter(placement::Column::Timestamp.lte(end)))
 			.order_by(column_timestamp_id_pair, order)
-			.limit(limit as u64)
+			.limit(limit as u64 + 1) // fetch one extra to see if this is the end of the data
 			.all(&self.connection).await?;
 
-		let token = placements.last()
+
+		let next = placements.windows(2).nth(limit.saturating_sub(1))
+			.map(|pair| &pair[0]) // we have [last, next] and want the data for last
 			.map(|placement| PlacementPageToken {
 				id: placement.id as usize,
 				timestamp: placement.timestamp as u32,
 			})
 			.map(|token| {
-				format!(
+				let mut uri = format!(
 					"/boards/{}/pixels?page={}&limit={}",
 					board_id, token, limit,
-				).parse().unwrap()
+				);
+
+				// FIXME: urlencode
+				if !filter.color.is_open() {
+					uri.push_str(&format!("&color={}", filter.color))
+				}
+				if let Some(user) = filter.user {
+					uri.push_str(&format!("&user={}", user))
+				}
+				if !filter.position.is_open() {
+					uri.push_str(&format!("&position={}", filter.position))
+				}
+				if !filter.timestamp.is_open() {
+					uri.push_str(&format!("&timestamp={}", filter.timestamp))
+				}
+
+				uri.parse().unwrap()
 			});
 
 		let placements = placements.into_iter()
+			.take(limit)
 			.map(|placement| Placement {
 				id: placement.id,
 				position: placement.position as u64,
@@ -365,7 +392,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			})
 			.collect();
 		
-		Ok(Page { items: placements, next: token, previous: None })
+		Ok(Page { items: placements, next, previous: None })
 	}
 
 	pub async fn get_placement(
@@ -670,6 +697,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		&self,
 		token: NoticePageToken,
 		limit: usize,
+		filter: NoticeFilter,
 	) -> DbResult<Page<Notice>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(notice::Column::CreatedAt).into(),
@@ -683,11 +711,19 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 
 		let notices = notice::Entity::find()
 			.filter(Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair))
+			.apply_if(filter.author.as_ref(), |q, id| q.filter(notice::Column::Author.eq(id)))
+			.apply_if(filter.content.as_ref(), |q, content| q.filter(notice::Column::Content.eq(content)))
+			.apply_if(filter.title.as_ref(), |q, title| q.filter(notice::Column::Title.eq(title)))
+			.apply_if(filter.created_at.start, |q, start| q.filter(notice::Column::CreatedAt.gte(start)))
+			.apply_if(filter.created_at.end, |q, end| q.filter(notice::Column::CreatedAt.lte(end)))
+			.apply_if(filter.expires_at.start, |q, start| q.filter(notice::Column::ExpiresAt.gte(start)))
+			.apply_if(filter.expires_at.end, |q, end| q.filter(notice::Column::ExpiresAt.lte(end)))
 			.order_by(column_timestamp_id_pair, sea_orm::Order::Asc)
-			.limit(limit as u64)
+			.limit(limit as u64 + 1)
 			.all(&self.connection).await?;
 
-		let token = notices.last()
+		let next = notices.windows(2).nth(limit.saturating_sub(1))
+			.map(|pair| &pair[0])
 			.map(|notice| NoticePageToken {
 				id: notice.id as _,
 				timestamp: notice.created_at as _,
@@ -700,6 +736,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			});
 
 		let notices = notices.into_iter()
+			.take(limit)
 			.map(|notice| Notice {
 				id: notice.id as usize,
 				title: notice.title,
@@ -710,7 +747,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			})
 			.collect();
 		
-		Ok(Page { items: notices, next: token, previous: None })
+		Ok(Page { items: notices, next, previous: None })
 	}
 
 	pub async fn get_notice(&self, id: usize) -> DbResult<Option<Notice>> {
@@ -801,6 +838,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		board_id: i32,
 		token: BoardsNoticePageToken,
 		limit: usize,
+		filter: BoardNoticeFilter,
 	) -> DbResult<Page<BoardsNotice>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(board_notice::Column::CreatedAt).into(),
@@ -815,11 +853,19 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		let notices = board_notice::Entity::find()
 			.filter(board_notice::Column::Board.eq(board_id))
 			.filter(Expr::gte(column_timestamp_id_pair.clone(), value_timestamp_id_pair))
+			.apply_if(filter.author.as_ref(), |q, id| q.filter(board_notice::Column::Author.eq(id)))
+			.apply_if(filter.content.as_ref(), |q, content| q.filter(board_notice::Column::Content.eq(content)))
+			.apply_if(filter.title.as_ref(), |q, title| q.filter(board_notice::Column::Title.eq(title)))
+			.apply_if(filter.created_at.start, |q, start| q.filter(board_notice::Column::CreatedAt.gte(start)))
+			.apply_if(filter.created_at.end, |q, end| q.filter(board_notice::Column::CreatedAt.lte(end)))
+			.apply_if(filter.expires_at.start, |q, start| q.filter(board_notice::Column::ExpiresAt.gte(start)))
+			.apply_if(filter.expires_at.end, |q, end| q.filter(board_notice::Column::ExpiresAt.lte(end)))
 			.order_by(column_timestamp_id_pair, sea_orm::Order::Asc)
-			.limit(limit as u64)
+			.limit(limit as u64 + 1)
 			.all(&self.connection).await?;
 
-		let token = notices.last()
+		let next = notices.windows(2).nth(limit.saturating_sub(1))
+			.map(|pair| &pair[0])
 			.map(|notice| BoardsNoticePageToken {
 				id: notice.id as _,
 				timestamp: notice.created_at as _,
@@ -832,6 +878,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			});
 
 		let notices = notices.into_iter()
+			.take(limit)
 			.map(|notice| BoardsNotice {
 				board: board_id as usize,
 				id: notice.id as usize,
@@ -843,7 +890,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			})
 			.collect();
 		
-		Ok(Page { items: notices, next: token, previous: None })
+		Ok(Page { items: notices, next, previous: None })
 	}
 
 	pub async fn get_board_notice(&self, board_id: i32, id: usize) -> DbResult<Option<BoardsNotice>> {

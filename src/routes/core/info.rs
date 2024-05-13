@@ -45,6 +45,7 @@ lazy_static! {
 			"factions",
 			"site_notices",
 			"board_notices",
+			"list_filtering",
 		],
 	};
 }

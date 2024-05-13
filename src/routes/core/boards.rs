@@ -15,6 +15,7 @@ use warp::path::Tail;
 
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 use crate::filter::header::authorization::{Bearer, authorized};
+use crate::filter::resource::filter::FilterRange;
 use crate::filter::resource::{board::{self, PassableBoard}, database};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
@@ -54,6 +55,18 @@ impl<'a> Deref for OwnedBoardReference<'a> {
 	}
 }
 
+#[derive(Debug, Deserialize)]
+struct BoardFilter {
+	name: Option<String>,
+	#[serde(default)]
+	created_at: FilterRange<u64>,
+	// TODO: maybe allow useful filtering of arrays in spec
+	//shape: Array,
+	//palette: Array,
+	#[serde(default)]
+	max_pixels_available: FilterRange<u32>,
+}
+
 pub fn list(
 	boards: BoardDataMap,
 	users_db: Arc<UsersDatabase>,
@@ -62,8 +75,9 @@ pub fn list(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
+		.and(warp::query())
 		.and(authorized(users_db, Permission::BoardsList.into()))
-		.then(move |pagination: PaginationOptions<BoardPageToken>, _, _| {
+		.then(move |pagination: PaginationOptions<BoardPageToken>, filter: BoardFilter, _, _| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let page = pagination.page.0;
@@ -73,22 +87,56 @@ pub fn list(
 					.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
 				let boards = boards.read().await;
-				let boards = boards.iter()
-					.map(|(_id, board)| board)
-					.collect::<Vec<_>>();
-				let mut pages = boards.chunks(limit)
+				let mut filtered_boards = vec![];
+				for board in boards.values() {
+					let lock = board.read().await;
+					let info = &lock.as_ref().expect("Board went missing").info;
+
+					let name_match = if let Some(ref name) = filter.name {
+						&info.name == name
+					} else {
+						true
+					};
+					let create_match = filter.created_at
+						.contains(info.created_at);
+					let pixels_available_match = filter.max_pixels_available
+						.contains(info.max_pixels_available);
+
+					if name_match && create_match && pixels_available_match {
+						filtered_boards.push(board);
+					}
+				}
+				let mut pages = filtered_boards.chunks(limit)
 					.skip(page.saturating_sub(2));
 				
 				fn page_uri(
 					page: usize,
 					limit: usize,
+					filter: &BoardFilter,
 				) -> Uri {
-					format!("/boards?page={}&limit={}", page, limit)
-						.parse().unwrap()
+					let mut uri = format!(
+						"/boards?page={}&limit={}",
+						page, limit
+					);
+
+					// FIXME: urlencode
+					if let Some(ref name) = filter.name {
+						uri.push_str(&format!("&name={}", name));
+					}
+					
+					if !filter.created_at.is_open() {
+						uri.push_str(&format!("&created_at={}", filter.created_at));
+					}
+					
+					if !filter.max_pixels_available.is_open() {
+						uri.push_str(&format!("&max_pixels_available={}", filter.max_pixels_available));
+					}
+
+					uri.parse().unwrap()
 				}
 
 				let previous = page.checked_sub(1).and_then(|page| {
-					pages.next().map(|_| page_uri(page, limit))
+					pages.next().map(|_| page_uri(page, limit, &filter))
 				});
 
 				let mut items = Vec::with_capacity(limit);
@@ -109,7 +157,7 @@ pub fn list(
 					.collect();
 
 				let next = page.checked_add(1).and_then(|page| {
-					pages.next().map(|_| page_uri(page, limit))
+					pages.next().map(|_| page_uri(page, limit, &filter))
 				});
 
 				let page = Page { previous, items, next };

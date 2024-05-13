@@ -23,11 +23,11 @@ use serde::de::{Deserialize, Visitor};
 use url::Url;
 use warp::{reject::Reject, reply::Reply};
 
-use crate::config::CONFIG;
+use crate::{config::CONFIG, filter::resource::filter::FilterRange, routes::{roles::roles::RoleFilter, factions::factions::{FactionFilter, members::MemberFilter}}};
 use crate::permissions::Permission;
 use crate::filter::response::paginated_list::{Page, PageToken};
 
-use self::entities::FactionMember;
+use self::entities::{FactionMember, LDAPTimestamp};
 
 #[derive(Debug, Default)]
 pub struct LdapPageToken(Vec<u8>);
@@ -211,18 +211,40 @@ impl UsersConnection {
 		&mut self,
 		page: LdapPageToken,
 		limit: usize,
+		filter: crate::routes::users::users::UserFilter,
 	) -> Result<Page<User>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
 		};
 
-		let filter = format!("({}=*)", CONFIG.ldap_users_id_field);
+		let mut filters = vec![
+			format!("({}=*)", CONFIG.ldap_users_id_field)
+		];
+
+		if let Some(ref name) = filter.name {
+			filters.push(format!("(displayName={})", name))
+		}
+		
+		if let Some(start) = filter.created_at.start {
+			let timestamp = LDAPTimestamp::from(start);
+			filters.push(format!("(createTimestamp>={})", String::from(timestamp)));
+		}
+
+		if let Some(end) = filter.created_at.end {
+			let timestamp = LDAPTimestamp::from(end);
+			filters.push(format!("(createTimestamp<={})", String::from(timestamp)));
+		}
+
 		let (results, status) = self.connection.with_controls(pager)
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_users_ou, CONFIG.ldap_base),
 				Scope::OneLevel,
-				filter.as_str(),
+				&if filters.len() == 1 {
+					filters.pop().unwrap()
+				} else {
+					format!("(&{})", filters.join(""))
+				},
 				User::search_fields(),
 			).await
 			.map_err(FetchError::LdapError)?
@@ -248,10 +270,21 @@ impl UsersConnection {
 				None
 			} else {
 				let page = LdapPageToken(page_data.cookie);
-				Some(format!(
+				let mut uri = format!(
 					"/users?limit={}&page={}",
 					limit, page
-				).parse().unwrap())
+				);
+
+				// FIXME: urlencode
+				if let Some(name) = filter.name {
+					uri.push_str(&format!("&name={}", name))
+				}
+				
+				if !filter.created_at.is_open() {
+					uri.push_str(&format!("&created_at={}", filter.created_at));
+				}
+
+				Some(uri.parse().unwrap())
 			};
 	
 			Ok(Page { items, next, previous: None })	
@@ -334,6 +367,7 @@ impl UsersConnection {
 		id: &str, 
 		page: LdapPageToken,
 		limit: usize,
+		filter: RoleFilter,
 	) -> Result<Page<Role>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
@@ -347,12 +381,28 @@ impl UsersConnection {
 			CONFIG.ldap_users_ou,
 			CONFIG.ldap_base,
 		);
-		let filter = format!("(member={})", user_dn);
+
+		let mut filters = vec![
+			format!("(member={})", user_dn)
+		];
+
+		if let Some(ref name) = filter.name {
+			filters.push(format!("(cn={})", name))
+		}
+		
+		if let Some(ref icon) = filter.icon {
+			filters.push(format!("(pxlsspaceIcon={})", icon));
+		}
+
 		let (results, status) = self.connection.with_controls(pager)
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_roles_ou, CONFIG.ldap_base),
 				Scope::OneLevel,
-				filter.as_str(),
+				&if filters.len() == 1 {
+					filters.pop().unwrap()
+				} else {
+					format!("(&{})", filters.join(""))
+				},
 				Role::search_fields(),
 			).await
 			.map_err(FetchError::LdapError)?
@@ -376,10 +426,20 @@ impl UsersConnection {
 			None
 		} else {
 			let page = LdapPageToken(page_data.cookie);
-			Some(format!(
+			let mut uri = format!(
 				"/users/{}/roles?limit={}&page={}",
 				id, limit, page
-			).parse().unwrap())
+			);
+
+			// FIXME: urlencode
+			if let Some(name) = filter.name {
+				uri.push_str(&format!("&name={}", name))
+			}
+			if let Some(icon) = filter.icon {
+				uri.push_str(&format!("&icon={}", icon))
+			}
+
+			Some(uri.parse().unwrap())
 		};
 
 		Ok(Page { items, next, previous: None })		
@@ -389,17 +449,32 @@ impl UsersConnection {
 		&mut self,
 		page: LdapPageToken,
 		limit: usize,
+		filter: RoleFilter,
 	) -> Result<Page<Role>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
 		};
 
+		let mut filters = vec![];
+
+		if let Some(ref name) = filter.name {
+			filters.push(format!("(cn={})", name))
+		}
+		
+		if let Some(ref icon) = filter.icon {
+			filters.push(format!("(pxlsspaceIcon={})", icon));
+		}
+
 		let (results, status) = self.connection.with_controls(pager)
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_roles_ou, CONFIG.ldap_base),
 				Scope::OneLevel,
-				"(cn=*)",
+				&if filters.is_empty() {
+					"(cn=*)".to_string()
+				} else {
+					format!("(&{})", filters.join(""))
+				},
 				Role::search_fields(),
 			).await
 			.map_err(FetchError::LdapError)?
@@ -424,10 +499,20 @@ impl UsersConnection {
 			None
 		} else {
 			let page = LdapPageToken(page_data.cookie);
-			Some(format!(
+			let mut uri = format!(
 				"/roles?limit={}&page={}",
 				limit, page
-			).parse().unwrap())
+			);
+
+			// FIXME: urlencode
+			if let Some(name) = filter.name {
+				uri.push_str(&format!("&name={}", name))
+			}
+			if let Some(icon) = filter.icon {
+				uri.push_str(&format!("&icon={}", icon))
+			}
+
+			Some(uri.parse().unwrap())
 		};
 
 		Ok(Page { items, next, previous: None })
@@ -700,17 +785,41 @@ impl UsersConnection {
 		&mut self,
 		page: LdapPageToken,
 		limit: usize,
+		filter: FactionFilter,
 	) -> Result<Page<Faction>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
 		};
 
+		let mut filters = vec![];
+
+		if let Some(ref name) = filter.name {
+			filters.push(format!("(cn={})", name))
+		}
+		
+		if let Some(start) = filter.created_at.start {
+			let timestamp = LDAPTimestamp::from(start);
+			filters.push(format!("(createTimestamp>={})", String::from(timestamp)));
+		}
+
+		if let Some(end) = filter.created_at.end {
+			let timestamp = LDAPTimestamp::from(end);
+			filters.push(format!("(createTimestamp<={})", String::from(timestamp)));
+		}
+
+		// TODO: filter by member count
+		// NOTE: this is not trivial because the count is implicit but ldap won't count it for us
+
 		let (results, status) = self.connection.with_controls(pager)
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
 				Scope::OneLevel,
-				"(cn=*)",
+				&if filters.is_empty() {
+					"(cn=*)".to_string()
+				} else {
+					format!("(&{})", filters.join(""))
+				},
 				Faction::search_fields(),
 			).await
 			.map_err(FetchError::LdapError)?
@@ -737,10 +846,23 @@ impl UsersConnection {
 			None
 		} else {
 			let page = LdapPageToken(page_data.cookie);
-			Some(format!(
+			let mut uri = format!(
 				"/factions?limit={}&page={}",
 				limit, page
-			).parse().unwrap())
+			);
+
+			// FIXME: urlencode
+			if let Some(name) = filter.name {
+				uri.push_str(&format!("&name={}", name))
+			}
+			if !filter.created_at.is_open() {
+				uri.push_str(&format!("&created_at={}", filter.created_at))
+			}
+			if !filter.size.is_open() {
+				uri.push_str(&format!("&size={}", filter.size))
+			}
+
+			Some(uri.parse().unwrap())
 		};
 
 		Ok(Page { items, next, previous: None })
@@ -882,6 +1004,7 @@ impl UsersConnection {
 		fid: &str,
 		page: LdapPageToken,
 		limit: usize,
+		filter: MemberFilter, // TODO: filter all of this
 	) -> Result<Page<FactionMember>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
@@ -930,10 +1053,17 @@ impl UsersConnection {
 			None
 		} else {
 			let page = LdapPageToken(page_data.cookie);
-			Some(format!(
-				"/factions?limit={}&page={}",
-				limit, page
-			).parse().unwrap())
+			let mut uri = format!(
+				"/factions/{}/members?limit={}&page={}",
+				fid, limit, page
+			);
+
+			// FIXME: urlencode
+			if let Some(owner) = filter.owner {
+				uri.push_str(&format!("&owner={}", owner))
+			}
+
+			Some(uri.parse().unwrap())
 		};
 
 		Ok(Page { items, next, previous: None })

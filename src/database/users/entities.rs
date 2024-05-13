@@ -1,3 +1,4 @@
+use chrono::{Datelike, Timelike};
 use ldap3::SearchEntry;
 use serde::{Serialize, Deserialize};
 use serde_with::skip_serializing_none;
@@ -47,13 +48,37 @@ pub enum TimestampParseError {
 	InvalidTime,
 }
 
-struct LDAPTimestamp {
+pub struct LDAPTimestamp {
 	year: i32,
 	month: u32,
 	day: u32,
 	hour: u32,
 	minute: u32,
 	second: u32,
+}
+
+impl From<i64> for LDAPTimestamp {
+	fn from(value: i64) -> Self {
+		let timestamp = chrono::DateTime::from_timestamp(value, 0).unwrap();
+		Self {
+			year: timestamp.year(),
+			month: timestamp.month(),
+			day: timestamp.day(),
+			hour: timestamp.hour(),
+			minute: timestamp.minute(),
+			second: timestamp.second(),
+		}
+	}
+}
+
+impl From<LDAPTimestamp> for String {
+	fn from(value: LDAPTimestamp) -> Self {
+		let LDAPTimestamp { year, month, day, hour, minute, second } = value;
+		format!(
+			"{:04}{:02}{:02}{:02}{:02}{:02}Z",
+			year, month, day, hour, minute, second,
+		)
+	}
 }
 
 impl LDAPTimestamp {
