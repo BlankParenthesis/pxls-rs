@@ -714,7 +714,7 @@ impl UsersConnection {
 			.success()
 			.map_err(FetchError::LdapError)?;
 
-		Ok(results.into_iter().flat_map(|result| {
+		let permissions = results.into_iter().flat_map(|result| {
 			let permissions = SearchEntry::construct(result);
 			permissions.attrs.get("pxlsspacePermission")
 				.cloned()
@@ -722,7 +722,9 @@ impl UsersConnection {
 				.into_iter()
 				// NOTE: silently drops invalid permissions
 				.filter_map(|v| Permission::try_from(v.as_str()).ok())
-		}).collect())
+		}).collect::<EnumSet<Permission>>();
+
+		Ok(Permission::defaults() | permissions)
 	}
 
 	pub async fn add_user_role(
