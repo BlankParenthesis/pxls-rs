@@ -724,7 +724,7 @@ impl UsersConnection {
 				.filter_map(|v| Permission::try_from(v.as_str()).ok())
 		}).collect::<EnumSet<Permission>>();
 
-		Ok(Permission::defaults() | permissions)
+		Ok(Permission::defaults() | permissions | Permission::BoardsPixelsPost)
 	}
 
 	pub async fn add_user_role(
