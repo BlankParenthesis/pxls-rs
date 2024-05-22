@@ -183,7 +183,7 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 			written += write_len;
 			self.cursor += write_len;
 
-			sector.save(self.buffer, self.connection).await?;
+			sector.save(self.buffer, &transaction).await?;
 
 			if self.buffer == SectorBuffer::Initial {
 				drop(sector);

@@ -86,7 +86,7 @@ impl Sector {
 				).await
 			},
 			SectorBuffer::Mask => {
-				connection.write_sector_initial(
+				connection.write_sector_mask(
 					self.board,
 					self.index,
 					self.mask.to_vec(),
