@@ -15,6 +15,7 @@ use std::{
 
 use bytes::BufMut;
 use serde::Serialize;
+use tokio::sync::RwLock;
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -114,11 +115,24 @@ impl Reply for PatchError {
 	}
 }
 
+const COOLDOWN_CACHE_SIZE: usize = 10000;
+
+#[derive(Debug, Default, Clone, Copy)]
+struct CooldownParameters {
+	activity: usize,
+	density: usize,
+	timestamp: u32,
+}
+
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
 	connections: Connections,
 	sectors: SectorCache,
+	/// Map of placement ids to cooldown data.
+	/// Time is not stored directly as the formula may change but the data doesn't
+	/// and the data is the most computationally intensive by a large margin.
+	cooldown_cache: RwLock<[Option<(i64, CooldownParameters)>; COOLDOWN_CACHE_SIZE]>,
 }
 
 impl From<&Board> for Uri {
@@ -168,7 +182,8 @@ impl Board {
 			id,
 			info,
 			sectors,
-			connections
+			connections,
+			cooldown_cache: RwLock::new([None; COOLDOWN_CACHE_SIZE]),
 		}
 	}
 
@@ -643,34 +658,42 @@ impl Board {
 		.unwrap()
 	}
 
-	// TODO: This should REALLY be cached.
-	// It's very heavy for how often it should be used, but values should
-	// continue to be valid until the cooldown formula itself changes.
 	async fn calculate_cooldowns(
 		&self,
 		placement: Option<&Placement>,
 		connection: &BoardsConnection,
 	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
-			let activity = self.user_count_for_time(
-				placement.timestamp,
-				connection
-			).await?;
-
-			let density = connection.count_placements(
-				self.id,
-				placement.position,
-				placement.timestamp,
-			).await?;
-
-			let timestamp = placement.timestamp;
-			
-			(activity, density, timestamp)
+			let cache = self.cooldown_cache.read().await;
+			let index = placement.id as usize % COOLDOWN_CACHE_SIZE;
+			match cache[index] {
+				Some((id, params)) if id == placement.id => { params },
+				_ => {
+					let activity = self.user_count_for_time(
+						placement.timestamp,
+						connection
+					).await?;
+		
+					let density = connection.count_placements(
+						self.id,
+						placement.position,
+						placement.timestamp,
+					).await?;
+		
+					let timestamp = placement.timestamp;
+					
+					let params = CooldownParameters { activity, density, timestamp };
+					drop(cache);
+					let mut cache = self.cooldown_cache.write().await;
+					cache[index] = Some((placement.id, params));
+					params
+				}
+			}
 		} else {
-			(0, 0, 0)
+			CooldownParameters::default()
 		};
 
-		let (activity, density, timestamp) = parameters;
+		let CooldownParameters { activity, density, timestamp } = parameters;
 
 		let base_time = self.info.created_at + timestamp as u64;
 		let base_time = Duration::from_secs(base_time);

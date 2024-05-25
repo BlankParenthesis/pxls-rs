@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::time::{SystemTime, Duration};
+
+use tokio::sync::RwLock;
 use warp::http::StatusCode;
 use jsonwebkey::JsonWebKey;
 use jsonwebtoken::{decode, decode_header, TokenData, Validation, Algorithm};
@@ -114,14 +118,14 @@ impl From<DiscoveryError> for ValidationError {
 
 fn find_key_by_id(
 	id: String,
-) -> impl FnMut(&&JsonWebKey) -> bool {
+) -> impl FnMut(&JsonWebKey) -> bool {
 	move |key| key.key_id.as_deref() == Some(id.as_str())
 }
 
 /// Safety: assumes key algorithm is not None
 unsafe fn find_key_by_algorithm(
 	algorithm: Algorithm,
-) -> impl FnMut(&&JsonWebKey) -> bool {
+) -> impl FnMut(&JsonWebKey) -> bool {
 	move |key| {
 		let key_algorithm = unsafe {
 			key.algorithm.unwrap_unchecked()
@@ -130,16 +134,48 @@ unsafe fn find_key_by_algorithm(
 	}
 }
 
+lazy_static! {
+	static ref CLIENT: Client = Client::new();
+	static ref CACHED_DECODE_KEYS: RwLock<DecodeKeysCache> = RwLock::new(DecodeKeysCache::default());
+}
+
+#[derive(Debug)]
+struct DecodeKeysCache {
+	expiry: SystemTime,
+	keys: Vec<JsonWebKey>,
+}
+
+impl Default for DecodeKeysCache {
+	fn default() -> Self {
+		// should immediately count as expired
+		Self { expiry: SystemTime::now(), keys: vec![] }
+	}
+}
+
+async fn get_decoding_keys() -> Result<Vec<JsonWebKey> , ValidationError> {
+	let discovery_url = CONFIG.discovery_url();
+	let cache = CACHED_DECODE_KEYS.read().await;
+	let now = SystemTime::now();
+	if cache.expiry <= now {
+		let discovery = Discovery::load(discovery_url, &CLIENT).await?;
+		let keys = discovery.jwks_keys(&CLIENT).await?;
+		drop(cache);
+		let mut cache = CACHED_DECODE_KEYS.write().await;
+		cache.expiry = now + Duration::from_secs(5 * 60);
+		cache.keys = keys.clone();
+		Ok(keys)
+	} else {
+		Ok(cache.keys.clone())
+	}
+}
+
 pub async fn validate_token(
 	token: &str
 ) -> Result<TokenData<Identity>, ValidationError> {
-	let client = Client::new();
-	let discovery_url = CONFIG.discovery_url();
+	let decode_keys = get_decoding_keys().await?;
 
-	let discovery = Discovery::load(discovery_url, &client).await?;
-	let keys = discovery.jwks_keys(&client).await?;
-	let mut valid_keys = keys
-		.iter()
+	let mut valid_keys = decode_keys
+		.into_iter()
 		.filter(|key| key.algorithm.is_some());
 
 	let header = decode_header(token)?;
@@ -151,20 +187,17 @@ pub async fn validate_token(
 		valid_keys.find(unsafe { find_key_by_algorithm(header.alg) })
 	};
 
-	if let Some(key) = matching_key {
-		// Safety: valid_keys only contains keys where algorithm is Some;
-		// key came from matching_key which came from valid_keys.
-		let algorithm = unsafe {
-			key.algorithm.unwrap_unchecked()
-		};
+	let decode_key = matching_key.ok_or(ValidationError::NoValidKeys)?;
 
-		decode::<Identity>(
-			token,
-			&key.key.to_decoding_key(),
-			&Validation::new(algorithm.into()),
-		)
-		.map_err(ValidationError::from)
-	} else {
-		Err(ValidationError::NoValidKeys)
-	}
+	// Safety: valid_keys only contains keys where algorithm is Some;
+	// key came from matching_key which came from valid_keys.
+	let algorithm = unsafe {
+		decode_key.algorithm.unwrap_unchecked()
+	};
+
+	decode::<Identity>(
+		token,
+		&decode_key.key.to_decoding_key(),
+		&Validation::new(algorithm.into()),
+	).map_err(ValidationError::from)
 }
