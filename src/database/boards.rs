@@ -624,22 +624,15 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		#[derive(Iden)]
 		struct Inner;
 
+		let column_timestamp_id_pair = Expr::tuple([
+			Expr::col(placement::Column::Timestamp).into(),
+			Expr::col(placement::Column::Id).into(),
+		]);
+
 		let placements = placement::Entity::find()
 			.filter(placement::Column::Board.eq(board))
 			.filter(placement::Column::Position.between(start_position, end_position))
-			.filter(placement::Column::Id.in_subquery(
-				Query::select()
-					.from_as(placement::Entity, Inner)
-					.column((Inner, placement::Column::Id))
-					.and_where(
-						Expr::col((placement::Entity, placement::Column::Position))
-							.equals((Inner, placement::Column::Position))
-					)
-					.order_by((Inner, placement::Column::Timestamp), sea_orm::Order::Desc)
-					.order_by((Inner, placement::Column::Id), sea_orm::Order::Desc)
-					.limit(1)
-					.to_owned()
-			))
+			.order_by_asc(column_timestamp_id_pair)
 			.all(&self.connection).await?;
 
 		for placement in placements {
