@@ -11,8 +11,7 @@ pub struct Model {
 	pub position: i64,
 	pub color: i16,
 	pub timestamp: i32,
-	#[sea_orm(column_type = "Text")]
-	pub user_id: String,
+	pub user_id: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -33,11 +32,25 @@ pub enum Relation {
 		on_delete = "NoAction"
 	)]
 	Color,
+	#[sea_orm(
+		belongs_to = "super::user_id::Entity",
+		from = "Column::UserId",
+		to = "super::user_id::Column::Id",
+		on_update = "NoAction",
+		on_delete = "NoAction"
+	)]
+	UserId,
 }
 
 impl Related<super::color::Entity> for Entity {
 	fn to() -> RelationDef {
 		Relation::Color.def()
+	}
+}
+
+impl Related<super::user_id::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::UserId.def()
 	}
 }
 

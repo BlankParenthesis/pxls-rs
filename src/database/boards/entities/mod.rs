@@ -8,3 +8,4 @@ pub mod board_sector;
 pub mod color;
 pub mod notice;
 pub mod placement;
+pub mod user_id;

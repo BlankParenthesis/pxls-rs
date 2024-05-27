@@ -6,3 +6,4 @@ pub use super::board_sector::Entity as BoardSector;
 pub use super::color::Entity as Color;
 pub use super::notice::Entity as Notice;
 pub use super::placement::Entity as Placement;
+pub use super::user_id::Entity as UserId;

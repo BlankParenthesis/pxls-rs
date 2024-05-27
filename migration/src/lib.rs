@@ -9,6 +9,7 @@ mod m4_system_colors;
 mod m5_notices;
 mod m6_board_notices;
 mod m7_indices;
+mod m8_small_uid;
 
 pub struct Migrator;
 
@@ -38,6 +39,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m5_notices::Migration),
 			Box::new(m6_board_notices::Migration),
 			Box::new(m7_indices::Migration),
+			Box::new(m8_small_uid::Migration),
 		]
 	}
 }

@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{time::{Duration, SystemTime, UNIX_EPOCH}, collections::HashMap};
 
 use bytes::{BytesMut, BufMut};
 use reqwest::StatusCode;
@@ -15,7 +15,7 @@ use sea_orm::{
 	Set,
 	ModelTrait,
 	ActiveValue::NotSet,
-	sea_query::{Expr, SimpleExpr, Query, self},
+	sea_query::{Expr, SimpleExpr, self},
 	QuerySelect,
 	QueryOrder,
 	PaginatorTrait,
@@ -23,6 +23,7 @@ use sea_orm::{
 	ConnectionTrait, QueryTrait,
 };
 use sea_orm_migration::MigratorTrait;
+use tokio::sync::RwLock;
 use warp::reply::Reply;
 
 use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}};
@@ -96,6 +97,64 @@ impl super::Database for BoardsDatabase {
 		let connection = self.pool.clone();
 		Ok(BoardsConnection { connection })
 	}
+}
+
+#[derive(Default)]
+struct UserIdCache {
+	data: RwLock<(HashMap<i32, String>, HashMap<String, i32>)>,
+}
+
+impl UserIdCache {
+	async fn get_uid<C: ConnectionTrait>(
+		&self,
+		id: i32,
+		connection: &C,
+	) -> Result<String, BoardsDatabaseError> {
+		let cache = self.data.read().await;
+		if let Some(uid) = cache.0.get(&id) {
+			Ok(uid.clone())
+		} else {
+			drop(cache);
+			let mut cache = self.data.write().await;
+			let user = user_id::Entity::find_by_id(id)
+				.one(connection).await?.unwrap();
+			cache.0.insert(user.id, user.uid.clone());
+			cache.1.insert(user.uid.clone(), user.id);
+			Ok(user.uid.clone())
+		}
+	}
+
+	async fn get_id<C: ConnectionTrait>(
+		&self,
+		uid: String,
+		connection: &C,
+	) -> Result<i32, BoardsDatabaseError> {
+		let cache = self.data.read().await;
+		if let Some(&id) = cache.1.get(&uid) {
+			Ok(id)
+		} else {
+			drop(cache);
+			let mut cache = self.data.write().await;
+			let new_user = user_id::ActiveModel {
+				id: NotSet,
+				uid: Set(uid.clone()),
+			};
+			let user = user_id::Entity::insert(new_user)
+				.on_conflict(
+					sea_query::OnConflict::column(user_id::Column::Uid)
+						.update_column(user_id::Column::Uid)
+						.to_owned()
+				)
+				.exec_with_returning(connection).await?;
+			cache.0.insert(user.id, user.uid.clone());
+			cache.1.insert(user.uid, user.id);
+			Ok(user.id)
+		}
+	}
+}
+
+lazy_static! {
+	static ref USER_ID_CACHE: UserIdCache = UserIdCache::default();
 }
 
 pub struct BoardsConnection<Connection: TransactionTrait + ConnectionTrait> {
@@ -381,18 +440,19 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				uri.parse().unwrap()
 			});
 
-		let placements = placements.into_iter()
-			.take(limit)
-			.map(|placement| Placement {
+		let mut items = Vec::with_capacity(limit);
+
+		for placement in placements.into_iter().take(limit) {
+			items.push(Placement {
 				id: placement.id,
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
-				user: placement.user_id,
+				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
 			})
-			.collect();
-		
-		Ok(Page { items: placements, next, previous: None })
+		}
+
+		Ok(Page { items, next, previous: None })
 	}
 
 	pub async fn get_placement(
@@ -408,14 +468,18 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
 			.order_by(placement::Column::Id, sea_orm::Order::Desc)
 			.one(&self.connection).await?;
-
-		Ok(placement.map(|placement| Placement {
-			id: placement.id,
-			position: placement.position as u64,
-			color: placement.color as u8,
-			timestamp: placement.timestamp as u32,
-			user: placement.user_id,
-		}))
+		
+		if let Some(placement) = placement {
+			Ok(Some(Placement {
+				id: placement.id,
+				position: placement.position as u64,
+				color: placement.color as u8,
+				timestamp: placement.timestamp as u32,
+				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
+			}))
+		} else {
+			Ok(None)
+		}
 	}
 
 	pub async fn get_two_placements(
@@ -423,7 +487,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		board_id: i32,
 		position: u64,
 	) -> DbResult<(Option<Placement>, Option<Placement>)> {
-		let mut placements = placement::Entity::find()
+		let placements = placement::Entity::find()
 			.filter(
 				placement::Column::Board.eq(board_id)
 					.and(placement::Column::Position.eq(position as i64)),
@@ -431,18 +495,20 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
 			.order_by(placement::Column::Id, sea_orm::Order::Desc)
 			.limit(2)
-			.all(&self.connection).await?
-			.into_iter()
-			.take(2)
-			.map(|placement| Placement {
+			.all(&self.connection).await?;
+
+		let mut pair = Vec::with_capacity(2);
+		for placement in placements {
+			pair.push(Placement {
 				id: placement.id,
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
-				user: placement.user_id,
-			});
-
-		Ok((placements.next(), placements.next()))
+				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
+			})
+		}
+		let mut pair = pair.into_iter();
+		Ok((pair.next(), pair.next()))
 	}
 
 	pub async fn delete_placement(&self, placement_id: i64,) -> DbResult<()> {
@@ -466,7 +532,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				position: Set(position as i64),
 				color: Set(color as i16),
 				timestamp: Set(timestamp as i32),
-				user_id: Set(user_id),
+				user_id: Set(USER_ID_CACHE.get_id(user_id.clone(), &self.connection).await?),
 			}
 		)
 		.exec_with_returning(&self.connection).await
@@ -475,7 +541,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
-			user: placement.user_id,
+			user: user_id,
 		})
 		.map_err(BoardsDatabaseError::from)
 	}
@@ -487,6 +553,8 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		timestamp: u32,
 		user_id: String,
 	) -> DbResult<Placement> {
+		let uid = USER_ID_CACHE.get_id(user_id.clone(), &self.connection).await?;
+
 		placement::Entity::insert_many(
 			placements.iter().map(|(position, color)| {
 				placement::ActiveModel {
@@ -498,7 +566,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 					// TODO: this makes it clear that storing the user id as a
 					// field is a *terrible* idea and it should be moved to it's
 					// own table.
-					user_id: Set(user_id.clone()),
+					user_id: Set(uid),
 				}
 			})
 		)
@@ -508,7 +576,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
-			user: placement.user_id,
+			user: user_id.clone(),
 		})
 		.map_err(BoardsDatabaseError::from)
 	}
@@ -536,10 +604,11 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		user_id: &str,
 		limit: usize,
 	) -> DbResult<Vec<Placement>> {
+		let uid = USER_ID_CACHE.get_id(user_id.to_owned(), &self.connection).await?;
 		let placements = placement::Entity::find()
 			.filter(
 				placement::Column::Board.eq(board_id)
-					.and(placement::Column::UserId.eq(user_id)),
+					.and(placement::Column::UserId.eq(uid)),
 			)
 			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
 			.order_by(placement::Column::Id, sea_orm::Order::Desc)
@@ -551,7 +620,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
-			user: placement.user_id,
+			user: user_id.to_owned(),
 		}).collect())
 	}
 
