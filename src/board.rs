@@ -36,7 +36,7 @@ use info::BoardInfo;
 pub use color::{Color, Palette};
 pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
-pub use placement::{Placement, PlacementPageToken};
+pub use placement::{Placement, PlacementPageToken, CachedPlacement};
 pub use socket::BoardSubscription;
 
 #[derive(Debug)]
@@ -115,7 +115,96 @@ impl Reply for PatchError {
 	}
 }
 
-const COOLDOWN_CACHE_SIZE: usize = 10000;
+
+// If we want to handle x active users we need x * stack stored pixels to
+// keep their cooldown lookup in cache. Since this is by far the most
+// expensive part of placing, this is highly desirable so we can spend some
+// memory here.
+// So for 10,000 users, a stack size of 6, and doubled for margins:
+// 10_000 * 6 * 2 = 120_000
+// NOTE: ~~Placements are currently 48 bytes + id Strings (~40 bytes each)
+// So entries are about 90B in size and so this is 10MB of data.~~
+// *CachedPlacements* are just 16 bytes so this is now less than 2MB of data.
+const PLACEMENT_CACHE_SIZE: usize = 120_000;
+
+struct PlacementCache<const SIZE: usize> {
+	ring_buffer: Box<[CachedPlacement; SIZE]>,
+	// assumes infinite size, wrapped at lookup
+	position: usize,
+}
+
+impl<const SIZE: usize> PlacementCache<SIZE> {
+	pub async fn fill(board_id: i32, connection: &BoardsConnection) -> Result<Self, BoardsDatabaseError> {
+		let mut placements = connection.list_placements_simple(
+			board_id,
+			Order::Reverse,
+			SIZE,
+		).await?;
+
+		placements.reverse();
+		let position = placements.len();
+
+		let mut ring_buffer: Box<[_; SIZE]> = vec![CachedPlacement::null(); SIZE]
+			.into_boxed_slice()
+			.try_into().unwrap();
+		
+		ring_buffer.copy_from_slice(&placements);
+
+		Ok(Self { ring_buffer, position })
+	}
+
+	pub fn iter(&self) -> PlacementCacheIterator<'_, SIZE> {
+		PlacementCacheIterator {
+			placements: self,
+			offset: 0,
+		}
+	}
+
+	fn insert(&mut self, placement: CachedPlacement) {
+		self.ring_buffer[self.position % SIZE] = placement;
+		self.position += 1;
+	}
+}
+
+struct PlacementCacheIterator<'a, const SIZE: usize> {
+	placements: &'a PlacementCache<SIZE>,
+	offset: usize,
+}
+
+
+impl<'a, const SIZE: usize> Iterator for PlacementCacheIterator<'a, SIZE> {
+	type Item = &'a CachedPlacement;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		if self.size_hint().0 > 0 {
+			self.offset += 1;
+			let index = (self.placements.position - self.offset) % SIZE;
+			Some(&self.placements.ring_buffer[index])
+		} else {
+			None
+		}
+	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		let limit = usize::min(self.placements.position, SIZE);
+		let remaining = limit - self.offset;
+		(remaining, Some(remaining))
+	}
+
+	fn count(self) -> usize {
+		self.size_hint().0
+	}
+
+	fn last(self) -> Option<Self::Item> where Self: Sized {
+		let last_offset = usize::min(self.placements.position, SIZE);
+		if last_offset > 0 {
+			let index = (self.placements.position - (last_offset - 1)) % SIZE;
+			Some(&self.placements.ring_buffer[index])
+		} else {
+			None
+		}
+	}
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 struct CooldownParameters {
@@ -129,10 +218,7 @@ pub struct Board {
 	pub info: BoardInfo,
 	connections: Connections,
 	sectors: SectorCache,
-	/// Map of placement ids to cooldown data.
-	/// Time is not stored directly as the formula may change but the data doesn't
-	/// and the data is the most computationally intensive by a large margin.
-	cooldown_cache: RwLock<[Option<(i64, CooldownParameters)>; COOLDOWN_CACHE_SIZE]>,
+	placement_cache: RwLock<Option<PlacementCache<PLACEMENT_CACHE_SIZE>>>,
 }
 
 impl From<&Board> for Uri {
@@ -183,7 +269,7 @@ impl Board {
 			info,
 			sectors,
 			connections,
-			cooldown_cache: RwLock::new([None; COOLDOWN_CACHE_SIZE]),
+			placement_cache: RwLock::new(None),
 		}
 	}
 
@@ -594,6 +680,11 @@ impl Board {
 			user_id.to_owned(),
 		).await.map_err(PlaceError::DatabaseError)?;
 
+		let mut cache_lock = self.placement_cache.write().await;
+		let cache = cache_lock.as_mut().unwrap();
+		cache.insert(CachedPlacement::from(&new_placement));
+		drop(cache_lock);
+
 		sector.colors[sector_offset] = color;
 		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
 			.as_mut()
@@ -660,35 +751,24 @@ impl Board {
 
 	async fn calculate_cooldowns(
 		&self,
-		placement: Option<&Placement>,
+		placement: Option<&CachedPlacement>,
 		connection: &BoardsConnection,
 	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
-			let cache = self.cooldown_cache.read().await;
-			let index = placement.id as usize % COOLDOWN_CACHE_SIZE;
-			match cache[index] {
-				Some((id, params)) if id == placement.id => { params },
-				_ => {
-					let activity = self.user_count_for_time(
-						placement.timestamp,
-						connection
-					).await?;
-		
-					let density = connection.count_placements(
-						self.id,
-						placement.position,
-						placement.timestamp,
-					).await?;
-		
-					let timestamp = placement.timestamp;
-					
-					let params = CooldownParameters { activity, density, timestamp };
-					drop(cache);
-					let mut cache = self.cooldown_cache.write().await;
-					cache[index] = Some((placement.id, params));
-					params
-				}
-			}
+			let activity = self.user_count_for_time(
+				placement.timestamp,
+				connection
+			).await?;
+
+			let density = connection.count_placements(
+				self.id,
+				placement.position,
+				placement.timestamp,
+			).await?;
+
+			let timestamp = placement.timestamp;
+			
+			CooldownParameters { activity, density, timestamp }
 		} else {
 			CooldownParameters::default()
 		};
@@ -718,14 +798,35 @@ impl Board {
 		user_id: &str,
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, BoardsDatabaseError> {
-		let placements = connection.list_user_placements(
-			self.id,
-			user_id,
-			usize::try_from(self.info.max_pixels_available).unwrap(),
-		).await?;
+		let max_pixels = self.info.max_pixels_available as usize;
+		let cache = self.placement_cache.read().await;
+		let uid = connection.get_uid(user_id).await?;
+		let mut placements = match cache.as_ref() {
+			Some(cache) => {
+				cache.iter()
+					.filter(|p| p.user_id == uid)
+					.take(max_pixels)
+					.cloned()
+					.collect()
+			},
+			None => {
+				vec![]
+			},
+		};
+		drop(cache);
+
+		if placements.len() < max_pixels {
+			// if we don't have all the user's placements in the buffer,
+			// we have to query the database as we don't know if we're missing
+			// placements.
+			placements = connection.list_user_placements(
+				self.id,
+				user_id,
+				max_pixels,
+			).await?.into_iter().map(CachedPlacement::from).collect();
+		};
 
 		let cooldowns = self.calculate_cooldowns(placements.last(), connection).await?;
-
 		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
 
 		// If we would already have MAX_STACKED just from waiting, we
@@ -777,6 +878,29 @@ impl Board {
 		Ok(info)
 	}
 
+	async fn cached_placements(
+		&self,
+		connection: &BoardsConnection,
+	) -> Result<tokio::sync::RwLockReadGuard<'_, Option<PlacementCache<PLACEMENT_CACHE_SIZE>>>, BoardsDatabaseError> {
+
+		let cache_lock = self.placement_cache.read().await;
+
+		if cache_lock.is_none() {
+			drop(cache_lock);
+
+			let mut cache = self.placement_cache.write().await;
+			if cache.is_none() {
+				let new_cache = PlacementCache::fill(self.id, connection).await?;
+				cache.replace(new_cache);
+			}
+			drop(cache);
+
+			Ok(self.placement_cache.read().await)
+		} else {
+			Ok(cache_lock)
+		}
+	}
+
 	async fn user_count_for_time(
 		&self,
 		timestamp: u32,
@@ -786,7 +910,20 @@ impl Board {
 		let max_time = i32::try_from(timestamp).unwrap();
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
 
-		connection.user_count_between(self.id, min_time, max_time).await
+		let cache = self.cached_placements(connection).await?;
+		let cache = cache.as_ref().unwrap();
+		let cache_age = cache.iter().last().unwrap().timestamp as i32;
+		if min_time > cache_age {
+			let user_count = cache.iter()
+				.skip_while(|p| p.timestamp > max_time as u32)
+				.take_while(|p| p.timestamp >= min_time as u32)
+				.map(|p| p.user_id)
+				.collect::<HashSet<_>>().len();
+
+			Ok(user_count)
+		} else {
+			connection.user_count_between(self.id, min_time, max_time).await
+		}
 	}
 
 	pub async fn user_count(

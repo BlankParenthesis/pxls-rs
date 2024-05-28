@@ -26,7 +26,7 @@ use sea_orm_migration::MigratorTrait;
 use tokio::sync::RwLock;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}};
+use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}, board::CachedPlacement};
 use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
 use crate::routes::site_notices::notices::NoticePageToken;
 
@@ -173,6 +173,10 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		self.connection.begin().await
 			.map(|connection| BoardsConnection { connection })
 			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn get_uid(&self, user_id: &str) -> Result<i32, BoardsDatabaseError> {
+		USER_ID_CACHE.get_id(user_id.to_owned(), &self.connection).await
 	}
 
 	pub async fn list_boards(&self) -> DbResult<Vec<Board>> {
@@ -366,6 +370,32 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			.map_err(BoardsDatabaseError::from)
 	}
 
+	pub async fn list_placements_simple(
+		&self,
+		board_id: i32,
+		order: Order,
+		limit: usize,
+	) -> DbResult<Vec<CachedPlacement>> {
+		let order = match order {
+			Order::Forward => sea_orm::Order::Asc,
+			Order::Reverse => sea_orm::Order::Desc,
+		};
+
+		Ok(placement::Entity::find()
+			.filter(placement::Column::Board.eq(board_id))
+			.order_by(placement::Column::Timestamp, order.clone())
+			.order_by(placement::Column::Id, order)
+			.limit(limit as u64)
+			.all(&self.connection).await?
+			.into_iter()
+			.map(|placement| CachedPlacement {
+				timestamp: placement.timestamp as u32,
+				position: placement.position as u64,
+				user_id: placement.user_id,
+			})
+			.collect())
+	}
+
 	pub async fn list_placements(
 		&self,
 		board_id: i32,
@@ -448,6 +478,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
+				user_id: placement.user_id,
 				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
 			})
 		}
@@ -475,6 +506,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
+				user_id: placement.user_id,
 				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
 			}))
 		} else {
@@ -504,6 +536,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
+				user_id: placement.user_id,
 				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
 			})
 		}
@@ -535,12 +568,14 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 				user_id: Set(USER_ID_CACHE.get_id(user_id.clone(), &self.connection).await?),
 			}
 		)
+		// TODO: try just returning the known data to skip the return for speed
 		.exec_with_returning(&self.connection).await
 		.map(|placement| Placement {
 			id: placement.id,
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user_id: placement.user_id,
 			user: user_id,
 		})
 		.map_err(BoardsDatabaseError::from)
@@ -576,6 +611,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user_id: placement.user_id,
 			user: user_id.clone(),
 		})
 		.map_err(BoardsDatabaseError::from)
@@ -620,6 +656,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
+			user_id: placement.user_id,
 			user: user_id.to_owned(),
 		}).collect())
 	}

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt};
+use std::{collections::{HashSet, HashMap}, fmt};
 
 use base64::prelude::*;
 use deadpool::managed::PoolError;
@@ -23,7 +23,9 @@ use serde::de::{Deserialize, Visitor};
 use url::Url;
 use warp::{reject::Reject, reply::Reply};
 
-use crate::{config::CONFIG, filter::resource::filter::FilterRange, routes::{roles::roles::RoleFilter, factions::factions::{FactionFilter, members::MemberFilter}}};
+use crate::config::CONFIG;
+use crate::routes::roles::roles::RoleFilter;
+use crate::routes::factions::factions::{FactionFilter, members::MemberFilter};
 use crate::permissions::Permission;
 use crate::filter::response::paginated_list::{Page, PageToken};
 
@@ -188,7 +190,7 @@ impl super::Database for UsersDatabase {
 
 	async fn connection(&self) -> Result<Self::Connection, Self::Error> {
 		self.pool.get().await
-			.map(|connection| UsersConnection { connection })
+			.map(|connection| UsersConnection { connection, cache: HashMap::new() })
 	}
 }
 
@@ -202,8 +204,14 @@ fn user_dn(id: &str) -> String {
 	)
 }
 
+
+struct UserCache {
+	user: Option<User>,
+}
+
 pub struct UsersConnection {
 	connection: LdapConnection,
+	cache: HashMap<String, UserCache>,
 }
 
 impl UsersConnection {

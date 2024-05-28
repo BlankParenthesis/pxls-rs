@@ -5,10 +5,43 @@ use serde::de::{self, Deserializer, Visitor};
 
 use crate::filter::response::paginated_list::PageToken;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy)]
+pub struct CachedPlacement {
+	pub timestamp: u32,
+	pub position: u64,
+	pub user_id: i32,
+}
+
+impl CachedPlacement {
+	pub fn null() -> Self {
+		Self {
+			timestamp: 0,
+			position: 0,
+			user_id: 0
+		}
+	}
+}
+
+impl From<Placement> for CachedPlacement {
+	fn from(value: Placement) -> Self {
+		let Placement { timestamp, position, user_id, .. } = value;
+		Self { timestamp, position, user_id }
+	}
+}
+
+impl From<&Placement> for CachedPlacement {
+	fn from(value: &Placement) -> Self {
+		let &Placement { timestamp, position, user_id, .. } = value;
+		Self { timestamp, position, user_id }
+	}
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct Placement {
 	#[serde(skip_serializing)]
 	pub id: i64,
+	#[serde(skip_serializing)]
+	pub user_id: i32, // TODO: serialize as a reference properly
 	pub position: u64,
 	pub color: u8,
 	pub timestamp: u32,
