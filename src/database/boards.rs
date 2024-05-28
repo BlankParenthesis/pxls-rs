@@ -617,6 +617,8 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		.map_err(BoardsDatabaseError::from)
 	}
 
+	/// use density buffer instead
+	#[deprecated]
 	pub async fn count_placements(
 		&self,
 		board_id: i32,
@@ -723,6 +725,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		let mask = BytesMut::from(&*sector.mask);
 		let mut colors = initial.clone();
 		let mut timestamps = BytesMut::from(&vec![0; sector_size * 4][..]);
+		let mut density = BytesMut::from(&vec![0; sector_size * 4][..]);
 
 		let start_position = sector_size as i64 * sector.sector as i64;
 		let end_position = start_position + sector_size as i64 - 1;
@@ -735,6 +738,8 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			Expr::col(placement::Column::Id).into(),
 		]);
 
+		// TODO: look into storing this as indices on the database to skip
+		// loading all placements.
 		let placements = placement::Entity::find()
 			.filter(placement::Column::Board.eq(board))
 			.filter(placement::Column::Position.between(start_position, end_position))
@@ -744,8 +749,16 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 		for placement in placements {
 			let index = placement.position as usize;
 			colors[index] = placement.color as u8;
-			let mut timestamp_slice = &mut timestamps[index * 4..index * 4 + 4];
+			
+			let index4 = index * 4..index * 4 + 4;
+			let mut timestamp_slice = &mut timestamps[index4.clone()];
 			timestamp_slice.put_u32_le(placement.timestamp as u32);
+
+			let current_density = u32::from_le_bytes(unsafe {
+				density[index4.clone()].try_into().unwrap_unchecked()
+			});
+			let mut density_slice = &mut density[index4];
+			density_slice.put_u32_le(current_density + 1);
 		}
 
 		Ok(Sector {
@@ -755,6 +768,7 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 			mask,
 			colors,
 			timestamps,
+			density,
 		})
 	}
 

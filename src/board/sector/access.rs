@@ -125,6 +125,7 @@ impl<'l> AsyncRead for SectorAccessor<'l> {
 				SectorBuffer::Timestamps => &sector.timestamps,
 				SectorBuffer::Initial => &sector.initial,
 				SectorBuffer::Mask => &sector.mask,
+				SectorBuffer::Density => &sector.mask,
 			}[offset..];
 
 			let write_len = buf.read(output)?;
@@ -172,6 +173,7 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 				SectorBuffer::Timestamps => &mut sector.timestamps,
 				SectorBuffer::Initial => &mut sector.initial,
 				SectorBuffer::Mask => &mut sector.mask,
+				SectorBuffer::Density => &mut sector.density,
 			}[offset..];
 
 			let write_len: usize = input.read(buf)?;

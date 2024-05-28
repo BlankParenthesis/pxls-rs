@@ -18,6 +18,7 @@ use warp::{reject::Reject, reply::Reply};
 pub type BoardsConnection = boards::BoardsConnection<DatabaseConnection>;
 pub type BoardsConnectionGeneric<T> = boards::BoardsConnection<T>;
 
+#[derive(Clone, Copy)]
 pub enum Order { Forward, Reverse }
 
 #[async_trait::async_trait]

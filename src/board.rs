@@ -15,7 +15,7 @@ use std::{
 
 use bytes::BufMut;
 use serde::Serialize;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockMappedWriteGuard};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -209,7 +209,7 @@ impl<'a, const SIZE: usize> Iterator for PlacementCacheIterator<'a, SIZE> {
 #[derive(Debug, Default, Clone, Copy)]
 struct CooldownParameters {
 	activity: usize,
-	density: usize,
+	density: u32,
 	timestamp: u32,
 }
 
@@ -507,6 +507,7 @@ impl Board {
 			let cooldown_info = self.user_cooldown_info(
 				user_id,
 				connection,
+				&sectors,
 			).await.map_err(PlaceError::DatabaseError)?;
 
 			if cooldown_info.pixels_available < changes {
@@ -608,6 +609,7 @@ impl Board {
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
+			&HashMap::from([(sector_index, sector)]),
 		).await.map_err(UndoError::DatabaseError)?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info).await;
@@ -633,11 +635,14 @@ impl Board {
 
 		self.check_placement_palette(color, overrides.color)?;
 		
-		let mut sector = self.sectors
+		let sector = self.sectors
 			.get_sector_mut(sector_index, connection).await
 			.map_err(PlaceError::DatabaseError)?
 			.expect("Missing sector");
 
+		let mut sectors = HashMap::from([(sector_index, sector)]);
+		let sector = sectors.get_mut(&sector_index).unwrap();
+		
 		if !overrides.mask {
 			match MaskValue::try_from(sector.mask[sector_offset]).ok() {
 				Some(MaskValue::Place) => Ok(()),
@@ -661,6 +666,7 @@ impl Board {
 			let cooldown_info = self.user_cooldown_info(
 				user_id,
 				connection,
+				&sectors,
 			).await.map_err(PlaceError::DatabaseError)?;
 
 			if cooldown_info.pixels_available == 0 {
@@ -684,6 +690,8 @@ impl Board {
 		let cache = cache_lock.as_mut().unwrap();
 		cache.insert(CachedPlacement::from(&new_placement));
 		drop(cache_lock);
+
+		let sector = sectors.get_mut(&sector_index).unwrap();
 
 		sector.colors[sector_offset] = color;
 		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
@@ -709,6 +717,7 @@ impl Board {
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
+			&sectors,
 		).await.map_err(PlaceError::DatabaseError)?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info).await;
@@ -753,6 +762,8 @@ impl Board {
 		&self,
 		placement: Option<&CachedPlacement>,
 		connection: &BoardsConnection,
+		// must be passed if the caller already holds a lock to prevent deadlock
+		sector_locks: &HashMap<usize, RwLockMappedWriteGuard<'_, Sector>>,
 	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
 			let activity = self.user_count_for_time(
@@ -760,11 +771,20 @@ impl Board {
 				connection
 			).await?;
 
-			let density = connection.count_placements(
-				self.id,
-				placement.position,
-				placement.timestamp,
-			).await?;
+			let (sector_index, sector_offset) = self.info.shape
+				.to_local(placement.position as usize).unwrap();
+
+			
+			let range = sector_offset..(sector_offset + 4);
+			let density_slice = if let Some(sector) = sector_locks.get(&sector_index) {
+				sector.density[range].try_into().unwrap()
+			} else {
+				let sector = self.sectors.get_sector(sector_index, connection)
+					.await?.expect("Missing sector");
+				sector.density[range].try_into().unwrap()
+			};
+
+			let density = u32::from_le_bytes(density_slice);
 
 			let timestamp = placement.timestamp;
 			
@@ -797,6 +817,8 @@ impl Board {
 		&self,
 		user_id: &str,
 		connection: &BoardsConnection,
+		// must be passed if the caller already holds a lock to prevent deadlock
+		sector_locks: &HashMap<usize, RwLockMappedWriteGuard<'_, Sector>>,
 	) -> Result<CooldownInfo, BoardsDatabaseError> {
 		let max_pixels = self.info.max_pixels_available as usize;
 		let cache = self.placement_cache.read().await;
@@ -826,7 +848,8 @@ impl Board {
 			).await?.into_iter().map(CachedPlacement::from).collect();
 		};
 
-		let cooldowns = self.calculate_cooldowns(placements.last(), connection).await?;
+		let cooldowns = self.calculate_cooldowns(placements.last(), connection, sector_locks).await?;
+
 		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
 
 		// If we would already have MAX_STACKED just from waiting, we
@@ -860,7 +883,7 @@ impl Board {
 
 			for pair in placements.windows(2) {
 				let info = CooldownInfo::new(
-					self.calculate_cooldowns(Some(&pair[0]), connection).await?,
+					self.calculate_cooldowns(Some(&pair[0]), connection, sector_locks).await?,
 					UNIX_EPOCH
 						+ Duration::from_secs(
 							u64::from(pair[1].timestamp) + self.info.created_at,
@@ -946,7 +969,7 @@ impl Board {
 		let id = socket.user_id().await;
 
 		let cooldown_info = if let Some(ref user_id) = id {
-			Some(self.user_cooldown_info(user_id, connection).await?)
+			Some(self.user_cooldown_info(user_id, connection, &HashMap::new()).await?)
 		} else {
 			None
 		};

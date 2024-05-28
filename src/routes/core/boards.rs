@@ -206,6 +206,7 @@ pub fn get(
 				let cooldown_info = board.user_cooldown_info(
 					&id,
 					&connection,
+					&std::collections::HashMap::new(),
 				).await;
 
 				match cooldown_info {

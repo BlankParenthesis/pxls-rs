@@ -24,6 +24,7 @@ pub enum SectorBuffer {
 	Timestamps,
 	Initial,
 	Mask,
+	Density,
 }
 
 impl SectorBuffer {
@@ -33,6 +34,7 @@ impl SectorBuffer {
 			SectorBuffer::Timestamps => 4,
 			SectorBuffer::Initial => 1,
 			SectorBuffer::Mask => 1,
+			SectorBuffer::Density => 4,
 		}
 	}
 }
@@ -44,7 +46,8 @@ pub struct Sector {
 	pub timestamps: BytesMut,
 	pub mask: BytesMut,
 	pub initial: BytesMut,
-	// TODO: maybe a density buffer for how many placements there have been
+	// the number of placements on a position
+	pub density: BytesMut,
 }
 
 impl Sector {
@@ -78,6 +81,7 @@ impl Sector {
 		match buffer {
 			SectorBuffer::Colors => unimplemented!(),
 			SectorBuffer::Timestamps => unimplemented!(),
+			SectorBuffer::Density => unimplemented!(),
 			SectorBuffer::Initial => {
 				connection.write_sector_initial(
 					self.board,
