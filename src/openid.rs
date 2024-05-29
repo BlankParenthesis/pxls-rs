@@ -136,7 +136,12 @@ unsafe fn find_key_by_algorithm(
 
 lazy_static! {
 	static ref CLIENT: Client = Client::new();
-	static ref CACHED_DECODE_KEYS: RwLock<DecodeKeysCache> = RwLock::new(DecodeKeysCache::default());
+	static ref CACHED_DECODE_KEYS: RwLock<DecodeKeysCache> = {
+		RwLock::new(DecodeKeysCache::default())
+	};
+	static ref CACHED_TOKENS: RwLock<HashMap<String, TokenData<Identity>>> = {
+		RwLock::new(HashMap::new())
+	};
 }
 
 #[derive(Debug)]
@@ -169,9 +174,19 @@ async fn get_decoding_keys() -> Result<Vec<JsonWebKey> , ValidationError> {
 	}
 }
 
+// TODO: consider using the crate "cached"
+// FIXME: this cache is effectively a memory leak too since tokens expire and
+// become new fairly often.
 pub async fn validate_token(
 	token: &str
 ) -> Result<TokenData<Identity>, ValidationError> {
+	let token_string = token.to_string();
+	let cache = CACHED_TOKENS.read().await;
+	if let Some(cached) = cache.get(&token_string) {
+		return Ok(clone_token(cached));
+	}
+	drop(cache);
+
 	let decode_keys = get_decoding_keys().await?;
 
 	let mut valid_keys = decode_keys
@@ -195,9 +210,24 @@ pub async fn validate_token(
 		decode_key.algorithm.unwrap_unchecked()
 	};
 
-	decode::<Identity>(
+	let token = decode::<Identity>(
 		token,
 		&decode_key.key.to_decoding_key(),
 		&Validation::new(algorithm.into()),
-	).map_err(ValidationError::from)
+	).map_err(ValidationError::from)?;
+	let mut cache = CACHED_TOKENS.write().await;
+	cache.insert(token_string, clone_token(&token));
+	Ok(token)
+}
+
+// since token doesn't implement clone in the current version of jwt
+fn clone_token(token: &TokenData<Identity>) -> TokenData<Identity> {
+	let identity = Identity {
+		sub: token.claims.sub.clone(),
+		exp: token.claims.exp,
+	};
+	TokenData {
+		header: token.header.clone(),
+		claims: identity,
+	}
 }
