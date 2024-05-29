@@ -20,10 +20,11 @@ use sea_orm::{
 	QueryOrder,
 	PaginatorTrait,
 	Iden,
-	ConnectionTrait, QueryTrait,
+	ConnectionTrait, QueryTrait, StreamTrait,
 };
 use sea_orm_migration::MigratorTrait;
 use tokio::sync::RwLock;
+use tokio_stream::StreamExt;
 use warp::reply::Reply;
 
 use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}, board::CachedPlacement};
@@ -157,7 +158,7 @@ lazy_static! {
 	static ref USER_ID_CACHE: UserIdCache = UserIdCache::default();
 }
 
-pub struct BoardsConnection<Connection: TransactionTrait + ConnectionTrait> {
+pub struct BoardsConnection<Connection: TransactionTrait + ConnectionTrait + StreamTrait> {
 	connection: Connection,
 }
 
@@ -168,7 +169,7 @@ impl BoardsConnection<DatabaseTransaction> {
 	}
 }
 
-impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
+impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 	pub async fn begin(&self) -> DbResult<BoardsConnection<DatabaseTransaction>> {
 		self.connection.begin().await
 			.map(|connection| BoardsConnection { connection })
@@ -740,13 +741,13 @@ impl<C: TransactionTrait + ConnectionTrait> BoardsConnection<C> {
 
 		// TODO: look into storing this as indices on the database to skip
 		// loading all placements.
-		let placements = placement::Entity::find()
+		let mut placements = placement::Entity::find()
 			.filter(placement::Column::Board.eq(board))
 			.filter(placement::Column::Position.between(start_position, end_position))
 			.order_by_asc(column_timestamp_id_pair)
-			.all(&self.connection).await?;
+			.stream(&self.connection).await?;
 
-		for placement in placements {
+		while let Some(placement) = placements.try_next().await? {
 			let index = placement.position as usize;
 			colors[index] = placement.color as u8;
 			

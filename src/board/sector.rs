@@ -1,6 +1,6 @@
 use bytes::BytesMut;
 use num_enum::TryFromPrimitive;
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 
 mod cache;
 mod access;
@@ -51,7 +51,7 @@ pub struct Sector {
 }
 
 impl Sector {
-	pub async fn new<C: ConnectionTrait + TransactionTrait>(
+	pub async fn new<C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		board_id: i32,
 		index: i32,
 		size: usize,
@@ -65,7 +65,7 @@ impl Sector {
 		connection.create_sector(board_id, index, mask, initial).await
 	}
 
-	pub async fn load<C: ConnectionTrait + TransactionTrait>(
+	pub async fn load<C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		board_id: i32,
 		sector_index: i32,
 		connection: &BoardsConnectionGeneric<C>,
@@ -73,7 +73,7 @@ impl Sector {
 		connection.get_sector(board_id, sector_index).await
 	}
 
-	pub async fn save<C: ConnectionTrait + TransactionTrait>(
+	pub async fn save<C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		&self,
 		buffer: SectorBuffer,
 		connection: &BoardsConnectionGeneric<C>,

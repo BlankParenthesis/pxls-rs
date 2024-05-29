@@ -1,4 +1,4 @@
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 use tokio::sync::*;
 use crate::{
 	database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabaseError},
@@ -41,7 +41,7 @@ impl SectorCache {
 		self.sector_size() * self.total_sectors()
 	}
 
-	async fn cache_sector<C: ConnectionTrait + TransactionTrait>(
+	async fn cache_sector<C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		&self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
@@ -110,7 +110,7 @@ impl SectorCache {
 		}
 	}
 
-	pub async fn get_sector_mut<C: ConnectionTrait + TransactionTrait>(
+	pub async fn get_sector_mut<C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		&self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
