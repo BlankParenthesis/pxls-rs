@@ -176,7 +176,8 @@ impl<'a, const SIZE: usize> Iterator for PlacementCacheIterator<'a, SIZE> {
 	type Item = &'a CachedPlacement;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		if self.size_hint().0 > 0 {
+		let (remaining, _) = self.size_hint();
+		if remaining > 0 {
 			self.offset += 1;
 			let index = (self.placements.position - self.offset) % SIZE;
 			Some(&self.placements.ring_buffer[index])
@@ -836,6 +837,7 @@ impl Board {
 			},
 		};
 		drop(cache);
+		placements.reverse();
 
 		if placements.len() < max_pixels {
 			// if we don't have all the user's placements in the buffer,
