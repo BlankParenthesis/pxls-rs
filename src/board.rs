@@ -626,7 +626,7 @@ impl Board {
 		color: u8,
 		overrides: Overrides,
 		connection: &BoardsConnection,
-	) -> Result<Placement, PlaceError> {
+	) -> Result<(CooldownInfo, Placement), PlaceError> {
 		// TODO: I hate most things about how this is written.
 		// Redo it and/or move stuff.
 
@@ -643,7 +643,6 @@ impl Board {
 
 		let mut sectors = HashMap::from([(sector_index, sector)]);
 		let sector = sectors.get_mut(&sector_index).unwrap();
-		
 		if !overrides.mask {
 			match MaskValue::try_from(sector.mask[sector_offset]).ok() {
 				Some(MaskValue::Place) => Ok(()),
@@ -674,7 +673,6 @@ impl Board {
 				return Err(PlaceError::Cooldown);
 			}
 		}
-
 		// FIXME: the sector write guard prevents double writes to this sector,
 		// but not across multiple sectors, so a user could place twice at once
 		// in two different sectors.
@@ -719,11 +717,11 @@ impl Board {
 			user_id,
 			connection,
 			&sectors,
-		).await.map_err(PlaceError::DatabaseError)?;
+		).await.map_err(PlaceError::DatabaseError)?; // TODO: maybe cooldown err instead
 
-		self.connections.set_user_cooldown(user_id, cooldown_info).await;
+		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
-		Ok(new_placement)
+		Ok((cooldown_info, new_placement))
 	}
 
 	pub async fn list_placements(

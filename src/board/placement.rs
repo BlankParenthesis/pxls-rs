@@ -41,7 +41,7 @@ pub struct Placement {
 	#[serde(skip_serializing)]
 	pub id: i64,
 	#[serde(skip_serializing)]
-	pub user_id: i32, // TODO: serialize as a reference properly
+	pub user_id: i32,
 	pub position: u64,
 	pub color: u8,
 	pub timestamp: u32,

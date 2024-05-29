@@ -138,7 +138,7 @@ pub fn post(
 			).await;
 
 			match place_attempt {
-				Ok(placement) => {
+				Ok((cooldown, placement)) => {
 					let mut response = warp::reply::with_status(
 						warp::reply::json(&placement).into_response(),
 						StatusCode::CREATED,
@@ -152,29 +152,9 @@ pub fn post(
 						).into_response();
 					}
 
-					let cooldown_info = board.user_cooldown_info(
-						&user.id,
-						&connection,
-						&std::collections::HashMap::new(),
-					).await;
-
-					#[allow(clippy::single_match)]
-					match cooldown_info {
-						Ok(cooldown_info) => {
-							for (key, value) in cooldown_info.into_headers() {
-								response = warp::reply::with_header(response, key, value)
-									.into_response();
-							}
-						},
-						Err(err) => {
-							// TODO: not sure about this.
-							// The resource *was* created, *but* the cooldown is not available.
-							// I feel like sending the CREATED status is more important,
-							// but other places currently return INTERNAL_SERVER_ERROR.
-
-							//response = StatusCode::INTERNAL_SERVER_ERROR
-							//	.into_response();
-						},
+					for (key, value) in cooldown.into_headers() {
+						response = warp::reply::with_header(response, key, value)
+							.into_response();
 					}
 
 					response
