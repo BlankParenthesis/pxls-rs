@@ -547,7 +547,34 @@ impl Board {
 				.put_u32_le(timestamp);
 		}
 
-		// FIXME: send the placements events and cooldown info
+		let mut colors = vec![];
+		let mut timestamps = vec![];
+
+		for (position, color) in placements {
+			colors.push(socket::Change {
+				position: *position,
+				values: vec![*color],
+			});
+
+			timestamps.push(socket::Change {
+				position: *position,
+				values: vec![timestamp],
+			});
+		}
+
+		let data = socket::BoardData::builder()
+			.colors(colors)
+			.timestamps(timestamps);
+
+		self.connections.queue_board_change(data).await;
+
+		let cooldown_info = self.user_cooldown_info(
+			user_id,
+			connection,
+			&sectors,
+		).await.map_err(PlaceError::DatabaseError)?; // TODO: maybe cooldown err instead
+
+		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		Ok((changes, timestamp))
 	}
