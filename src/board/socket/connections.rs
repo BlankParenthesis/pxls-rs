@@ -7,7 +7,7 @@ use std::{
 
 use enum_map::EnumMap;
 use enumset::EnumSet;
-use tokio::{time::Instant, sync::RwLock};
+use tokio::{time::Instant, sync::{RwLock, mpsc}};
 use tokio_util::sync::CancellationToken;
 
 use crate::board::cooldown::CooldownInfo;
@@ -160,14 +160,55 @@ impl UserConnections {
 	}
 }
 
-#[derive(Default)]
 pub struct Connections {
 	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
 	by_subscription: EnumMap<BoardSubscription, HashSet<Arc<Socket>>>,
-	by_board_update: HashMap<EnumSet<DataType>, HashSet<Arc<Socket>>>,
+	by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, HashSet<Arc<Socket>>>>>,
+	update_sender: mpsc::Sender<BoardUpdateBuilder>,
+	// TODO: thread_join handle
+}
+
+impl Default for Connections {
+	fn default() -> Self {
+		let (update_sender, update_receiver) = mpsc::channel(10000);
+
+		let by_board_update = Arc::default();
+		tokio::spawn(Self::thread(Arc::clone(&by_board_update), update_receiver));
+
+		Self {
+			by_uid: HashMap::new(),
+			by_subscription: EnumMap::default(),
+			by_board_update,
+			update_sender,
+		}
+	}
 }
 
 impl Connections {
+	async fn thread(
+		by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, HashSet<Arc<Socket>>>>>,
+		mut receiver: mpsc::Receiver<BoardUpdateBuilder>,
+	) {
+		let mut buffer = vec![];
+		while receiver.recv_many(&mut buffer, 10000).await > 0 {
+			let mut data = BoardUpdateBuilder::default();
+
+			for changes in buffer.drain(..) {
+				data.merge(changes);
+			}
+
+			let sockets = by_board_update.read().await;
+
+			for (combination, packet) in data.build_combinations() {
+				if let Some(sockets) = sockets.get(&combination) {
+					for connection in sockets {
+						connection.send(&packet).await;
+					}
+				}
+			}
+		}
+	}
+
 	pub async fn insert(
 		&mut self,
 		socket: &Arc<Socket>,
@@ -197,7 +238,8 @@ impl Connections {
 			.filter_map(Option::<DataType>::from)
 			.collect();
 		
-		self.by_board_update.entry(combination)
+		let mut board = self.by_board_update.write().await;
+		board.entry(combination)
 			.or_default()
 			.insert(Arc::clone(socket));
 	}
@@ -225,7 +267,8 @@ impl Connections {
 			.filter_map(Option::<DataType>::from)
 			.collect();
 		
-		self.by_board_update.entry(combination)
+		let mut board = self.by_board_update.write().await;
+		board.entry(combination)
 			.or_default()
 			.remove(socket);
 	}
@@ -240,17 +283,8 @@ impl Connections {
 		}
 	}
 
-	pub async fn send_board_update(
-		&self,
-		data: BoardUpdateBuilder,
-	) {
-		for (combination, packet) in data.build_combinations() {
-			if let Some(sockets) = self.by_board_update.get(&combination) {
-				for connection in sockets {
-					connection.send(&packet).await;
-				}
-			}
-		}
+	pub async fn queue_board_change(&self, data: BoardUpdateBuilder) {
+		self.update_sender.send(data).await.expect("place event thread died");
 	}
 
 	pub async fn send_to_user<'l>(

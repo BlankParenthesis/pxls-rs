@@ -37,7 +37,7 @@ impl Reject for BearerError {}
 pub fn bearer() -> impl Filter<Extract = (Option<Bearer>,), Error = Rejection> + Copy {
 	warp::any()
 		.and(warp::header::<String>(header::AUTHORIZATION.as_str()).map(Some))
-		.recover(|_| -> future::Ready<Result<_, Rejection>> { future::ok(None) })
+		.recover(|_| future::ok::<_, Rejection>(None))
 		.unify()
 		.and_then(|header_value: Option<String>| async move {
 			if let Some(header_value) = header_value {

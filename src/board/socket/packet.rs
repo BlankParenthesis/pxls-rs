@@ -114,6 +114,48 @@ impl BoardUpdateBuilder {
 		self
 	}
 
+	pub fn merge(&mut self, other: Self) {
+		if let Some(mut o) = other.colors {
+			if let Some(ref mut s) = self.colors {
+				s.append(&mut o);
+			} else {
+				self.colors = Some(o);
+			}
+		}
+
+		if let Some(mut o) = other.timestamps {
+			if let Some(ref mut s) = self.timestamps {
+				s.append(&mut o);
+			} else {
+				self.timestamps = Some(o);
+			}
+		}
+
+		if let Some(mut o) = other.initial {
+			if let Some(ref mut s) = self.initial {
+				s.append(&mut o);
+			} else {
+				self.initial = Some(o);
+			}
+		}
+
+		if let Some(mut o) = other.mask {
+			if let Some(ref mut s) = self.mask {
+				s.append(&mut o);
+			} else {
+				self.mask = Some(o);
+			}
+		}
+
+		if let Some(o) = other.info {
+			if let Some(ref s) = self.info {
+				todo!("double info") // this should be detected and prevented
+			} else {
+				self.info = Some(o);
+			}
+		}
+	}
+
 	pub fn build_combinations<'l>(self) -> HashMap<EnumSet<DataType>, Packet<'l>> {
 		let mut combinations = HashMap::new();
 

@@ -220,6 +220,14 @@ pub struct Board {
 	connections: Connections,
 	sectors: SectorCache,
 	placement_cache: RwLock<Option<PlacementCache<PLACEMENT_CACHE_SIZE>>>,
+	// TODO: cache user stats
+	// this will allow us to determine if a user is new and avoid costly scans
+	// of the entire cache.
+	// Possibly instead store how many placements we have in the cache so scans
+	// can also be avoided for infrequent users:
+	// start with
+	// select user_id, count(*) from (select user_id from placement where board = ? limit ?) group by user_id;
+	// then sub 1 from old pixel and add 1 from new pixel every insert
 }
 
 impl From<&Board> for Uri {
@@ -322,7 +330,7 @@ impl Board {
 			_ => panic!("cannot patch colors/timestamps")
 		}
 		
-		self.connections.send_board_update(packet).await;
+		self.connections.queue_board_change(packet).await;
 
 		Ok(())
 	}
@@ -539,6 +547,8 @@ impl Board {
 				.put_u32_le(timestamp);
 		}
 
+		// FIXME: send the placements events and cooldown info
+
 		Ok((changes, timestamp))
 	}
 
@@ -605,7 +615,7 @@ impl Board {
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
-		self.connections.send_board_update(data).await;
+		self.connections.queue_board_change(data).await;
 
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
@@ -711,7 +721,7 @@ impl Board {
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
-		self.connections.send_board_update(data).await;
+		self.connections.queue_board_change(data).await;
 
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
@@ -938,6 +948,7 @@ impl Board {
 		let cache_age = cache.iter().last().unwrap().timestamp as i32;
 		if min_time > cache_age {
 			let user_count = cache.iter()
+				// TODO: binary search
 				.skip_while(|p| p.timestamp > max_time as u32)
 				.take_while(|p| p.timestamp >= min_time as u32)
 				.map(|p| p.user_id)
