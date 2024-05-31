@@ -38,7 +38,6 @@ struct Discovery {
 }
 
 impl Discovery {
-	// TODO: cache
 	pub async fn load(
 		discovery_url: Url,
 		client: &Client,
@@ -58,7 +57,6 @@ impl Discovery {
 		}
 	}
 
-	// TODO: cache
 	pub async fn jwks_keys(
 		&self,
 		client: &Client,

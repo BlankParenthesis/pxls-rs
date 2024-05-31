@@ -21,7 +21,7 @@ use connection::Pool;
 use reqwest::StatusCode;
 use serde::de::{Deserialize, Visitor};
 use tokio::sync::RwLock;
-use url::Url;
+use url::{Url, form_urlencoded::byte_serialize};
 use warp::{reject::Reject, reply::Reply};
 
 use crate::config::CONFIG;
@@ -286,9 +286,10 @@ impl UsersConnection {
 					limit, page
 				);
 
-				// FIXME: urlencode
 				if let Some(name) = filter.name {
-					uri.push_str(&format!("&name={}", name))
+					if let Some(name) = byte_serialize(name.as_bytes()).next() {
+						uri.push_str(&format!("&name={}", name))
+					}
 				}
 				
 				if !filter.created_at.is_open() {
@@ -471,9 +472,10 @@ impl UsersConnection {
 				id, limit, page
 			);
 
-			// FIXME: urlencode
 			if let Some(name) = filter.name {
-				uri.push_str(&format!("&name={}", name))
+				if let Some(name) = byte_serialize(name.as_bytes()).next() {
+					uri.push_str(&format!("&name={}", name))
+				}
 			}
 			if let Some(icon) = filter.icon {
 				uri.push_str(&format!("&icon={}", icon))
@@ -544,12 +546,15 @@ impl UsersConnection {
 				limit, page
 			);
 
-			// FIXME: urlencode
 			if let Some(name) = filter.name {
-				uri.push_str(&format!("&name={}", name))
+				if let Some(name) = byte_serialize(name.as_bytes()).next() {
+					uri.push_str(&format!("&name={}", name))
+				}
 			}
 			if let Some(icon) = filter.icon {
-				uri.push_str(&format!("&icon={}", icon))
+				if let Some(icon) = byte_serialize(icon.as_bytes()).next() {
+					uri.push_str(&format!("&icon={}", icon))
+				}
 			}
 
 			Some(uri.parse().unwrap())
@@ -941,9 +946,10 @@ impl UsersConnection {
 				limit, page
 			);
 
-			// FIXME: urlencode
 			if let Some(name) = filter.name {
-				uri.push_str(&format!("&name={}", name))
+				if let Some(name) = byte_serialize(name.as_bytes()).next() {
+					uri.push_str(&format!("&name={}", name))
+				}
 			}
 			if !filter.created_at.is_open() {
 				uri.push_str(&format!("&created_at={}", filter.created_at))
@@ -1148,7 +1154,6 @@ impl UsersConnection {
 				fid, limit, page
 			);
 
-			// FIXME: urlencode
 			if let Some(owner) = filter.owner {
 				uri.push_str(&format!("&owner={}", owner))
 			}

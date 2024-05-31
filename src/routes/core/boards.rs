@@ -6,6 +6,7 @@ use tokio::sync::RwLockReadGuard;
 use ouroboros::self_referencing;
 use reqwest::StatusCode;
 use serde::Deserialize;
+use url::form_urlencoded::byte_serialize;
 use warp::http::Uri;
 use warp::hyper::Response;
 use warp::ws::Ws;
@@ -119,9 +120,10 @@ pub fn list(
 						page, limit
 					);
 
-					// FIXME: urlencode
 					if let Some(ref name) = filter.name {
-						uri.push_str(&format!("&name={}", name));
+						if let Some(name) = byte_serialize(name.as_bytes()).next() {
+							uri.push_str(&format!("&name={}", name));
+						}
 					}
 					
 					if !filter.created_at.is_open() {

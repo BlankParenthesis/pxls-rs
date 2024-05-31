@@ -25,6 +25,7 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
+use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
 
 use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}, board::CachedPlacement};
@@ -454,12 +455,13 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 					board_id, token, limit,
 				);
 
-				// FIXME: urlencode
 				if !filter.color.is_open() {
 					uri.push_str(&format!("&color={}", filter.color))
 				}
 				if let Some(user) = filter.user {
-					uri.push_str(&format!("&user={}", user))
+					if let Some(user) = byte_serialize(user.as_bytes()).next() {
+						uri.push_str(&format!("&user={}", user))
+					}
 				}
 				if !filter.position.is_open() {
 					uri.push_str(&format!("&position={}", filter.position))
