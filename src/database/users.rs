@@ -20,6 +20,7 @@ use connection::LDAPConnectionManager;
 use connection::Pool;
 use reqwest::StatusCode;
 use serde::de::{Deserialize, Visitor};
+use tokio::sync::RwLock;
 use url::Url;
 use warp::{reject::Reject, reply::Reply};
 
@@ -189,8 +190,7 @@ impl super::Database for UsersDatabase {
 	}
 
 	async fn connection(&self) -> Result<Self::Connection, Self::Error> {
-		self.pool.get().await
-			.map(|connection| UsersConnection { connection, cache: HashMap::new() })
+		self.pool.get().await.map(|connection| UsersConnection { connection })
 	}
 }
 
@@ -204,14 +204,17 @@ fn user_dn(id: &str) -> String {
 	)
 }
 
-
-struct UserCache {
-	user: Option<User>,
+lazy_static! {
+	static ref USER_CACHE: RwLock<HashMap<String, User>> = {
+		RwLock::new(HashMap::new())
+	};
+	static ref PERMISSIONS_CACHE: RwLock<HashMap<String, EnumSet<Permission>>> = {
+		RwLock::new(HashMap::new())
+	};
 }
 
 pub struct UsersConnection {
 	connection: LdapConnection,
-	cache: HashMap<String, UserCache>,
 }
 
 impl UsersConnection {
@@ -302,6 +305,13 @@ impl UsersConnection {
 		&mut self,
 		id: &str,
 	) -> Result<User, UsersDatabaseError> {
+		let id_string = id.to_string();
+		let cache = USER_CACHE.read().await;
+		if let Some(cached) = cache.get(&id_string) {
+			return Ok(cached.clone())
+		}
+		drop(cache);
+
 		let filter = format!("({}={})", CONFIG.ldap_users_id_field, ldap_escape(id));
 		let (results, _) = self.connection
 			.search(
@@ -322,10 +332,14 @@ impl UsersConnection {
 					.map(SearchEntry::construct)
 					.unwrap();
 
-				User::try_from(result)
+				let user = User::try_from(result)
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
-					.map_err(UsersDatabaseError::from)
+					.map_err(UsersDatabaseError::from)?;
+
+				let mut cache = USER_CACHE.write().await;
+				cache.insert(id_string, user.clone());
+				Ok(user)
 			},
 			_ => Err(FetchError::AmbiguousItems.into()),
 		}
@@ -342,13 +356,22 @@ impl UsersConnection {
 			]).await
 			.map_err(UpdateError::LdapError)?;
 
-		match result.rc {
+		let response = match result.rc {
 			0 => Ok(()),
 			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from)
+		};
+
+		match response {
+			Ok(()) => {
+				let mut cache = USER_CACHE.write().await;
+				cache.remove(&id.to_string());
+				Ok(())
+			},
+			Err(e) => Err(e),
 		}
 	}
 
@@ -360,13 +383,22 @@ impl UsersConnection {
 			.delete(&user_dn(id)).await
 			.map_err(DeleteError::LdapError)?;
 
-		match result.rc {
+		let response = match result.rc {
 			0 => Ok(()),
 			32 => Err(DeleteError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(DeleteError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+
+		match response {
+			Ok(()) => {
+				let mut cache = USER_CACHE.write().await;
+				cache.remove(&id.to_string());
+				Ok(())
+			},
+			Err(e) => Err(e),
 		}
 	}
 
@@ -671,13 +703,22 @@ impl UsersConnection {
 			.modify(&role_dn, modifications).await
 			.map_err(UpdateError::LdapError)?;
 
-		match result.rc {
+		let response = match result.rc {
 			0 => Ok(()),
 			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+
+		match response {
+			Ok(()) => {
+				let mut cache = PERMISSIONS_CACHE.write().await;
+				cache.clear();
+				Ok(())
+			},
+			Err(e) => Err(e),
 		}
 	}
 
@@ -696,13 +737,22 @@ impl UsersConnection {
 			.delete(&role_dn).await
 			.map_err(DeleteError::LdapError)?;
 
-		match result.rc {
+		let response = match result.rc {
 			0 => Ok(()),
 			32 => Err(DeleteError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(DeleteError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+
+		match response {
+			Ok(()) => {
+				let mut cache = PERMISSIONS_CACHE.write().await;
+				cache.clear();
+				Ok(())
+			},
+			Err(e) => Err(e),
 		}
 	}
 
@@ -710,6 +760,13 @@ impl UsersConnection {
 		&mut self,
 		id: &str,
 	) -> Result<EnumSet<Permission>, UsersDatabaseError> {
+		let id_string = id.to_string();
+		let cache = PERMISSIONS_CACHE.read().await;
+		if let Some(cached) = cache.get(&id_string) {
+			return Ok(*cached);
+		}
+		drop(cache);
+
 		let filter = format!("(member={})", user_dn(id));
 		let (results, _) = self.connection
 			.search(
@@ -732,7 +789,12 @@ impl UsersConnection {
 				.filter_map(|v| Permission::try_from(v.as_str()).ok())
 		}).collect::<EnumSet<Permission>>();
 
-		Ok(Permission::defaults() | permissions | Permission::BoardsPixelsPost)
+		let permissions = Permission::defaults() | permissions | Permission::BoardsPixelsPost;
+
+		let mut cache = PERMISSIONS_CACHE.write().await;
+		cache.insert(id_string, permissions);
+
+		Ok(permissions)
 	}
 
 	pub async fn add_user_role(
@@ -753,13 +815,22 @@ impl UsersConnection {
 			]).await
 			.map_err(UpdateError::LdapError)?;
 
-		match result.rc {
+		let response = match result.rc {
 			0 => Ok(()),
 			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+
+		match response {
+			Ok(()) => {
+				let mut cache = PERMISSIONS_CACHE.write().await;
+				cache.remove(&uid.to_string());
+				Ok(())
+			},
+			Err(e) => Err(e),
 		}
 	}
 
@@ -781,13 +852,22 @@ impl UsersConnection {
 			]).await
 			.map_err(UpdateError::LdapError)?;
 
-		match result.rc {
+		let response = match result.rc {
 			0 => Ok(()),
 			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+
+		match response {
+			Ok(()) => {
+				let mut cache = PERMISSIONS_CACHE.write().await;
+				cache.remove(&uid.to_string());
+				Ok(())
+			},
+			Err(e) => Err(e),
 		}
 	}
 

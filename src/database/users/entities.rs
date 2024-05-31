@@ -127,7 +127,7 @@ pub enum UserParseError {
 	BadTimestamp(TimestampParseError),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct User {
 	#[serde(skip_serializing)]
 	pub id: String,
