@@ -8,7 +8,7 @@ Important missing features:
 - ~~Websocket authorization isn't compatible with the browser API specification.~~
 - ~~No cooldown notifications.~~
 - ~~No permissions management.~~
-- Several important extensions are not yet implemented.
+- ~~Several important extensions are not yet implemented.~~
   
   A full list of which extensions are implemented:
 	- [X] [authentication](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/authentication.md)
@@ -21,7 +21,7 @@ Important missing features:
 	- [X] [board_undo](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_undo.md)
 	- [ ] [cooldown_info](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/cooldown_info.md)
 	- [X] [factions](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/factions.md)
-	- [ ] [list_filtering](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/list_filtering.md)
+	- [X] [list_filtering](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/list_filtering.md)
 	- [ ] [placement_statistics](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/placement_statistics.md)
 	- [ ] [reports](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/reports.md)
 	- [X] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/roles.md)
@@ -32,10 +32,7 @@ Important missing features:
 
 
 Notable other issues:
-- ~~Startup could be way too slow currently (boards are reconstructed from database placements).~~
-  *Reconstruction cost can be mitigated with board sectors/chunking.*
 - Some things require cleanup.
-- There's probably a bunch of internal caching to do.
 - There's probably a bunch of external HTTP caching info that should be revealed.
 - Basically anything that's a TODO needs work.
 
@@ -45,8 +42,10 @@ It's not all bad, here are some of the things that are currently better than the
 - Board lifecycle management through API rather than restarts.
 - Openid support.
 - Partially transparent palette values.
+- Significant speed improvements and lower overall resource footprint
 
 And from a more development perspective:
 - Database migrations and a leaner database structure.
-- Smaller server scope (no need to worry about serving client files).
+- ~~Smaller server scope (no need to worry about serving client files).~~
+  *Pxls now shares this benefit.*
 - A more sane and consistent API.
