@@ -1215,6 +1215,9 @@ impl UsersConnection {
 		uid: &str,
 		owner: bool,
 	) -> Result<FactionMember, UsersDatabaseError> {
+		// verify that user exists (because ldap doesn't do that I guess)
+		self.get_user(uid).await?;
+
 		let faction_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(fid),
@@ -1236,8 +1239,6 @@ impl UsersConnection {
 
 		let member = FactionMember::new(fid.to_string(), uid.to_string(), owner);
 
-
-		// TODO: if user doesn't exist, this might internal server error
 		match result.rc {
 			0 => Ok(member),
 			20 => Err(CreateError::AlreadyExists.into()),
@@ -1255,6 +1256,9 @@ impl UsersConnection {
 		uid: &str,
 		owner: bool,
 	) -> Result<FactionMember, UsersDatabaseError> {
+		// verify that user exists (because ldap doesn't do that I guess)
+		self.get_user(uid).await?;
+
 		let faction_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(fid),
@@ -1277,7 +1281,6 @@ impl UsersConnection {
 
 		let member = FactionMember::new(fid.to_string(), uid.to_string(), owner);
 
-		// TODO: if user doesn't exist, this might internal server error
 		match result.rc {
 			0 => Ok(member),
 			20 => Ok(member), // TODO: this might not be correct
@@ -1288,7 +1291,6 @@ impl UsersConnection {
 				.map_err(UsersDatabaseError::from),
 		}
 	}
-
 
 	pub async fn remove_faction_member(
 		&mut self,
@@ -1303,14 +1305,31 @@ impl UsersConnection {
 		);
 
 		let user_dn = user_dn(uid);
+
+		let owner_attribute = vec![
+			Mod::Delete("pxlsspaceFactionOwner", HashSet::from([user_dn.as_str()]))
+		];
+		let result = self.connection
+			.modify(faction_dn.as_str(), owner_attribute).await
+			.map_err(UpdateError::LdapError)?;
+
+		// try deleting owner first so that we don't error if the're no owner
+		match result.rc {
+			0 => Ok(()),
+			16 => Ok(()), // no such attribute (no owner)
+			32 => Err(UpdateError::NoItem.into()),
+			_ => result.success()
+				.map(|_| ())
+				.map_err(UpdateError::LdapError)
+				.map_err(UsersDatabaseError::from)
+		}?;
 		
-		let attributes = vec![
+		let member_attribute = vec![
 			Mod::Delete("member", HashSet::from([user_dn.as_str()])),
-			Mod::Delete("pxlsspaceFactionOwner", HashSet::from([user_dn.as_str()])),
 		];
 
 		let result = self.connection
-			.modify(faction_dn.as_str(), attributes).await
+			.modify(faction_dn.as_str(), member_attribute).await
 			.map_err(UpdateError::LdapError)?;
 
 		match result.rc {
