@@ -28,7 +28,12 @@ use tokio_stream::StreamExt;
 use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, filter::response::paginated_list::Page, routes::{site_notices::notices::{Notice, NoticeFilter}, board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter}, core::boards::pixels::PlacementFilter}, board::CachedPlacement};
+use crate::{config::CONFIG, board::LastPlacement};
+use crate::filter::response::{paginated_list::Page, reference::Reference};
+use crate::routes::site_notices::notices::{Notice, NoticeFilter};
+use crate::routes::board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter};
+use crate::routes::core::boards::pixels::PlacementFilter;
+use crate::board::CachedPlacement;
 use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
 use crate::routes::site_notices::notices::NoticePageToken;
 
@@ -37,11 +42,12 @@ mod entities;
 use entities::*;
 use migration::Migrator;
 
-use super::Order;
+use super::{Order, UsersConnection, UsersDatabaseError, users::FetchError, User};
 
 #[derive(Debug)]
 pub enum BoardsDatabaseError {
 	DbErr(sea_orm::DbErr),
+	UsersError(UsersDatabaseError),
 }
 
 impl From<sea_orm::DbErr> for BoardsDatabaseError {
@@ -56,6 +62,7 @@ impl From<&BoardsDatabaseError> for StatusCode {
 			BoardsDatabaseError::DbErr(err) => {
 				StatusCode::INTERNAL_SERVER_ERROR
 			}
+			BoardsDatabaseError::UsersError(e) => e.into(),
 		}
 	}
 }
@@ -405,6 +412,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		limit: usize,
 		order: Order,
 		filter: PlacementFilter,
+		users_connection: &mut UsersConnection,
 	) -> DbResult<Page<Placement>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(placement::Column::Timestamp).into(),
@@ -476,13 +484,15 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		let mut items = Vec::with_capacity(limit);
 
 		for placement in placements.into_iter().take(limit) {
+			let user_id = USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?;
+			// TODO: fetch in bulk
+			let user = users_connection.get_user(&user_id).await
+				.map_err(BoardsDatabaseError::UsersError)?;
 			items.push(Placement {
-				id: placement.id,
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
-				user_id: placement.user_id,
-				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
+				user: Reference::new(User::uri(&user_id), user.clone()),
 			})
 		}
 
@@ -493,6 +503,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		&self,
 		board_id: i32,
 		position: u64,
+		users_connection: &mut UsersConnection,
 	) -> DbResult<Option<Placement>> {
 		let placement = placement::Entity::find()
 			.filter(
@@ -504,13 +515,14 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.one(&self.connection).await?;
 		
 		if let Some(placement) = placement {
+			let user_id = USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?;
+			let user = users_connection.get_user(&user_id).await
+				.map_err(BoardsDatabaseError::UsersError)?;
 			Ok(Some(Placement {
-				id: placement.id,
 				position: placement.position as u64,
 				color: placement.color as u8,
 				timestamp: placement.timestamp as u32,
-				user_id: placement.user_id,
-				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
+				user: Reference::new(User::uri(&user_id), user.clone()),
 			}))
 		} else {
 			Ok(None)
@@ -521,7 +533,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		&self,
 		board_id: i32,
 		position: u64,
-	) -> DbResult<(Option<Placement>, Option<Placement>)> {
+	) -> DbResult<(Option<LastPlacement>, Option<LastPlacement>)> {
 		let placements = placement::Entity::find()
 			.filter(
 				placement::Column::Board.eq(board_id)
@@ -534,14 +546,13 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 
 		let mut pair = Vec::with_capacity(2);
 		for placement in placements {
-			pair.push(Placement {
+			let placement = LastPlacement {
 				id: placement.id,
-				position: placement.position as u64,
-				color: placement.color as u8,
-				timestamp: placement.timestamp as u32,
+				timestamp: placement.timestamp as _,
+				color: placement.color as _,
 				user_id: placement.user_id,
-				user: USER_ID_CACHE.get_uid(placement.user_id, &self.connection).await?,
-			})
+			};
+			pair.push(placement)
 		}
 		let mut pair = pair.into_iter();
 		Ok((pair.next(), pair.next()))
@@ -559,8 +570,13 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		position: u64,
 		color: u8,
 		timestamp: u32,
-		user_id: String,
+		user_id: &str,
+		users_connection: &mut UsersConnection,
 	) -> DbResult<Placement> {
+		let uid = USER_ID_CACHE.get_id(user_id.to_string(), &self.connection).await?;
+		let user = users_connection.get_user(user_id).await
+			.map_err(BoardsDatabaseError::UsersError)?;
+
 		placement::Entity::insert(
 			placement::ActiveModel {
 				id: NotSet,
@@ -568,18 +584,17 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				position: Set(position as i64),
 				color: Set(color as i16),
 				timestamp: Set(timestamp as i32),
-				user_id: Set(USER_ID_CACHE.get_id(user_id.clone(), &self.connection).await?),
+				user_id: Set(uid),
 			}
 		)
 		// TODO: try just returning the known data to skip the return for speed
+		// same goes for others
 		.exec_with_returning(&self.connection).await
 		.map(|placement| Placement {
-			id: placement.id,
 			position: placement.position as u64,
 			color: placement.color as u8,
 			timestamp: placement.timestamp as u32,
-			user_id: placement.user_id,
-			user: user_id,
+			user: Reference::new(User::uri(user_id), user.clone()),
 		})
 		.map_err(BoardsDatabaseError::from)
 	}
@@ -589,10 +604,9 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		board_id: i32,
 		placements: &[(u64, u8)],
 		timestamp: u32,
-		user_id: String,
-	) -> DbResult<Placement> {
-		let uid = USER_ID_CACHE.get_id(user_id.clone(), &self.connection).await?;
-
+		user_id: &str,
+	) -> DbResult<()> {
+		let uid = USER_ID_CACHE.get_id(user_id.to_string(), &self.connection).await?;
 		placement::Entity::insert_many(
 			placements.iter().map(|(position, color)| {
 				placement::ActiveModel {
@@ -601,22 +615,12 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 					position: Set(*position as i64),
 					color: Set(*color as i16),
 					timestamp: Set(timestamp as i32),
-					// TODO: this makes it clear that storing the user id as a
-					// field is a *terrible* idea and it should be moved to it's
-					// own table.
 					user_id: Set(uid),
 				}
 			})
 		)
-		.exec_with_returning(&self.connection).await
-		.map(|placement| Placement {
-			id: placement.id,
-			position: placement.position as u64,
-			color: placement.color as u8,
-			timestamp: placement.timestamp as u32,
-			user_id: placement.user_id,
-			user: user_id.clone(),
-		})
+		.exec(&self.connection).await
+		.map(|_| ())
 		.map_err(BoardsDatabaseError::from)
 	}
 
@@ -644,7 +648,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		board_id: i32,
 		user_id: &str,
 		limit: usize,
-	) -> DbResult<Vec<Placement>> {
+	) -> DbResult<Vec<CachedPlacement>> {
 		let uid = USER_ID_CACHE.get_id(user_id.to_owned(), &self.connection).await?;
 		let placements = placement::Entity::find()
 			.filter(
@@ -656,13 +660,10 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.limit(Some(limit as u64))
 			.all(&self.connection).await?;
 
-		Ok(placements.into_iter().rev().map(|placement| Placement {
-			id: placement.id,
-			position: placement.position as u64,
-			color: placement.color as u8,
-			timestamp: placement.timestamp as u32,
-			user_id: placement.user_id,
-			user: user_id.to_owned(),
+		Ok(placements.into_iter().rev().map(|placement| CachedPlacement {
+			position: placement.position as _,
+			timestamp: placement.timestamp as _,
+			user_id: uid,
 		}).collect())
 	}
 
@@ -814,7 +815,8 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		token: NoticePageToken,
 		limit: usize,
 		filter: NoticeFilter,
-	) -> DbResult<Page<Notice>> {
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Page<Reference<Notice>>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(notice::Column::CreatedAt).into(),
 			Expr::col(notice::Column::Id).into(),
@@ -853,29 +855,32 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 
 		let notices = notices.into_iter()
 			.take(limit)
-			.map(|notice| Notice {
-				id: notice.id as usize,
+			.map(|notice| (notice.id, Notice {
 				title: notice.title,
 				content: notice.content,
 				created_at: notice.created_at as _,
 				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			})
+				author: None, // TODO
+			}))
+			.map(|(id, notice)| Reference::new(Notice::uri(id), notice))
 			.collect();
 		
 		Ok(Page { items: notices, next, previous: None })
 	}
 
-	pub async fn get_notice(&self, id: usize) -> DbResult<Option<Notice>> {
+	pub async fn get_notice(
+		&self,
+		id: usize,
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Option<Notice>> {
 		notice::Entity::find_by_id(id as i32)
 			.one(&self.connection).await
 			.map(|n| n.map(|notice| Notice {
-				id: notice.id as usize,
 				title: notice.title,
 				content: notice.content,
 				created_at: notice.created_at as _,
 				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
+				author: None, // TODO
 			}))
 			.map_err(BoardsDatabaseError::from)
 	}
@@ -885,30 +890,31 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		title: String,
 		content: String,
 		expiry: Option<u64>,
-	) -> DbResult<Notice> {
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Reference<Notice>> {
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap()
 			.as_secs();
 
 		notice::Entity::insert(notice::ActiveModel {
-				id: NotSet,
-				title: Set(title),
-				content: Set(content),
-				created_at: Set(now as _),
-				expires_at: Set(expiry.map(|v| v as _)),
-				author: NotSet, // TODO: set this
-			})
-			.exec_with_returning(&self.connection).await
-			.map(|notice| Notice {
-				id: notice.id as usize,
-				title: notice.title,
-				content: notice.content,
-				created_at: notice.created_at as _,
-				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			})
-			.map_err(BoardsDatabaseError::from)
+			id: NotSet,
+			title: Set(title),
+			content: Set(content),
+			created_at: Set(now as _),
+			expires_at: Set(expiry.map(|v| v as _)),
+			author: NotSet, // TODO: set this
+		})
+		.exec_with_returning(&self.connection).await
+		.map(|notice| (notice.id, Notice {
+			title: notice.title,
+			content: notice.content,
+			created_at: notice.created_at as _,
+			expires_at: notice.expires_at.map(|v| v as _),
+			author: None, // TODO
+		}))
+		.map(|(id, notice)| Reference::new(Notice::uri(id), notice))
+		.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn edit_notice(
@@ -917,7 +923,8 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		title: Option<String>,
 		content: Option<String>,
 		expiry: Option<Option<u64>>,
-	) -> DbResult<Notice> {
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Reference<Notice>> {
 		notice::Entity::update(notice::ActiveModel {
 				id: Set(id as _),
 				title: title.map(Set).unwrap_or(NotSet),
@@ -927,14 +934,14 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				author: NotSet, // TODO: set this
 			})
 			.exec(&self.connection).await
-			.map(|notice| Notice {
-				id: notice.id as usize,
+			.map(|notice| (notice.id, Notice {
 				title: notice.title,
 				content: notice.content,
 				created_at: notice.created_at as _,
 				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			})
+				author: None, // TODO
+			}))
+			.map(|(id, notice)| Reference::new(Notice::uri(id), notice))
 			.map_err(BoardsDatabaseError::from)
 	}
 
@@ -955,7 +962,8 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		token: BoardsNoticePageToken,
 		limit: usize,
 		filter: BoardNoticeFilter,
-	) -> DbResult<Page<BoardsNotice>> {
+		users_database: &mut UsersConnection,
+	) -> DbResult<Page<Reference<BoardsNotice>>> {
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(board_notice::Column::CreatedAt).into(),
 			Expr::col(board_notice::Column::Id).into(),
@@ -993,36 +1001,69 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				).parse().unwrap()
 			});
 
+		let author_ids = notices.iter()
+			.take(limit)
+			.filter_map(|n| n.author.as_ref())
+			.collect::<Vec<_>>();
+
+		let authors = users_database.get_users(&author_ids).await
+			.map_err(BoardsDatabaseError::UsersError)?;
+
+		if author_ids.len() != authors.len() {
+			let error = UsersDatabaseError::Fetch(FetchError::IntegrityError);
+			return Err(BoardsDatabaseError::UsersError(error));
+		}
+
 		let notices = notices.into_iter()
 			.take(limit)
-			.map(|notice| BoardsNotice {
-				board: board_id as usize,
-				id: notice.id as usize,
+			.map(|notice| (notice.id, BoardsNotice {
 				title: notice.title,
 				content: notice.content,
 				created_at: notice.created_at as _,
 				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			})
+				author: notice.author.map(|a| Reference::new(
+					User::uri(a.as_str()),
+					authors.get(&a).unwrap().clone(),
+				)),
+			}))
+			.map(|(id, notice)| Reference::new(BoardsNotice::uri(board_id, id), notice))
 			.collect();
 		
 		Ok(Page { items: notices, next, previous: None })
 	}
 
-	pub async fn get_board_notice(&self, board_id: i32, id: usize) -> DbResult<Option<BoardsNotice>> {
-		board_notice::Entity::find_by_id(id as i32)
+	pub async fn get_board_notice(
+		&self,
+		board_id: i32,
+		id: usize,
+		users_database: &mut UsersConnection,
+	) -> DbResult<Option<BoardsNotice>> {
+		let notice = board_notice::Entity::find_by_id(id as i32)
 			.filter(board_notice::Column::Board.eq(board_id))
-			.one(&self.connection).await
-			.map(|n| n.map(|notice| BoardsNotice {
-				board: board_id as usize,
-				id: notice.id as usize,
-				title: notice.title,
-				content: notice.content,
-				created_at: notice.created_at as _,
-				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			}))
-			.map_err(BoardsDatabaseError::from)
+			.one(&self.connection).await?;
+
+		let notice = match notice {
+			Some(n) => n,
+			None => return Ok(None),
+		};
+		
+		let author = if let Some(uid) = notice.author {
+			let author = users_database.get_user(uid.as_str()).await
+				.map_err(|_| FetchError::IntegrityError)
+				.map_err(UsersDatabaseError::Fetch)
+				.map_err(BoardsDatabaseError::UsersError)?;
+			Some(Reference::new(User::uri(uid.as_str()), author))
+		} else {
+			None
+		};
+		
+		Ok(Some(BoardsNotice {
+			title: notice.title,
+			content: notice.content,
+			created_at: notice.created_at as _,
+			expires_at: notice.expires_at.map(|v| v as _),
+			author,
+		}))
 	}
 
 	pub async fn create_board_notice(
@@ -1031,32 +1072,32 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		title: String,
 		content: String,
 		expiry: Option<u64>,
-	) -> DbResult<BoardsNotice> {
+		users_database: &mut UsersConnection,
+	) -> DbResult<Reference<BoardsNotice>> {
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap()
 			.as_secs();
 
-			board_notice::Entity::insert(board_notice::ActiveModel {
-				id: NotSet,
-				board: Set(board_id),
-				title: Set(title),
-				content: Set(content),
-				created_at: Set(now as _),
-				expires_at: Set(expiry.map(|v| v as _)),
-				author: NotSet, // TODO: set this
-			})
-			.exec_with_returning(&self.connection).await
-			.map(|notice| BoardsNotice {
-				board: board_id as usize,
-				id: notice.id as usize,
-				title: notice.title,
-				content: notice.content,
-				created_at: notice.created_at as _,
-				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			})
-			.map_err(BoardsDatabaseError::from)
+		board_notice::Entity::insert(board_notice::ActiveModel {
+			id: NotSet,
+			board: Set(board_id),
+			title: Set(title),
+			content: Set(content),
+			created_at: Set(now as _),
+			expires_at: Set(expiry.map(|v| v as _)),
+			author: NotSet, // TODO: set this
+		})
+		.exec_with_returning(&self.connection).await
+		.map(|notice| (notice.id, BoardsNotice {
+			title: notice.title,
+			content: notice.content,
+			created_at: notice.created_at as _,
+			expires_at: notice.expires_at.map(|v| v as _),
+			author: None, // TODO: when this is set, it will have to be fetched
+		}))
+		.map(|(id, notice)| Reference::new(BoardsNotice::uri(board_id, id), notice))
+		.map_err(BoardsDatabaseError::from)
 	}
 
 	pub async fn edit_board_notice(
@@ -1066,7 +1107,8 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		title: Option<String>,
 		content: Option<String>,
 		expiry: Option<Option<u64>>,
-	) -> DbResult<BoardsNotice> {
+		users_database: &mut UsersConnection,
+	) -> DbResult<Reference<BoardsNotice>> {
 		board_notice::Entity::update(board_notice::ActiveModel {
 				board: NotSet,
 				id: Set(id as _),
@@ -1078,15 +1120,14 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			})
 			.filter(board_notice::Column::Board.eq(board_id))
 			.exec(&self.connection).await
-			.map(|notice| BoardsNotice {
-				board: board_id as usize,
-				id: notice.id as usize,
+			.map(|notice| (notice.id, BoardsNotice {
 				title: notice.title,
 				content: notice.content,
 				created_at: notice.created_at as _,
 				expires_at: notice.expires_at.map(|v| v as _),
-				author: notice.author,
-			})
+				author: None, // TODO: when this is set, it will have to be fetched
+			}))
+			.map(|(id, notice)| Reference::new(BoardsNotice::uri(board_id, id), notice))
 			.map_err(BoardsDatabaseError::from)
 	}
 

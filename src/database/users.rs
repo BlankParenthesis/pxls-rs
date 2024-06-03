@@ -24,13 +24,13 @@ use tokio::sync::RwLock;
 use url::{Url, form_urlencoded::byte_serialize};
 use warp::{reject::Reject, reply::Reply};
 
-use crate::config::CONFIG;
+use crate::{config::CONFIG, filter::response::reference::Reference};
 use crate::routes::roles::roles::RoleFilter;
 use crate::routes::factions::factions::{FactionFilter, members::MemberFilter};
 use crate::permissions::Permission;
 use crate::filter::response::paginated_list::{Page, PageToken};
 
-use self::entities::{FactionMember, LDAPTimestamp};
+use self::entities::{FactionMember, LDAPTimestamp, JoinIntent};
 
 #[derive(Debug, Default)]
 pub struct LdapPageToken(Vec<u8>);
@@ -94,6 +94,7 @@ impl From<&UsersDatabaseError> for StatusCode {
 			UsersDatabaseError::Fetch(FetchError::AmbiguousItems) |
 			UsersDatabaseError::Fetch(FetchError::ParseError(_)) |
 			UsersDatabaseError::Fetch(FetchError::LdapError(_)) |
+			UsersDatabaseError::Fetch(FetchError::IntegrityError) |
 			UsersDatabaseError::Create(CreateError::LdapError(_)) |
 			UsersDatabaseError::Update(UpdateError::LdapError(_)) |
 			UsersDatabaseError::Delete(DeleteError::LdapError(_)) => {
@@ -126,6 +127,7 @@ pub enum FetchError {
 	InvalidPage,
 	NoItems,
 	AmbiguousItems,
+	IntegrityError,
 }
 
 #[derive(Debug)]
@@ -205,6 +207,7 @@ fn user_dn(id: &str) -> String {
 }
 
 lazy_static! {
+	// TODO: evict periodically
 	static ref USER_CACHE: RwLock<HashMap<String, User>> = {
 		RwLock::new(HashMap::new())
 	};
@@ -223,7 +226,7 @@ impl UsersConnection {
 		page: LdapPageToken,
 		limit: usize,
 		filter: crate::routes::users::users::UserFilter,
-	) -> Result<Page<User>, UsersDatabaseError> {
+	) -> Result<Page<Reference<User>>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
@@ -272,9 +275,15 @@ impl UsersConnection {
 
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
-			.map(User::try_from)
-			.map(|r| r.map_err(ParseError::from))
-			.map(|r| r.map_err(FetchError::ParseError))
+			.map(|user| {
+				let uid = User::id_from(&user)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)?;
+				let user = User::try_from(user)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)?;
+				Ok::<_, FetchError>(Reference::new(User::uri(uid.as_str()), user))
+			})
 			.collect::<Result<_, _>>()?;
 		
 			let next = if page_data.cookie.is_empty() {
@@ -300,6 +309,39 @@ impl UsersConnection {
 			};
 	
 			Ok(Page { items, next, previous: None })	
+	}
+
+	pub async fn get_users<'a, S: Into<std::borrow::Cow<'a, str>> + Copy>(
+		&mut self,
+		ids: &[S],
+	) -> Result<HashMap<String, User>, UsersDatabaseError> {
+		// TODO: cache
+
+		let user_cns = ids.iter()
+			.map(|id| format!("({}={})", CONFIG.ldap_users_id_field, ldap_escape(*id)))
+			.collect::<String>();
+
+		let (results, _) = self.connection
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_users_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				&format!("(|{})", user_cns),
+				User::search_fields(),
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			.map_err(FetchError::LdapError)?;
+
+		results.into_iter()
+			.map(SearchEntry::construct)
+			.map(|entry| {
+				let id = User::id_from(&entry)?;
+				let user = User::try_from(entry)?;
+				Ok((id, user))
+			})
+			.collect::<Result<_, _>>()
+			.map_err(FetchError::ParseError)
+			.map_err(UsersDatabaseError::from)
 	}
 
 	pub async fn get_user(
@@ -409,7 +451,7 @@ impl UsersConnection {
 		page: LdapPageToken,
 		limit: usize,
 		filter: RoleFilter,
-	) -> Result<Page<Role>, UsersDatabaseError> {
+	) -> Result<Page<Reference<Role>>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
@@ -459,6 +501,7 @@ impl UsersConnection {
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(Role::try_from)
+			.map(|r| r.map(|role| Reference::new(Role::uri(&role.name), role)))
 			.map(|r| r.map_err(ParseError::from))
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
@@ -492,7 +535,7 @@ impl UsersConnection {
 		page: LdapPageToken,
 		limit: usize,
 		filter: RoleFilter,
-	) -> Result<Page<Role>, UsersDatabaseError> {
+	) -> Result<Page<Reference<Role>>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
@@ -532,6 +575,7 @@ impl UsersConnection {
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(Role::try_from)
+			.map(|r| r.map(|role| Reference::new(Role::uri(&role.name), role)))
 			.map(|r| r.map_err(ParseError::from))
 			.map(|r| r.map_err(FetchError::ParseError))
 			.collect::<Result<_, _>>()?;
@@ -566,7 +610,7 @@ impl UsersConnection {
 	pub async fn get_role(
 		&mut self,
 		name: &str,
-	) -> Result<Role, UsersDatabaseError> {
+	) -> Result<Reference<Role>, UsersDatabaseError> {
 		let filter = format!("(cn={})", ldap_escape(name));
 		let (results, _) = self.connection
 			.search(
@@ -588,6 +632,7 @@ impl UsersConnection {
 					.unwrap();
 
 				Role::try_from(result)
+					.map(|role| Reference::new(Role::uri(name), role))
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
 					.map_err(UsersDatabaseError::from)
@@ -881,7 +926,7 @@ impl UsersConnection {
 		page: LdapPageToken,
 		limit: usize,
 		filter: FactionFilter,
-	) -> Result<Page<Faction>, UsersDatabaseError> {
+	) -> Result<Page<Reference<Faction>>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
@@ -931,9 +976,15 @@ impl UsersConnection {
 
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
-			.map(Faction::try_from)
-			.map(|r| r.map_err(ParseError::from))
-			.map(|r| r.map_err(FetchError::ParseError))
+			.map(|f| {
+				let fid = Faction::id_from(&f)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)?;
+				let faction = Faction::try_from(f)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)?;
+				Ok::<_, FetchError>(Reference::new(Faction::uri(&fid), faction))
+			})
 			.collect::<Result<_, _>>()?;
 		
 
@@ -967,7 +1018,7 @@ impl UsersConnection {
 	pub async fn get_faction(
 		&mut self,
 		id: &str,
-	) -> Result<Faction, UsersDatabaseError> {
+	) -> Result<Reference<Faction>, UsersDatabaseError> {
 		let filter = format!("(cn={})", ldap_escape(id));
 		let (results, _) = self.connection
 			.search(
@@ -989,6 +1040,7 @@ impl UsersConnection {
 					.unwrap();
 
 				Faction::try_from(result)
+					.map(|faction| Reference::new(Faction::uri(id), faction))
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)
 					.map_err(UsersDatabaseError::from)
@@ -1101,7 +1153,7 @@ impl UsersConnection {
 		page: LdapPageToken,
 		limit: usize,
 		filter: MemberFilter, // TODO: filter all of this
-	) -> Result<Page<FactionMember>, UsersDatabaseError> {
+	) -> Result<Page<Reference<FactionMember>>, UsersDatabaseError> {
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
@@ -1134,16 +1186,29 @@ impl UsersConnection {
 		let owners = entry.attrs.get("pxlsspaceFactionOwner")
 			.cloned()
 			.unwrap_or_default();
-		let items = entry.attrs.get("member")
-			.cloned()
-			.unwrap_or_default()
-			.into_iter()
-			.map(|m| {
-				let owner = owners.contains(&m);
-				let uid = &m.split_once(',').unwrap().0[4..];
-				FactionMember::new(fid.to_string(), uid.to_string(), owner)
-			})
+		
+		let empty = vec![];
+		let user_cns = entry.attrs.get("member").unwrap_or(&empty);
+		let user_ids = user_cns.into_iter()
+			.map(|cn| &cn.split_once(',').unwrap().0[4..])
 			.collect::<Vec<_>>();
+
+		let users = self.get_users(&user_ids).await?;
+		let items = entry.attrs.get("member")
+			.unwrap_or(&empty)
+			.into_iter()
+			.map(|cn| {
+				let owner = owners.contains(cn);
+				let uid = &cn.split_once(',').unwrap().0[4..];
+				let join_intent = JoinIntent::default();
+				let user = users.get(uid)
+					.ok_or(FetchError::IntegrityError)
+					.map(|u| Reference::new(User::uri(uid), u.clone()))?;
+				let member = FactionMember { owner, join_intent, user };
+				let uri = FactionMember::uri(fid, uid);
+				Ok(Reference::new(uri, member))
+			})
+			.collect::<Result<Vec<_>, FetchError>>()?;
 
 		let next = if page_data.cookie.is_empty() {
 			None
@@ -1168,8 +1233,10 @@ impl UsersConnection {
 		&mut self,
 		fid: &str,
 		uid: &str,
-	) -> Result<FactionMember, UsersDatabaseError> {
+	) -> Result<Reference<FactionMember>, UsersDatabaseError> {
 		let user_dn = user_dn(uid);
+		let user = self.get_user(uid).await?;
+		let user = Reference::new(User::uri(uid), user);
 		
 		let (entries, _result) = self.connection
 			.search(
@@ -1196,15 +1263,15 @@ impl UsersConnection {
 					return Err(FetchError::NoItems)
 				}
 
-				let fid = fid.to_string();
-				let uid = uid.to_string();
-
 				let owner = e.attrs.get("pxlsspaceFactionOwner")
 					.cloned()
 					.unwrap_or_default()
 					.contains(&user_dn);
 
-				Ok(FactionMember::new(fid, uid, owner))
+				let join_intent = JoinIntent::default();
+				let member = FactionMember { owner, join_intent, user };
+				let uri = FactionMember::uri(fid, uid);
+				Ok(Reference::new(uri, member))
 			})
 			.map_err(UsersDatabaseError::from)
 	}
@@ -1214,9 +1281,10 @@ impl UsersConnection {
 		fid: &str,
 		uid: &str,
 		owner: bool,
-	) -> Result<FactionMember, UsersDatabaseError> {
+	) -> Result<Reference<FactionMember>, UsersDatabaseError> {
 		// verify that user exists (because ldap doesn't do that I guess)
-		self.get_user(uid).await?;
+		let user = self.get_user(uid).await?;
+		let user = Reference::new(User::uri(uid), user);
 
 		let faction_dn = format!(
 			"cn={},ou={},{}",
@@ -1237,14 +1305,17 @@ impl UsersConnection {
 			.modify(faction_dn.as_str(), attributes).await
 			.map_err(UpdateError::LdapError)?;
 
-		let member = FactionMember::new(fid.to_string(), uid.to_string(), owner);
+		let uri = FactionMember::uri(fid, uid);
+		let join_intent = JoinIntent::default();
+		let member = FactionMember { owner, join_intent, user };
+		let reference = Reference::new(uri, member);
 
 		match result.rc {
-			0 => Ok(member),
+			0 => Ok(reference),
 			20 => Err(CreateError::AlreadyExists.into()),
 			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
-				.map(|_| member)
+				.map(|_| reference)
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
 		}
@@ -1255,9 +1326,10 @@ impl UsersConnection {
 		fid: &str,
 		uid: &str,
 		owner: bool,
-	) -> Result<FactionMember, UsersDatabaseError> {
+	) -> Result<Reference<FactionMember>, UsersDatabaseError> {
 		// verify that user exists (because ldap doesn't do that I guess)
-		self.get_user(uid).await?;
+		let user = self.get_user(uid).await?;
+		let user = Reference::new(User::uri(uid), user);
 
 		let faction_dn = format!(
 			"cn={},ou={},{}",
@@ -1279,14 +1351,17 @@ impl UsersConnection {
 			.modify(faction_dn.as_str(), attributes).await
 			.map_err(UpdateError::LdapError)?;
 
-		let member = FactionMember::new(fid.to_string(), uid.to_string(), owner);
+		let uri = FactionMember::uri(fid, uid);
+		let join_intent = JoinIntent::default();
+		let member = FactionMember { owner, join_intent, user };
+		let reference = Reference::new(uri, member);
 
 		match result.rc {
-			0 => Ok(member),
-			20 => Ok(member), // TODO: this might not be correct
+			0 => Ok(reference),
+			20 => Ok(reference), // TODO: this might not be correct (20 = already exists)
 			32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
-				.map(|_| member)
+				.map(|_| reference)
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
 		}

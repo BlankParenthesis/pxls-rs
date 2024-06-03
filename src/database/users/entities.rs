@@ -6,7 +6,7 @@ use url::{Url, ParseError as UrlParseError};
 use warp::http::Uri;
 
 use crate::config::CONFIG;
-use crate::filter::response::reference::Referenceable;
+use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 
 #[derive(Debug)]
@@ -129,8 +129,6 @@ pub enum UserParseError {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct User {
-	#[serde(skip_serializing)]
-	pub id: String,
 	pub name: String,
 	pub created_at: i64,
 }
@@ -147,16 +145,23 @@ impl User {
 	pub fn search_fields() -> [&'static str; 3] {
 		*USER_FIELDS
 	}
+
+	pub fn id_from(entry: &SearchEntry) -> Result<String, UserParseError> {
+		entry.attrs.get(&CONFIG.ldap_users_id_field)
+			.and_then(|v| v.first())
+			.map(String::to_owned)
+			.ok_or(UserParseError::MissingId)
+	}
+
+	pub fn uri(uid: &str) -> Uri {
+		format!("/users/{}", uid).parse().unwrap()
+	}
 }
 
 impl TryFrom<SearchEntry> for User {
 	type Error = UserParseError;
 
 	fn try_from(value: SearchEntry) -> Result<Self, Self::Error> {
-		let id = value.attrs.get(&CONFIG.ldap_users_id_field)
-			.and_then(|v| v.first())
-			.ok_or(UserParseError::MissingId)?
-			.to_owned();
 		let name = value.attrs.get(&CONFIG.ldap_users_username_field)
 			.and_then(|v| v.first())
 			.ok_or(UserParseError::MissingId)?
@@ -170,18 +175,8 @@ impl TryFrom<SearchEntry> for User {
 					.map_err(UserParseError::BadTimestamp)
 			})?;
 
-		Ok(User{ id, name, created_at })
+		Ok(User{ name, created_at })
 	}
-}
-
-impl From<&User> for Uri {
-	fn from(user: &User) -> Self {
-		format!("/users/{}", user.id).parse().unwrap()
-	}
-}
-
-impl Referenceable for User {
-	fn location(&self) -> Uri { Uri::from(self) }
 }
 
 #[derive(Debug)]
@@ -191,7 +186,7 @@ pub enum RoleParseError {
 }
 
 #[skip_serializing_none]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Role {
 	pub name: String,
 	pub icon: Option<Url>,
@@ -210,6 +205,10 @@ lazy_static! {
 impl Role {
 	pub fn search_fields() -> [&'static str; 3] {
 		*ROLE_FIELDS
+	}
+
+	pub fn uri(name: &str) -> Uri {
+		format!("/roles/{}", name).parse().unwrap()
 	}
 }
 
@@ -238,17 +237,6 @@ impl TryFrom<SearchEntry> for Role {
 	}
 }
 
-impl From<&Role> for Uri {
-	fn from(role: &Role) -> Self {
-		format!("/roles/{}", role.name).parse().unwrap()
-	}
-}
-
-impl Referenceable for Role {
-	fn location(&self) -> Uri { Uri::from(self) }
-}
-
-
 #[derive(Debug)]
 pub enum FactionParseError {
 	MissingId,
@@ -260,8 +248,6 @@ pub enum FactionParseError {
 
 #[derive(Debug, Serialize)]
 pub struct Faction {
-	#[serde(skip_serializing)]
-	pub id: String,
 	pub name: String,
 	pub created_at: i64,
 	pub size: usize,
@@ -281,16 +267,23 @@ impl Faction {
 	pub fn search_fields() -> [&'static str; 4] {
 		*FACTION_FIELDS
 	}
+
+	pub fn uri(fid: &str) -> Uri {
+		format!("/factions/{}", fid).parse().unwrap()
+	}
+
+	pub fn id_from(value: &SearchEntry) -> Result<String, FactionParseError> {
+		value.attrs.get("cn")
+			.and_then(|v| v.first())
+			.map(String::to_owned)
+			.ok_or(FactionParseError::MissingId)
+	}
 }
 
 impl TryFrom<SearchEntry> for Faction {
 	type Error = FactionParseError;
 
 	fn try_from(value: SearchEntry) -> Result<Self, Self::Error> {
-		let id = value.attrs.get("cn")
-			.and_then(|v| v.first())
-			.ok_or(FactionParseError::MissingId)?
-			.to_owned();
 		let name = value.attrs.get("pxlsspaceFactionName")
 			.and_then(|v| v.first())
 			.ok_or(FactionParseError::MissingName)?
@@ -312,18 +305,8 @@ impl TryFrom<SearchEntry> for Faction {
 			.map(|v| v.len())
 			.unwrap_or(0);
 
-		Ok(Faction { id, name, created_at, size })
+		Ok(Faction { name, created_at, size })
 	}
-}
-
-impl From<&Faction> for Uri {
-	fn from(faction: &Faction) -> Self {
-		format!("/factions/{}", faction.id).parse().unwrap()
-	}
-}
-
-impl Referenceable for Faction {
-	fn location(&self) -> Uri { Uri::from(self) }
 }
 
 #[derive(Debug, Serialize)]
@@ -340,27 +323,13 @@ impl Default for JoinIntent {
 
 #[derive(Debug, Serialize)]
 pub struct FactionMember {
-	#[serde(skip_serializing)]
-	faction_id: String,
-	#[serde(skip_serializing)]
-	user_id: String,
-	owner: bool,
-	join_intent: JoinIntent,
+	pub owner: bool,
+	pub join_intent: JoinIntent,
+	pub user: Reference<User>,
 }
 
 impl FactionMember {
-	pub fn new(faction_id: String, user_id: String, owner: bool) -> Self {
-		let join_intent = JoinIntent::default();
-		Self { owner, join_intent, faction_id, user_id }
+	pub fn uri(fid: &str, uid: &str) -> Uri {
+		format!("/factions/{}/members/{}", fid, uid).parse().unwrap()
 	}
-}
-
-impl From<&FactionMember> for Uri {
-	fn from(member: &FactionMember) -> Self {
-		format!("/factions/{}/members/{}", member.faction_id, member.user_id).parse().unwrap()
-	}
-}
-
-impl Referenceable for FactionMember {
-	fn location(&self) -> Uri { Uri::from(self) }
 }

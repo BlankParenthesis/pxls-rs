@@ -155,7 +155,7 @@ pub fn list(
 					items.push(board);
 				}
 				let items = items.iter()
-					.map(|b| Reference::from(b.deref()))
+					.map(|b| Reference::new(Uri::from(b.deref()), b.deref()))
 					.collect();
 
 				let next = page.checked_add(1).and_then(|page| {

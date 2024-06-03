@@ -111,9 +111,9 @@ impl UserConnections {
 		});
 	}
 
-	async fn send<'l>(
+	async fn send(
 		&self,
-		packet: &Packet<'l>,
+		packet: &Packet,
 	) {
 		let subscription = BoardSubscription::from(packet);
 		for connection in &self.connections {
@@ -273,9 +273,9 @@ impl Connections {
 			.remove(socket);
 	}
 
-	pub async fn send<'l>(
+	pub async fn send(
 		&self,
-		packet: Packet<'l>,
+		packet: Packet,
 	) {
 		let subscription = BoardSubscription::from(&packet);
 		for connection in self.by_subscription[subscription].iter() {
@@ -287,10 +287,10 @@ impl Connections {
 		self.update_sender.send(data).await.expect("place event thread died");
 	}
 
-	pub async fn send_to_user<'l>(
+	pub async fn send_to_user(
 		&self,
 		user_id: String,
-		packet: Packet<'l>,
+		packet: Packet,
 	) {
 		if let Some(connections) = self.by_uid.get(&Some(user_id)) {
 			connections.read().await.send(&packet).await;

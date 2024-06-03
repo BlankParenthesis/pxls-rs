@@ -10,7 +10,6 @@ use crate::filter::response::paginated_list::{
 	MAX_PAGE_ITEM_LIMIT
 };
 use crate::filter::header::authorization::{self, Bearer};
-use crate::filter::response::reference;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
@@ -39,7 +38,7 @@ pub fn list(
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 
 			connection.list_faction_members(&fid, page, limit, filter).await
-				.map(|page| warp::reply::json(&page.into_references()))
+				.map(|page| warp::reply::json(&page))
 		})
 }
 
@@ -125,11 +124,9 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsMembersGet | Permission::FactionsMembersPost))
 		.then(move |fid: String, member: FactionMemberPost, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// TODO: validate name
-			// TODO: validate permissions
-
+			// FIXME: validate permissions
 			connection.add_faction_member(&fid, &member.user.0, member.owner).await
-				.map(|member| reference::created(&member))
+				.map(|member| member.created())
 		})
 }
 
@@ -151,9 +148,7 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsMembersGet | Permission::FactionsMembersPatch))
 		.then(move |fid: String, uid: String, member: FactionMemberPatch, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// TODO: validate name
-			// TODO: validate permissions
-
+			// FIXME: validate permissions
 			connection.edit_faction_member(&fid, &uid, member.owner).await
 				.map(|member| warp::reply::json(&member))
 		})
@@ -170,8 +165,7 @@ pub fn delete(
 		.and(warp::delete())
 		.and(authorization::authorized(users_db, Permission::FactionsDelete.into()))
 		.then(move |fid: String, uid: String, _, mut connection: UsersConnection| async move {
-			// TODO: validate name
-			// TODO: validate permissions
+			// FIXME: validate permissions
 			connection.remove_faction_member(&fid, &uid).await
 				.map(|()| StatusCode::NO_CONTENT)
 		})

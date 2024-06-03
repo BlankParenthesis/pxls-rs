@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize, Serializer};
 use warp::http::Uri;
 
-use super::reference::Reference;
-
 fn optional_uri<S>(uri: &Option<Uri>, ser: S) -> Result<S::Ok, S::Error>
 where S: Serializer {
 	if let Some(uri) = uri {
@@ -20,57 +18,6 @@ pub struct Page<T> {
 	// TODO: either find some magical way to generate this or change the spec
 	#[serde(serialize_with = "optional_uri")]
 	pub previous: Option<Uri>,
-}
-
-impl<T> Page<T> {
-	pub async fn try_map<O, E, F: std::future::Future<Output = Result<O, E>>, M: Fn(T) -> F>(
-		self,
-		mapping: M,
-	) -> Result<Page<O>, E> {
-		let mut items = Vec::with_capacity(self.items.len());
-
-		for item in self.items {
-			items.push(mapping(item).await?);
-		}
-
-		Ok(Page { next: self.next, previous: self.previous, items })
-	}
-}
-
-impl <T> Page<T> 
-where 
-	Reference<T>: From<T>,
-	T: Serialize,
-{
-	pub fn into_references(self) -> Page<Reference<T>> {
-		let items = self.items.into_iter()
-			.map(Reference::from)
-			.collect();
-
-		Page {
-			items,
-			next: self.next,
-			previous: self.previous
-		}
-	}
-}
-
-impl <'t, T> Page<T> 
-where 
-	Reference<&'t T>: From<&'t T>,
-	T: Serialize + 't,
-{
-	pub fn references(&'t self) -> Page<Reference<&'t T>> {
-		let items = self.items.iter()
-			.map(Reference::from)
-			.collect();
-
-		Page {
-			items,
-			next: self.next.clone(),
-			previous: self.previous.clone(),
-		}
-	}
 }
 
 #[derive(Deserialize, Debug)]

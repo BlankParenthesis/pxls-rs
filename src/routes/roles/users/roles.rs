@@ -60,7 +60,7 @@ pub fn list(
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
 			connection.list_user_roles(&uid, page, limit, filter).await
-				.map(|page| warp::reply::json(&page.into_references()))
+				.map(|page| warp::reply::json(&page))
 		})
 }
 
@@ -128,7 +128,7 @@ pub fn post(
 				};
 				connections.send(&packet).await;
 
-				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles.into_references()))
+				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles))
 			}
 		})
 }
@@ -193,7 +193,7 @@ pub fn delete(
 				};
 				connections.send(&packet).await;
 				
-				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles.into_references()))
+				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles))
 			}
 		})
 }

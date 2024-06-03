@@ -3,49 +3,41 @@ use std::fmt;
 use serde::{Serialize, Deserialize};
 use serde::de::{self, Deserializer, Visitor};
 
+use crate::database::User;
 use crate::filter::response::paginated_list::PageToken;
+use crate::filter::response::reference::Reference;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CachedPlacement {
-	pub timestamp: u32,
 	pub position: u64,
+	pub timestamp: u32,
 	pub user_id: i32,
 }
 
 impl CachedPlacement {
 	pub fn null() -> Self {
 		Self {
-			timestamp: 0,
 			position: 0,
+			timestamp: 0,
 			user_id: 0
 		}
 	}
 }
 
-impl From<Placement> for CachedPlacement {
-	fn from(value: Placement) -> Self {
-		let Placement { timestamp, position, user_id, .. } = value;
-		Self { timestamp, position, user_id }
-	}
-}
-
-impl From<&Placement> for CachedPlacement {
-	fn from(value: &Placement) -> Self {
-		let &Placement { timestamp, position, user_id, .. } = value;
-		Self { timestamp, position, user_id }
-	}
+#[derive(Debug, Clone, Copy)]
+pub struct LastPlacement {
+	pub id: i64,
+	pub timestamp: u32,
+	pub color: u8,
+	pub user_id: i32,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Placement {
-	#[serde(skip_serializing)]
-	pub id: i64,
-	#[serde(skip_serializing)]
-	pub user_id: i32,
 	pub position: u64,
 	pub color: u8,
 	pub timestamp: u32,
-	pub user: String, // TODO: serialize as a reference properly
+	pub user: Reference<User>,
 }
 
 pub struct PlacementPageToken {

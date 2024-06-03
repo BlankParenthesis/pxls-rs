@@ -17,7 +17,7 @@ use crate::board::Board;
 use crate::database::{UsersDatabase, Role, User};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::routes::site_notices::notices::PreparedNotice;
+use crate::routes::site_notices::notices::Notice;
 use crate::socket::ServerPacket;
 
 type Socket = crate::socket::Socket<Subscription>;
@@ -92,12 +92,12 @@ impl Connections {
 					}
 				}
 			},
-			EventPacket::UserUpdated { user } => {
+			EventPacket::UserUpdated { user_id, ..  } => {
 				for socket in self.by_subscription[Subscription::Users].iter() {
 					socket.send(packet).await
 				}
 
-				let sockets = self.by_uid.get(&Some(user.inner().id.clone()))
+				let sockets = self.by_uid.get(&Some(user_id.clone()))
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrent) {
@@ -142,10 +142,10 @@ pub enum EventPacket<'l> {
 		board: Uri,
 	},
 	RoleCreated {
-		role: Reference<&'l Role>,
+		role: Reference<Role>,
 	},
 	RoleUpdated {
-		role: Reference<&'l Role>,
+		role: Reference<Role>,
 	},
 	RoleDeleted {
 		#[serde(with = "http_serde::uri")]
@@ -158,13 +158,15 @@ pub enum EventPacket<'l> {
 		user: Uri,
 	},
 	UserUpdated {
+		#[serde(skip_serializing)]
+		user_id: String,
 		user: Reference<&'l User>,
 	},
 	SiteNoticeCreated {
-		notice: Reference<&'l PreparedNotice>,
+		notice: Reference<Notice>,
 	},
 	SiteNoticeUpdated {
-		notice: Reference<&'l PreparedNotice>,
+		notice: Reference<Notice>,
 	},
 	SiteNoticeDeleted {
 		#[serde(with = "http_serde::uri")]

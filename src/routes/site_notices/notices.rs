@@ -12,55 +12,19 @@ use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
 	MAX_PAGE_ITEM_LIMIT,
-	PageToken, Page
+	PageToken,
 };
 use crate::filter::header::authorization::{self, Bearer};
-use crate::filter::response::reference::{self, Referenceable, Reference};
+use crate::filter::response::reference::Reference;
 use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError, UsersDatabaseError, User};
+use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError, User};
 use crate::routes::core::{EventPacket, Connections};
 
 
-#[derive(Debug)]
-pub struct Notice {
-	pub id: usize,
-	pub title: String,
-	pub content: String,
-	pub created_at: u64,
-	pub expires_at: Option<u64>,
-	pub author: Option<String>,
-}
-
-impl Notice {
-	async fn prepare(
-		self,
-		connection: &mut UsersConnection,
-	) -> Result<PreparedNotice, UsersDatabaseError> {
-		let Self { id, title, content, created_at, expires_at, .. } = self;
-		let author = if let Some(id) = self.author {
-			let user = connection.get_user(&id).await?;
-			Some(Reference::from(user))
-		} else {
-			None
-		};
-
-		Ok(PreparedNotice {
-			id,
-			title,
-			content,
-			created_at,
-			expires_at,
-			author,
-		})
-	} 
-}
-
 #[serde_with::skip_serializing_none]
-#[derive(Serialize, Debug)]
-pub struct PreparedNotice {
-	#[serde(skip_serializing)]
-	pub id: usize,
+#[derive(Serialize, Debug, Clone)]
+pub struct Notice {
 	pub title: String,
 	pub content: String,
 	pub created_at: u64,
@@ -68,16 +32,10 @@ pub struct PreparedNotice {
 	pub author: Option<Reference<User>>,
 }
 
-impl From<&PreparedNotice> for Uri {
-	fn from(notice: &PreparedNotice) -> Self {
-		format!("/notices/{}", notice.id)
-			.parse::<Uri>()
-			.unwrap()
+impl Notice {
+	pub fn uri(id: i32) -> Uri {
+		format!("/notices/{}", id).parse::<Uri>().unwrap()
 	}
-}
-
-impl Referenceable for PreparedNotice {
-	fn location(&self) -> Uri { Uri::from(self)}
 }
 
 #[derive(Default)]
@@ -165,24 +123,14 @@ pub fn list(
 				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 
-			let page = boards_connection.list_notices(page, limit, filter).await
-				.map_err(Reply::into_response)?;
+			let page = boards_connection.list_notices(
+				page,
+				limit,
+				filter,
+				&mut users_connection,
+			).await.map_err(Reply::into_response)?;
 			
-			let mut items = Vec::with_capacity(page.items.len());
-			
-			for item in page.items {
-				let notice = item.prepare(&mut users_connection).await
-					.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
-				items.push(notice);
-			}
-
-			let page = Page {
-				next: page.next,
-				previous: page.previous,
-				items,
-			};
-
-			Ok::<_, warp::reply::Response>(warp::reply::json(&page.into_references()))
+			Ok::<_, warp::reply::Response>(warp::reply::json(&page))
 		})
 }
 
@@ -197,13 +145,12 @@ pub fn get(
 		.and(authorization::authorized(users_db, Permission::NoticesGet.into()))
 		.and(database::connection(boards_db))
 		.then(move |id: usize, _: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
-			let notice = boards_connection.get_notice(id).await
+			let notice = boards_connection.get_notice(id, &mut users_connection).await
 				.map_err(Reply::into_response)?
 				.ok_or(StatusCode::NOT_FOUND)
 				.map_err(Reply::into_response)?;
-			notice.prepare(&mut users_connection).await
-				.map(|notice| warp::reply::json(&notice))
-				.map_err(Reply::into_response)
+			
+			Ok::<_, warp::reply::Response>(warp::reply::json(&notice))
 		})
 }
 
@@ -235,18 +182,16 @@ pub fn post(
 					notice.title,
 					notice.content,
 					notice.expires_at,
-				).await
-					.map_err(Reply::into_response)?
-					.prepare(&mut users_connection).await
-					.map_err(Reply::into_response)?;
+					&mut users_connection,
+				).await.map_err(Reply::into_response)?;
 
 				let packet = EventPacket::SiteNoticeCreated {
-					notice: Reference::from(&notice),
+					notice: notice.clone(),
 				};
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, warp::reply::Response>(reference::created(&notice))
+				Ok::<_, warp::reply::Response>(notice.created())
 			}
 		})
 }
@@ -281,20 +226,16 @@ pub fn patch(
 					notice.title,
 					notice.content,
 					notice.expires_at,
-				).await
-					.map_err(Reply::into_response)?
-					.prepare(&mut users_connection).await
-					.map_err(Reply::into_response)?;
+					&mut users_connection,
+				).await.map_err(Reply::into_response)?;
 
-				let reference = Reference::from(&notice);
-				
 				let packet = EventPacket::SiteNoticeUpdated {
-					notice: reference.clone(),
+					notice: notice.clone(),
 				};
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, warp::reply::Response>(warp::reply::json(&reference))
+				Ok::<_, warp::reply::Response>(warp::reply::json(&notice))
 			}
 		})
 }

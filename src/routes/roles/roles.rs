@@ -10,12 +10,13 @@ use warp::{
 	Rejection,
 };
 
-use crate::{filter::response::{paginated_list::{
+use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
 	MAX_PAGE_ITEM_LIMIT
-}, reference::Reference}, routes::core::Connections, database::UsersDatabaseError};
-use crate::filter::response::reference;
+};
+use crate::routes::core::Connections;
+use crate::database::UsersDatabaseError;
 use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, Role, LdapPageToken};
@@ -45,7 +46,7 @@ pub fn list(
 				.clamp(1, MAX_PAGE_ITEM_LIMIT);
 			
 			connection.list_roles(page, limit, filter).await
-				.map(|page| warp::reply::json(&page.into_references()))
+				.map(|page| warp::reply::json(&page))
 		})
 }
 
@@ -80,11 +81,11 @@ pub fn post(
 				let role = connection.get_role(&role.name).await?;
 				
 				let packet = EventPacket::RoleCreated {
-					role: Reference::from(&role),
+					role: role.clone(),
 				};
 				events_sockets.read().await.send(&packet);
 
-				Ok::<_, UsersDatabaseError>(reference::created(&role))
+				Ok::<_, UsersDatabaseError>(role.created()) // TODO: not sure if created is correct
 			}
 		})
 }
@@ -121,7 +122,7 @@ pub fn patch(
 				let role = connection.get_role(&role).await?;
 
 				let packet = EventPacket::RoleUpdated {
-					role: Reference::from(&role),
+					role: role.clone(),
 				};
 				events_sockets.read().await.send(&packet).await;
 				

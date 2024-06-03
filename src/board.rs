@@ -19,10 +19,12 @@ use tokio::sync::{RwLock, RwLockMappedWriteGuard};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::routes::{board_moderation::boards::pixels::Overrides, board_notices::boards::notices::PreparedBoardsNotice, core::boards::pixels::PlacementFilter};
+use crate::routes::board_moderation::boards::pixels::Overrides;
+use crate::routes::board_notices::boards::notices::BoardsNotice;
+use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::config::CONFIG;
 use crate::database::{UsersConnection, DatabaseError};
-use crate::filter::response::{paginated_list::Page, reference::{Referenceable, Reference}};
+use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::filter::body::patch::BinaryPatch;
 use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
@@ -36,7 +38,7 @@ use info::BoardInfo;
 pub use color::{Color, Palette};
 pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
-pub use placement::{Placement, PlacementPageToken, CachedPlacement};
+pub use placement::{Placement, LastPlacement, PlacementPageToken, CachedPlacement};
 pub use socket::BoardSubscription;
 
 #[derive(Debug)]
@@ -236,10 +238,6 @@ impl From<&Board> for Uri {
 			.parse::<Uri>()
 			.unwrap()
 	}
-}
-
-impl Referenceable for Board {
-	fn location(&self) -> Uri { Uri::from(self) }
 }
 
 impl Serialize for Board {
@@ -459,6 +457,8 @@ impl Board {
 		overrides: Overrides,
 		connection: &BoardsConnection,
 	) -> Result<(usize, u32), PlaceError> {
+		let uid = connection.get_uid(user_id).await
+			.map_err(PlaceError::DatabaseError)?;
 		// preliminary checks and mapping to sector local values
 		let sector_placements = placements.iter()
 			.copied()
@@ -531,9 +531,9 @@ impl Board {
 			self.id,
 			placements,
 			timestamp,
-			user_id.to_owned(),
+			user_id,
 		).await.map_err(PlaceError::DatabaseError)?;
-		
+
 		for ((sector_index, sector_offset), color) in sector_placements {
 			let sector = sectors.get_mut(&sector_index).unwrap();
 
@@ -546,6 +546,17 @@ impl Board {
 				.as_mut()
 				.put_u32_le(timestamp);
 		}
+		
+		let mut cache_lock = self.placement_cache.write().await;
+		let cache = cache_lock.as_mut().unwrap();
+		for &(position, _) in placements {
+			cache.insert(CachedPlacement {
+				position,
+				timestamp,
+				user_id: uid,
+			});
+		}
+		drop(cache_lock);
 
 		let mut colors = vec![];
 		let mut timestamps = vec![];
@@ -601,13 +612,16 @@ impl Board {
 			.get_two_placements(self.id, position).await
 			.map_err(UndoError::DatabaseError)?;
 
+		let uid = connection.get_uid(user_id).await
+			.map_err(UndoError::DatabaseError)?;
+
 		let placement_id = match undone_placement {
-			Some(Placement { id, user, timestamp, .. }) if user == user_id => {
-				let deadline = timestamp + CONFIG.undo_deadline_seconds;
+			Some(placement) if placement.user_id == uid => {
+				let deadline = placement.timestamp + CONFIG.undo_deadline_seconds;
 				if deadline > self.current_timestamp() {
 					return Err(UndoError::Expired)
 				}
-				id
+				placement.id
 			}
 			_ => return Err(UndoError::WrongUser)
 		};
@@ -663,9 +677,10 @@ impl Board {
 		color: u8,
 		overrides: Overrides,
 		connection: &BoardsConnection,
+		users_connection: &mut UsersConnection,
 	) -> Result<(CooldownInfo, Placement), PlaceError> {
-		// TODO: I hate most things about how this is written.
-		// Redo it and/or move stuff.
+		let uid = connection.get_uid(user_id).await
+			.map_err(PlaceError::DatabaseError)?;
 
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
@@ -719,12 +734,17 @@ impl Board {
 			position,
 			color,
 			timestamp,
-			user_id.to_owned(),
+			user_id,
+			users_connection,
 		).await.map_err(PlaceError::DatabaseError)?;
 
 		let mut cache_lock = self.placement_cache.write().await;
 		let cache = cache_lock.as_mut().unwrap();
-		cache.insert(CachedPlacement::from(&new_placement));
+		cache.insert(CachedPlacement {
+			position: new_placement.position,
+			timestamp: new_placement.timestamp,
+			user_id: uid,
+		});
 		drop(cache_lock);
 
 		let sector = sectors.get_mut(&sector_index).unwrap();
@@ -768,16 +788,25 @@ impl Board {
 		order: Order,
 		filter: PlacementFilter,
 		connection: &BoardsConnection,
+		users_connection: &mut UsersConnection,
 	) -> Result<Page<Placement>, BoardsDatabaseError> {
-		connection.list_placements(self.id, token, limit, order, filter).await
+		connection.list_placements(
+			self.id,
+			token,
+			limit,
+			order,
+			filter,
+			users_connection,
+		).await
 	}
 
 	pub async fn lookup(
 		&self,
 		position: u64,
 		connection: &BoardsConnection,
+		users_connection: &mut UsersConnection,
 	) -> Result<Option<Placement>, BoardsDatabaseError> {
-		connection.get_placement(self.id, position).await
+		connection.get_placement(self.id, position, users_connection).await
 	}
 
 	fn current_timestamp(&self) -> u32 {
@@ -882,7 +911,7 @@ impl Board {
 				self.id,
 				user_id,
 				max_pixels,
-			).await?.into_iter().map(CachedPlacement::from).collect();
+			).await?;
 		};
 
 		let cooldowns = self.calculate_cooldowns(placements.last(), connection, sector_locks).await?;
@@ -1031,17 +1060,17 @@ impl Board {
 		expiry: Option<u64>,
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
-	) -> Result<PreparedBoardsNotice, DatabaseError> {
+	) -> Result<Reference<BoardsNotice>, DatabaseError> {
 		let notice = connection.create_board_notice(
 			self.id,
 			title,
 			content,
 			expiry,
-		).await?
-			.prepare(users_connection).await?;
+			users_connection,
+		).await?;
 
 		let packet = Packet::BoardNoticeCreated {
-			notice: Reference::from(&notice),
+			notice: notice.clone(),
 		};
 
 		self.connections.send(packet).await;
@@ -1057,18 +1086,18 @@ impl Board {
 		expiry: Option<Option<u64>>,
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
-	) -> Result<PreparedBoardsNotice, DatabaseError> {
+	) -> Result<Reference<BoardsNotice>, DatabaseError> {
 		let notice = connection.edit_board_notice(
 			self.id,
 			id,
 			title,
 			content,
 			expiry,
-		).await?
-			.prepare(users_connection).await?;
+			users_connection,
+		).await?;
 
 		let packet = Packet::BoardNoticeUpdated {
-			notice: Reference::from(&notice),
+			notice: notice.clone(),
 		};
 
 		self.connections.send(packet).await;
@@ -1084,7 +1113,7 @@ impl Board {
 		let notice = connection.delete_board_notice(self.id, id).await?;
 
 		let packet = Packet::BoardNoticeDeleted {
-			notice: format!("/boards/{}/notices/{}", self.id, id).parse().unwrap(),
+			notice: BoardsNotice::uri(self.id, id as _),
 		};
 
 		self.connections.send(packet).await;

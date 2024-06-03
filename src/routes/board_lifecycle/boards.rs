@@ -15,7 +15,7 @@ use crate::board::Palette;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard, PendingDelete};
 use crate::filter::resource::database;
-use crate::filter::response::reference::{self, Reference};
+use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 use crate::routes::core::{EventPacket, Connections};
@@ -60,12 +60,13 @@ pub fn post(
 					.read().await;
 				let board = board.as_ref().expect("Board went missing during creation");
 
+				let reference = Reference::new(Uri::from(board), board);
 				let packet = EventPacket::BoardCreated {
-					board: Reference::from(board),
+					board: reference.clone(),
 				};
 				events_sockets.read().await.send(&packet).await;
 
-				Ok::<_, StatusCode>(reference::created(board))
+				Ok::<_, StatusCode>(reference.created())
 			}
 		})
 }
@@ -102,7 +103,8 @@ pub fn patch(
 				patch.max_pixels_available,
 				&connection,
 			).await
-				.map(|()| reference::created(board)) // TODO: is "created" correct?
+				.map(|()| Reference::new(Uri::from(&*board), board))
+				.map(|r| r.created()) // TODO: is "created" correct?
 		})
 }
 

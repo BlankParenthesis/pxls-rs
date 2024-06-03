@@ -11,7 +11,6 @@ use crate::filter::response::paginated_list::{
 	MAX_PAGE_ITEM_LIMIT
 };
 use crate::filter::header::authorization::{self, Bearer};
-use crate::filter::response::reference;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
@@ -42,7 +41,7 @@ pub fn list(
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 
 			connection.list_factions(page, limit, filter).await
-				.map(|page| warp::reply::json(&page.into_references()))
+				.map(|page| warp::reply::json(&page))
 		})
 }
 
@@ -74,7 +73,7 @@ pub fn post(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsGet | Permission::FactionsPost))
 		.then(move |faction: FactionPost, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// TODO: validate name
+			// FIXME: validate name
 
 			let id = connection.create_faction(&faction.name).await?;
 
@@ -83,7 +82,7 @@ pub fn post(
 			}
 
 			connection.get_faction(&id).await
-				.map(|faction| reference::created(&faction))
+				.map(|faction| faction.created())
 		})
 }
 
@@ -102,8 +101,8 @@ pub fn patch(
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsGet | Permission::FactionsPatch))
 		.then(move |id: String, faction: FactionPatch, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// TODO: validate name
-			// TODO: check if user is owner, possibly add new related permissions
+			// FIXME: validate name
+			// FIXME: check if user is owner, possibly add new related permissions
 			connection.update_faction(&id, &faction.name).await?;
 
 			connection.get_faction(&id).await

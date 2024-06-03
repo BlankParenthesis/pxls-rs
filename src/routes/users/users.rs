@@ -42,7 +42,7 @@ pub fn list(
 				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
 			
 			connection.list_users(page, limit, filter).await
-				.map(|page| warp::reply::json(&page.into_references()))
+				.map(|page| warp::reply::json(&page))
 		})
 }
 
@@ -134,7 +134,7 @@ pub fn patch(
 		})
 		.untuple_one()
 		.then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| async move {
-			// TODO: validate username
+			// FIXME: validate username
 
 			connection.update_user(&uid, &update.name).await?;
 			connection.get_user(&uid).await

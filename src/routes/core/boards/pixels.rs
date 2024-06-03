@@ -20,7 +20,7 @@ use crate::filter::response::paginated_list::{
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
-use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase, UsersConnection};
 use crate::routes::board_moderation::boards::pixels::Overrides;
 
 #[derive(Debug, Deserialize)]
@@ -31,7 +31,7 @@ pub struct PlacementFilter {
 	pub color: FilterRange<u8>,
 	#[serde(default)]
 	pub timestamp: FilterRange<u32>,
-	// TODO: use uri and extract id, maybe change comparison code or change deserialize code
+	// FIXME: use uri and extract id, maybe change comparison code or change deserialize code
 	pub user: Option<String>,
 }
 
@@ -50,7 +50,7 @@ pub fn list(
 		.and(warp::query())
 		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, mut users_connection, connection: BoardsConnection| async move {
 			let page = options.page;
 			let limit = options
 				.limit
@@ -60,9 +60,14 @@ pub fn list(
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when listing pixels");
 
-			board.list_placements(page, limit, Order::Forward, filter, &connection)
-				.await
-				.map(|page| warp::reply::json(&page))
+			board.list_placements(
+				page,
+				limit,
+				Order::Forward,
+				filter,
+				&connection,
+				&mut users_connection,
+			).await.map(|page| warp::reply::json(&page))
 		})
 }
 
@@ -79,10 +84,10 @@ pub fn get(
 		.and(warp::get())
 		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
 		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, position, _, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, position, _, mut users_connection, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting a pixel");
-			board.lookup(position, &connection).await?
+			board.lookup(position, &connection, &mut users_connection).await?
 				.map(|placement| warp::reply::json(&placement))
 				.ok_or(StatusCode::NOT_FOUND)
 		})
@@ -108,21 +113,21 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::permissions(users_db))
-		.and_then(|board, position, placement: PlacementRequest, permissions: EnumSet<Permission>, user, _| async move {
+		.and_then(|board, position, placement: PlacementRequest, permissions: EnumSet<Permission>, user, users_connection| async move {
 			let authorized = authorization::has_permissions(
 				permissions,
 				EnumSet::from(placement.overrides) | Permission::BoardsPixelsPost,
 			);
 
 			if authorized {
-				Ok((board, position, placement, user))
+				Ok((board, position, placement, user, users_connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
 		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, mut users_connection: UsersConnection, connection: BoardsConnection| async move {
 			let user = user.expect("Default user shouldn't have place permisisons");
 
 			let board = board.read().await;
@@ -135,6 +140,7 @@ pub fn post(
 				placement.color,
 				placement.overrides,
 				&connection,
+				&mut users_connection,
 			).await;
 
 			match place_attempt {
