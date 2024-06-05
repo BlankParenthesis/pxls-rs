@@ -221,6 +221,7 @@ pub struct Board {
 	pub info: BoardInfo,
 	connections: Connections,
 	sectors: SectorCache,
+	place_lock: crate::HashLock<i32>,
 	placement_cache: RwLock<Option<PlacementCache<PLACEMENT_CACHE_SIZE>>>,
 	// TODO: cache user stats
 	// this will allow us to determine if a user is new and avoid costly scans
@@ -271,11 +272,13 @@ impl Board {
 		);
 
 		let connections = Connections::default();
+		let place_lock = crate::HashLock::default();
 		Self {
 			id,
 			info,
 			sectors,
 			connections,
+			place_lock,
 			placement_cache: RwLock::new(None),
 		}
 	}
@@ -711,6 +714,10 @@ impl Board {
 			return Err(PlaceError::NoOp);
 		}
 
+		// TODO: this could maybe be replaced with SQL select locks, though
+		// that likely wouldn't work if a write buffer is implemented
+		let user_lock = self.place_lock.lock(uid).await;
+
 		let timestamp = self.current_timestamp();
 		// TODO: ignore cooldown should probably also mark the pixel as not
 		// contributing to the pixels available
@@ -725,10 +732,7 @@ impl Board {
 				return Err(PlaceError::Cooldown);
 			}
 		}
-		// FIXME: the sector write guard prevents double writes to this sector,
-		// but not across multiple sectors, so a user could place twice at once
-		// in two different sectors.
-		// Could probably solve this with sql transactions and select's `lock`
+
 		let new_placement = connection.insert_placement(
 			self.id,
 			position,
@@ -778,6 +782,7 @@ impl Board {
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
+		drop(user_lock);
 		Ok((cooldown_info, new_placement))
 	}
 

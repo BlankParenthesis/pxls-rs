@@ -306,3 +306,59 @@ pub trait Len {
 		self.len() == 0
 	}
 }
+
+#[derive(Default)]
+pub struct HashLock<T> {
+	locks: tokio::sync::Mutex<HashMap<T, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+}
+
+
+use ouroboros::self_referencing;
+
+#[self_referencing]
+pub struct HashLockGuard {
+	lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+	#[covariant]
+	#[borrows(lock)]
+	guard: tokio::sync::MutexGuard<'this, ()>,
+}
+
+impl<T: Eq + PartialEq + std::hash::Hash> HashLock<T> {
+	async fn lock(&self, key: T) -> HashLockGuard {
+		use std::collections::hash_map;
+		let mut locks = self.locks.lock().await;
+		let lock = match locks.entry(key) {
+			hash_map::Entry::Occupied(o) => o.get().clone(),
+			hash_map::Entry::Vacant(v) => v.insert(Default::default()).clone(),
+		};
+		HashLockGuardAsyncSendBuilder {
+			lock,
+			guard_builder: |lock| Box::pin(lock.lock())
+		}.build().await
+	}
+}
+
+#[tokio::test]
+async fn test_hashlock() {
+	let lock = HashLock::default();
+	let a = lock.lock(1).await;
+	tokio::select! {
+		_ = lock.lock(1) => panic!("locked lock acquired"),
+		_ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => (),
+	}
+	drop(a);
+	tokio::select! {
+		_ = lock.lock(1) => (),
+		_ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => {
+			panic!("unlocked lock not acquired")
+		},
+	}
+	let a = lock.lock(2).await;
+	tokio::select! {
+		_ = lock.lock(1) => (),
+		_ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => {
+			panic!("unlocked lock not acquired")
+		},
+	}
+	drop(a)
+}
