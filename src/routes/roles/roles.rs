@@ -83,7 +83,7 @@ pub fn post(
 				let packet = EventPacket::RoleCreated {
 					role: role.clone(),
 				};
-				events_sockets.read().await.send(&packet);
+				events_sockets.read().await.send(&packet).await;
 
 				Ok::<_, UsersDatabaseError>(role.created()) // TODO: not sure if created is correct
 			}

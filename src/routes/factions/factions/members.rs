@@ -164,7 +164,7 @@ pub fn delete(
 		.and(warp::path::end())
 		.and(warp::delete())
 		.and(authorization::authorized(users_db, Permission::FactionsDelete.into()))
-		.then(move |fid: String, uid: String, _, mut connection: UsersConnection| async move {
+		.then(move |fid: String, uid: String, user: Option<Bearer>, mut connection: UsersConnection| async move {
 			// FIXME: validate permissions
 			connection.remove_faction_member(&fid, &uid).await
 				.map(|()| StatusCode::NO_CONTENT)

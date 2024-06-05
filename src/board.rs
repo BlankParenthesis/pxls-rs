@@ -445,7 +445,6 @@ impl Board {
 					Err(PlaceError::Unplacable)
 				}
 			},
-			Some(_) => Ok(()),
 			None => Err(PlaceError::InvalidColor),
 		}
 	}
@@ -598,7 +597,7 @@ impl Board {
 		user_id: &str,
 		position: u64,
 		connection: &BoardsConnection,
-	) -> Result<(), UndoError> {
+	) -> Result<CooldownInfo, UndoError> {
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
 			.ok_or(UndoError::OutOfBounds)?;
@@ -667,9 +666,9 @@ impl Board {
 			&HashMap::from([(sector_index, sector)]),
 		).await.map_err(UndoError::DatabaseError)?;
 
-		self.connections.set_user_cooldown(user_id, cooldown_info).await;
+		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 		
-		Ok(())
+		Ok(cooldown_info)
 	}
 
 	// TODO: re-evaluate anonymous placing, maybe try and implement it again

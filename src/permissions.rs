@@ -264,7 +264,7 @@ impl<'de> Visitor<'de> for V {
 	fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
 	where E: serde::de::Error {
 		Permission::try_from(v)
-			.map_err(|err| E::custom("Invalid permission"))
+			.map_err(|_| E::custom("Invalid permission"))
 	}
 }
 

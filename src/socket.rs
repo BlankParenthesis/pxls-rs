@@ -346,7 +346,6 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 
 					return Ok(credentials);
 				},
-				Ok(Message::Packet(_)) => return Err(AuthFailure::InvalidMessage),
 				Ok(Message::Invalid) => return Err(AuthFailure::InvalidMessage),
 				Ok(Message::Close) => (),
 				Ok(Message::Ping) => (),
@@ -367,7 +366,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		let message = ws::Message::text(content);
 
 		if self.auth_valid().await {
-			self.sender.send(Ok(message));
+			let _ = self.sender.send(Ok(message));
 		} else {
 			self.close(Some(CloseReason::InvalidToken));
 		}
@@ -377,7 +376,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		let message = ws::Message::text(r#"{"type":"ready"}"#);
 
 		if self.auth_valid().await {
-			self.sender.send(Ok(message));
+			let _ = self.sender.send(Ok(message));
 		} else {
 			self.close(Some(CloseReason::InvalidToken));
 		}

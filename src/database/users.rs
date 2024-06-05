@@ -317,9 +317,10 @@ impl UsersConnection {
 	) -> Result<HashMap<String, User>, UsersDatabaseError> {
 		// TODO: cache
 
-		let user_cns = ids.iter()
-			.map(|id| format!("({}={})", CONFIG.ldap_users_id_field, ldap_escape(*id)))
-			.collect::<String>();
+		let mut user_cns = String::new();
+		for id in ids {
+			user_cns.push_str(&format!("({}={})", CONFIG.ldap_users_id_field, ldap_escape(*id)))
+		}
 
 		let (results, _) = self.connection
 			.search(
@@ -1189,14 +1190,14 @@ impl UsersConnection {
 		
 		let empty = vec![];
 		let user_cns = entry.attrs.get("member").unwrap_or(&empty);
-		let user_ids = user_cns.into_iter()
+		let user_ids = user_cns.iter()
 			.map(|cn| &cn.split_once(',').unwrap().0[4..])
 			.collect::<Vec<_>>();
 
 		let users = self.get_users(&user_ids).await?;
 		let items = entry.attrs.get("member")
 			.unwrap_or(&empty)
-			.into_iter()
+			.iter()
 			.map(|cn| {
 				let owner = owners.contains(cn);
 				let uid = &cn.split_once(',').unwrap().0[4..];

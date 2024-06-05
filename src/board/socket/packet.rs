@@ -149,7 +149,8 @@ impl BoardUpdateBuilder {
 
 		if let Some(o) = other.info {
 			if let Some(ref s) = self.info {
-				todo!("double info") // this should be detected and prevented
+				// FIXME: this should be detected and prevented
+				todo!("double info")
 			} else {
 				self.info = Some(o);
 			}

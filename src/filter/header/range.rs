@@ -99,9 +99,7 @@ impl<E: Reply> Reply for RangeOrReadError<E> {
 	fn into_response(self) -> reply::Response {
 		match self {
 			RangeOrReadError::RangeErr(e) => e.into_response(),
-			RangeOrReadError::ReadErr(err) => {
-				StatusCode::INTERNAL_SERVER_ERROR.into_response()
-			},
+			RangeOrReadError::ReadErr(e) => e.into_response(),
 		}
 	}
 }
@@ -164,6 +162,7 @@ where
 	
 		// TODO: assert correct read_size
 		let read_size = data.read(&mut subdata).await?;
+		debug_assert_eq!(read_size, length);
 
 		ranges.push(DataRange {
 			data: subdata,
@@ -364,8 +363,8 @@ impl Range {
 				.unwrap();
 
 				data.read(&mut buffer).await
-					// TODO: assert correct read_size
 					.map(|read_size| {
+						debug_assert_eq!(read_size, length);
 						let range = format!("bytes {}-{}/{}", range.start, range.end, data.len());
 
 						Response::builder()
@@ -382,8 +381,8 @@ impl Range {
 				let mut buffer = vec![0; length];
 
 				data.read(&mut buffer).await
-					// TODO: assert correct read_size
 					.map(|read_size| {
+						debug_assert_eq!(read_size, length);
 						Response::builder()
 							.header(header::CONTENT_TYPE, "application/octet-stream")
 							.header(header::ACCEPT_RANGES, "bytes")

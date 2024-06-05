@@ -37,26 +37,12 @@ pub fn delete(
 			).await;
 
 			match undo_attempt {
-				Ok(()) => {
+				Ok(cooldown_info) => {
 					let mut response = StatusCode::NO_CONTENT.into_response();
 
-					let cooldown_info = board.user_cooldown_info(
-						&user.id,
-						&connection,
-						&std::collections::HashMap::new(),
-					).await;
-
-					#[allow(clippy::single_match)]
-					match cooldown_info {
-						Ok(cooldown_info) => {
-							for (key, value) in cooldown_info.into_headers() {
-								response = warp::reply::with_header(response, key, value)
-									.into_response();
-							}
-						},
-						Err(err) => {
-							// TODO: not sure about this, same as in pixels::post
-						},
+					for (key, value) in cooldown_info.into_headers() {
+						response = warp::reply::with_header(response, key, value)
+							.into_response();
 					}
 
 					response

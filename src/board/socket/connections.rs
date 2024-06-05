@@ -160,10 +160,12 @@ impl UserConnections {
 	}
 }
 
+type SocketList = HashSet<Arc<Socket>>;
+
 pub struct Connections {
 	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
-	by_subscription: EnumMap<BoardSubscription, HashSet<Arc<Socket>>>,
-	by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, HashSet<Arc<Socket>>>>>,
+	by_subscription: EnumMap<BoardSubscription, SocketList>,
+	by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, SocketList>>>,
 	update_sender: mpsc::Sender<BoardUpdateBuilder>,
 	// TODO: thread_join handle
 }
@@ -186,7 +188,7 @@ impl Default for Connections {
 
 impl Connections {
 	async fn thread(
-		by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, HashSet<Arc<Socket>>>>>,
+		by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, SocketList>>>,
 		mut receiver: mpsc::Receiver<BoardUpdateBuilder>,
 	) {
 		let mut buffer = vec![];
@@ -285,16 +287,6 @@ impl Connections {
 
 	pub async fn queue_board_change(&self, data: BoardUpdateBuilder) {
 		self.update_sender.send(data).await.expect("place event thread died");
-	}
-
-	pub async fn send_to_user(
-		&self,
-		user_id: String,
-		packet: Packet,
-	) {
-		if let Some(connections) = self.by_uid.get(&Some(user_id)) {
-			connections.read().await.send(&packet).await;
-		}
 	}
 
 	pub async fn set_user_cooldown(

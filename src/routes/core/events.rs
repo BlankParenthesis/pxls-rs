@@ -29,6 +29,7 @@ pub struct Connections {
 	by_subscription: EnumMap<Subscription, HashSet<Arc<Socket>>>,
 }
 
+#[allow(clippy::mutable_key_type)]
 impl Connections {
 	async fn insert_socket(&mut self, socket: Arc<Socket>) {
 		let user_id = socket.user_id().await;
@@ -322,7 +323,7 @@ pub fn events(
 
 						let socket = match connect_result {
 							Ok(socket) => socket,
-							Err(err) => return,
+							Err(_) => return,
 						};
 						
 						socket.init(|socket| async move {

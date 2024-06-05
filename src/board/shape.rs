@@ -61,6 +61,9 @@ impl Shape {
 		to: &Self,
 		position: usize,
 	) -> usize {
+		let _ = from;
+		let _ = to;
+		let _ = position;
 		todo!("implement shape-to-shape transforming")
 	}
 

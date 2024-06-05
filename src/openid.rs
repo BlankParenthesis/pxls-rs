@@ -33,6 +33,7 @@ impl From<DiscoveryError> for StatusCode {
 
 #[derive(Deserialize)]
 struct Discovery {
+	#[allow(dead_code)]
 	issuer: Url,
 	jwks_uri: Url,
 }
