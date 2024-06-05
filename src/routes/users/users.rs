@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::sync::RwLock;
 use warp::{
 	http::{StatusCode, Uri},
 	Filter,
@@ -9,6 +10,8 @@ use warp::{
 	path::Tail,
 };
 
+use crate::routes::core::{EventPacket, Connections};
+use crate::database::{User, UsersDatabaseError};
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	DEFAULT_PAGE_ITEM_LIMIT,
@@ -16,6 +19,7 @@ use crate::filter::response::paginated_list::{
 };
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
 use crate::filter::resource::filter::FilterRange;
+use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
@@ -106,6 +110,7 @@ struct UserUpdate {
 
 pub fn patch(
 	users_db: Arc<UsersDatabase>,
+	events: Arc<RwLock<Connections>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersPatch;
 
@@ -133,12 +138,22 @@ pub fn patch(
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| async move {
-			// FIXME: validate username
+		.then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| {
+			let events = events.clone();
+			async move {
+				// FIXME: validate username
 
-			connection.update_user(&uid, &update.name).await?;
-			connection.get_user(&uid).await
-				.map(|user| warp::reply::json(&user))
+				connection.update_user(&uid, &update.name).await?;
+				let user = connection.get_user(&uid).await?;
+				let reference = Reference::new(User::uri(&uid), user);
+
+				let packet = EventPacket::UserUpdated {
+					user_id: uid,
+					user: reference.clone(),
+				};
+				events.read().await.send(&packet).await;
+				Ok::<_, UsersDatabaseError>(reference.created()) // TODO: is created correct?
+			}
 		})
 }
 

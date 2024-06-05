@@ -154,7 +154,7 @@ async fn main() {
 		routes::users::users::list(Arc::clone(&users_db)).boxed()
 		.or(routes::users::users::current(Arc::clone(&users_db)).boxed())
 		.or(routes::users::users::get(Arc::clone(&users_db)).boxed())
-		.or(routes::users::users::patch(Arc::clone(&users_db)).boxed())
+		.or(routes::users::users::patch(Arc::clone(&users_db), Arc::clone(&sockets)).boxed())
 		.or(routes::users::users::delete(Arc::clone(&users_db)).boxed());
 		
 	let routes_roles =

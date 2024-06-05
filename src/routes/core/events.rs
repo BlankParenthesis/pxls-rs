@@ -161,7 +161,7 @@ pub enum EventPacket<'l> {
 	UserUpdated {
 		#[serde(skip_serializing)]
 		user_id: String,
-		user: Reference<&'l User>,
+		user: Reference<User>,
 	},
 	SiteNoticeCreated {
 		notice: Reference<Notice>,
