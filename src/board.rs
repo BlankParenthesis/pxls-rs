@@ -150,7 +150,7 @@ impl<const SIZE: usize> PlacementCache<SIZE> {
 			.into_boxed_slice()
 			.try_into().unwrap();
 		
-		ring_buffer.copy_from_slice(&placements);
+		ring_buffer[0..placements.len()].copy_from_slice(&placements);
 
 		Ok(Self { ring_buffer, position })
 	}
