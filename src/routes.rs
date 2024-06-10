@@ -12,3 +12,4 @@ pub mod board_undo;
 pub mod factions;
 pub mod site_notices;
 pub mod board_notices;
+pub mod reports;

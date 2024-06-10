@@ -214,6 +214,15 @@ async fn main() {
 		.or(routes::board_notices::boards::notices::patch(Arc::clone(&boards), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::board_notices::boards::notices::delete(Arc::clone(&boards), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
+	let routes_reports = 
+		routes::reports::reports::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
+		.or(routes::reports::reports::owned(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::reports::reports::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::reports::reports::post(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::reports::reports::patch(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::reports::reports::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::reports::reports::history(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
+
 	let routes = 
 		routes_core
 		.or(routes_lifecycle)
@@ -229,6 +238,7 @@ async fn main() {
 		.or(routes_factions)
 		.or(routes_site_notices)
 		.or(routes_board_notices)
+		.or(routes_reports)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

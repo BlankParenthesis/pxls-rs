@@ -15,11 +15,28 @@ pub struct Model {
 pub enum Relation {
 	#[sea_orm(has_many = "super::placement::Entity")]
 	Placement,
+	#[sea_orm(has_many = "super::report::Entity")]
+	Report,
 }
 
 impl Related<super::placement::Entity> for Entity {
 	fn to() -> RelationDef {
 		Relation::Placement.def()
+	}
+}
+
+impl Related<super::report::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::Report.def()
+	}
+}
+
+impl Related<super::report_artifact::Entity> for Entity {
+	fn to() -> RelationDef {
+		super::report::Relation::ReportArtifact.def()
+	}
+	fn via() -> Option<RelationDef> {
+		Some(super::report::Relation::UserId.def().rev())
 	}
 }
 

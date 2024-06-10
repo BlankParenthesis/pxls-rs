@@ -18,8 +18,6 @@ enum UserId {
 	Uid
 }
 
-
-
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

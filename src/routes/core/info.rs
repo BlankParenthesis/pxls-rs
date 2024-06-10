@@ -46,6 +46,7 @@ lazy_static! {
 			"site_notices",
 			"board_notices",
 			"list_filtering",
+			"reports",
 		],
 	};
 }

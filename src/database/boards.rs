@@ -28,10 +28,12 @@ use tokio_stream::StreamExt;
 use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
 
-use crate::{config::CONFIG, board::LastPlacement};
+use crate::config::CONFIG;
+use crate::board::LastPlacement;
 use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::routes::site_notices::notices::{Notice, NoticeFilter};
 use crate::routes::board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter};
+use crate::routes::reports::reports::{ReportPageToken, ReportFilter, Report, ReportStatus, Artifact};
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::board::CachedPlacement;
 use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
@@ -847,7 +849,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				timestamp: notice.created_at as _,
 			})
 			.map(|token| {
-				format!(
+				format!( // TODO: filters
 					"/notices?page={}&limit={}",
 					token, limit,
 				).parse().unwrap()
@@ -995,7 +997,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				timestamp: notice.created_at as _,
 			})
 			.map(|token| {
-				format!(
+				format!( // TODO: filter
 					"/boards/{}/notices?page={}&limit={}",
 					board_id, token, limit,
 				).parse().unwrap()
@@ -1142,5 +1144,369 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.exec(&self.connection).await
 			.map(|result| result.rows_affected == 1)
 			.map_err(BoardsDatabaseError::from)
+	}
+
+	pub async fn list_reports(
+		&self,
+		token: ReportPageToken,
+		limit: usize,
+		filter: ReportFilter,
+		owner: Option<Option<String>>,
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Page<Reference<Report>>> {
+		let transaction = self.connection.begin().await?;
+
+		let list = report::Entity::find()
+			.distinct_on([report::Column::Id])
+			.filter(report::Column::Id.gt(token.0 as i64))
+			.apply_if(filter.status.as_ref(), |q, status| q.filter(report::Column::Closed.eq(matches!(status, ReportStatus::Closed))))
+			.apply_if(filter.reason.as_ref(), |q, reason| q.filter(report::Column::Reason.eq(reason)))
+			.apply_if(owner.as_ref(), |q, owner| q.filter(report::Column::Reporter.eq(owner.clone())))
+			.order_by(report::Column::Id, sea_orm::Order::Asc)
+			.order_by(report::Column::Revision, sea_orm::Order::Desc)
+			.limit(limit as u64 + 1)
+			.all(&transaction).await?;
+
+		let next = list.windows(2).nth(limit.saturating_sub(1))
+			.map(|pair| &pair[0])
+			.map(|report| ReportPageToken(report.id as _))
+			.map(|token| {
+				format!( // TODO: filter
+					"/reports?page={}&limit={}",
+					token, limit,
+				).parse().unwrap()
+			});
+
+		let mut reports = vec![];
+
+		for report in list.into_iter().take(limit) {
+			let artifacts = report_artifact::Entity::find()
+				.filter(report_artifact::Column::Report.eq(report.id))
+				.filter(report_artifact::Column::Revision.eq(report.revision))
+				.all(&transaction).await?
+				.into_iter()
+				.map(|a| Artifact::parse(&a.uri, a.timestamp as _))
+				.collect::<Result<_, _>>()
+				.map_err(|_| sea_orm::DbErr::Custom("integrity error".to_string()))?;
+
+			let id = report.id;
+			let reporter = match report.reporter {
+				Some(uid) => {
+					let user_id = USER_ID_CACHE.get_uid(uid, &self.connection).await?;
+					let user = users_connection.get_user(&user_id).await
+						.map_err(BoardsDatabaseError::UsersError)?;
+					let reference = Reference::new(User::uri(&user_id), user);
+					Some(reference)
+				},
+				None => None,
+			};
+			let report = Report {
+				status: if report.closed { ReportStatus::Closed } else { ReportStatus::Opened },
+				reason: report.reason,
+				reporter,
+				artifacts,
+				timestamp: report.timestamp as _,
+			};
+			reports.push(Reference::new(Report::uri(id), report))
+		}
+
+		transaction.commit().await?;
+		
+		Ok(Page { items: reports, next, previous: None })
+	}
+
+	pub async fn get_report(
+		&self,
+		id: usize,
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Option<Report>> {
+		let transaction = self.connection.begin().await?;
+
+		let report = report::Entity::find()
+			.filter(report::Column::Id.eq(id as i32))
+			.order_by(report::Column::Revision, sea_orm::Order::Desc)
+			.limit(1)
+			.one(&transaction).await
+			.map_err(BoardsDatabaseError::from)?;
+		
+		match report {
+			Some(report) => {
+				let artifacts = report_artifact::Entity::find()
+					.filter(report_artifact::Column::Report.eq(report.id))
+					.filter(report_artifact::Column::Revision.eq(report.revision))
+					.all(&transaction).await?
+					.into_iter()
+					.map(|a| Artifact::parse(&a.uri, a.timestamp as _))
+					.collect::<Result<_, _>>()
+					.map_err(|_| sea_orm::DbErr::Custom("integrity error".to_string()))?;
+
+				transaction.commit().await?;
+
+				let reporter = match report.reporter {
+					Some(uid) => {
+						let user_id = USER_ID_CACHE.get_uid(uid, &self.connection).await?;
+						let user = users_connection.get_user(&user_id).await
+							.map_err(BoardsDatabaseError::UsersError)?;
+						let reference = Reference::new(User::uri(&user_id), user);
+						Some(reference)
+					},
+					None => None,
+				};
+				let report = Report {
+					status: if report.closed { ReportStatus::Closed } else { ReportStatus::Opened },
+					reason: report.reason,
+					reporter,
+					artifacts,
+					timestamp: report.timestamp as _,
+				};
+				Ok(Some(report))
+			},
+			None => Ok(None),
+		}
+	}
+
+	pub async fn create_report(
+		&self,
+		reason: String,
+		reporter: Option<String>,
+		artifacts: Vec<Artifact>,
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Reference<Report>> {
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_secs();
+
+		let transaction = self.connection.begin().await
+			.map_err(BoardsDatabaseError::DbErr)?;
+
+		let reporter = match reporter {
+			Some(user_id) => Some(self.get_uid(&user_id).await?),
+			None => None,
+		};
+
+		let report = report::Entity::insert(report::ActiveModel {
+			id: NotSet,
+			revision: Set(1),
+			closed: Set(false),
+			reason: Set(reason),
+			reporter: Set(reporter),
+			timestamp: Set(now as _),
+		})
+		.exec_with_returning(&transaction).await
+		.map_err(BoardsDatabaseError::from)?;
+
+		report_artifact::Entity::insert_many(artifacts.iter().map(|a| {
+			report_artifact::ActiveModel {
+				report: Set(report.id),
+				revision: Set(report.revision),
+				timestamp: Set(a.timestamp as _),
+				uri: Set(a.reference.uri.to_string()),
+			}
+		})).exec(&transaction).await?;
+
+		let id = report.id;
+		let reporter = match report.reporter {
+			Some(uid) => {
+				let user_id = USER_ID_CACHE.get_uid(uid, &transaction).await?;
+				let user = users_connection.get_user(&user_id).await
+					.map_err(BoardsDatabaseError::UsersError)?;
+				let reference = Reference::new(User::uri(&user_id), user);
+				Some(reference)
+			},
+			None => None,
+		};
+		let report = Report {
+			status: if report.closed { ReportStatus::Closed } else { ReportStatus::Opened },
+			reason: report.reason,
+			reporter,
+			artifacts: artifacts.to_owned(),
+			timestamp: report.timestamp as _,
+		};
+		transaction.commit().await?;
+		Ok(Reference::new(Report::uri(id), report))
+	}
+
+	pub async fn edit_report(
+		&self,
+		id: usize,
+		status: Option<ReportStatus>,
+		reason: Option<String>,
+		artifacts: Option<Vec<Artifact>>,
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Reference<Report>> {
+		let now = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_secs();
+
+		let transaction = self.connection.begin().await?;
+
+		let old_report = report::Entity::find()
+			.filter(report::Column::Id.eq(id as i32))
+			.order_by(report::Column::Revision, sea_orm::Order::Desc)
+			.one(&transaction).await
+			.map_err(BoardsDatabaseError::from)?
+			.ok_or(BoardsDatabaseError::DbErr(DbErr::RecordNotFound("".to_string())))?;
+
+		let artifacts = if let Some(a) = artifacts {
+			a
+		} else {
+			report_artifact::Entity::find()
+				.filter(report_artifact::Column::Report.eq(old_report.id))
+				.filter(report_artifact::Column::Revision.eq(old_report.revision))
+				.all(&transaction).await?
+				.into_iter()
+				.map(|a| Artifact::parse(&a.uri, a.timestamp as _))
+				.collect::<Result<_, _>>()
+				.map_err(|_| sea_orm::DbErr::Custom("integrity error".to_string()))?
+		};
+
+		let closed = status.map(|s| matches!(s, ReportStatus::Closed))
+			.unwrap_or(old_report.closed);
+		let report = report::Entity::insert(report::ActiveModel {
+			id: Set(id as _),
+			revision: Set(old_report.revision + 1),
+			closed: Set(closed),
+			reason: Set(reason.unwrap_or(old_report.reason)),
+			reporter: Set(old_report.reporter),
+			timestamp: Set(now as _),
+		})
+		.exec_with_returning(&transaction).await
+		.map_err(BoardsDatabaseError::from)?;
+
+		report_artifact::Entity::insert_many(artifacts.iter().map(|a| {
+			report_artifact::ActiveModel {
+				report: Set(report.id),
+				revision: Set(report.revision),
+				timestamp: Set(a.timestamp as _),
+				uri: Set(a.reference.uri.to_string()),
+			}
+		})).exec(&transaction).await?;
+
+		let id = report.id;
+		let reporter = match report.reporter {
+			Some(uid) => {
+				let user_id = USER_ID_CACHE.get_uid(uid, &transaction).await?;
+				let user = users_connection.get_user(&user_id).await
+					.map_err(BoardsDatabaseError::UsersError)?;
+				let reference = Reference::new(User::uri(&user_id), user);
+				Some(reference)
+			},
+			None => None,
+		};
+
+		transaction.commit().await?;
+
+		let report = Report {
+			status: if report.closed { ReportStatus::Closed } else { ReportStatus::Opened },
+			reason: report.reason,
+			reporter,
+			artifacts,
+			timestamp: report.timestamp as _,
+		};
+		Ok(Reference::new(Report::uri(id), report))
+	}
+
+	// returns Some if the report was deleted or None if it didn't exist
+	pub async fn delete_report(
+		&self,
+		id: usize,
+	) -> DbResult<Option<Option<String>>> {
+		let transaction = self.connection.begin().await?;
+
+		let reporter_id = report::Entity::find()
+			.filter(report::Column::Id.eq(id as i32))
+			.order_by(report::Column::Revision, sea_orm::Order::Desc)
+			.limit(1)
+			.one(&transaction).await
+			.map_err(BoardsDatabaseError::from)?
+			.map(|r| r.id);
+
+		let reporter = if let Some(id) = reporter_id {
+			Some(USER_ID_CACHE.get_uid(id, &transaction).await?)
+		} else {
+			None
+		};
+
+		let deleted = report::Entity::delete_many()
+			.filter(report::Column::Id.eq(id as i32))
+			.exec(&transaction).await
+			.map(|result| result.rows_affected > 0)
+			.map_err(BoardsDatabaseError::from)?;
+
+		transaction.commit().await?;
+
+		if deleted {
+			Ok(Some(reporter))
+		} else {
+			Ok(None)
+		}
+	}
+
+	pub async fn list_report_history(
+		&self,
+		id: usize,
+		token: ReportPageToken,
+		limit: usize,
+		filter: ReportFilter,
+		users_connection: &mut UsersConnection,
+	) -> DbResult<Page<Report>> {
+		let transaction = self.connection.begin().await?;
+
+		let list = report::Entity::find()
+			.filter(report::Column::Id.eq(id as i32))
+			.filter(report::Column::Revision.gt(token.0 as i64))
+			.apply_if(filter.status.as_ref(), |q, status| q.filter(report::Column::Closed.eq(matches!(status, ReportStatus::Closed))))
+			.apply_if(filter.reason.as_ref(), |q, reason| q.filter(report::Column::Reason.eq(reason)))
+			.order_by(report::Column::Revision, sea_orm::Order::Asc)
+			.limit(limit as u64 + 1)
+			.all(&transaction).await?;
+
+		let next = list.windows(2).nth(limit.saturating_sub(1))
+			.map(|pair| &pair[0])
+			.map(|report| ReportPageToken(report.revision as _))
+			.map(|token| {
+				format!( // TODO: filter
+					"/reports/{}/history?page={}&limit={}",
+					id, token, limit,
+				).parse().unwrap()
+			});
+
+		let mut reports = vec![];
+
+		for report in list.into_iter().take(limit) {
+			let artifacts = report_artifact::Entity::find()
+				.filter(report_artifact::Column::Report.eq(report.id))
+				.filter(report_artifact::Column::Revision.eq(report.revision))
+				.all(&transaction).await?
+				.into_iter()
+				.map(|a| Artifact::parse(&a.uri, a.timestamp as _))
+				.collect::<Result<_, _>>()
+				.map_err(|_| sea_orm::DbErr::Custom("integrity error".to_string()))?;
+
+			let reporter = match report.reporter {
+				Some(uid) => {
+					let user_id = USER_ID_CACHE.get_uid(uid, &self.connection).await?;
+					let user = users_connection.get_user(&user_id).await
+						.map_err(BoardsDatabaseError::UsersError)?;
+					let reference = Reference::new(User::uri(&user_id), user);
+					Some(reference)
+				},
+				None => None,
+			};
+			let report = Report {
+				status: if report.closed { ReportStatus::Closed } else { ReportStatus::Opened },
+				reason: report.reason,
+				reporter,
+				artifacts,
+				timestamp: report.timestamp as _,
+			};
+			reports.push(report)
+		}
+
+		transaction.commit().await?;
+		
+		Ok(Page { items: reports, next, previous: None })
 	}
 }

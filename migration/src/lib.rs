@@ -10,6 +10,7 @@ mod m5_notices;
 mod m6_board_notices;
 mod m7_indices;
 mod m8_small_uid;
+mod m9_reports;
 
 pub struct Migrator;
 
@@ -40,6 +41,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m6_board_notices::Migration),
 			Box::new(m7_indices::Migration),
 			Box::new(m8_small_uid::Migration),
+			Box::new(m9_reports::Migration),
 		]
 	}
 }

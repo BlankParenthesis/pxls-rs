@@ -8,4 +8,6 @@ pub mod board_sector;
 pub mod color;
 pub mod notice;
 pub mod placement;
+pub mod report;
+pub mod report_artifact;
 pub mod user_id;

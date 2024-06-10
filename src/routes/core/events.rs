@@ -17,6 +17,7 @@ use crate::board::Board;
 use crate::database::{UsersDatabase, Role, User};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
+use crate::routes::reports::reports::Report;
 use crate::routes::site_notices::notices::Notice;
 use crate::socket::ServerPacket;
 
@@ -121,6 +122,42 @@ impl Connections {
 					socket.send(packet).await
 				}
 			},
+			EventPacket::ReportCreated { reporter, .. } => {
+				for socket in self.by_subscription[Subscription::Reports].iter() {
+					socket.send(packet).await
+				}
+
+				let sockets = self.by_uid.get(reporter).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::ReportsOwned) {
+						socket.send(packet).await;
+					}
+				}
+			},
+			EventPacket::ReportUpdated { reporter, .. } => {
+				for socket in self.by_subscription[Subscription::Reports].iter() {
+					socket.send(packet).await
+				}
+
+				let sockets = self.by_uid.get(reporter).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::ReportsOwned) {
+						socket.send(packet).await;
+					}
+				}
+			},
+			EventPacket::ReportDeleted { reporter, .. } => {
+				for socket in self.by_subscription[Subscription::Reports].iter() {
+					socket.send(packet).await
+				}
+				
+				let sockets = self.by_uid.get(reporter).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::ReportsOwned) {
+						socket.send(packet).await;
+					}
+				}
+			},
 		};
 
 	}
@@ -173,6 +210,22 @@ pub enum EventPacket<'l> {
 		#[serde(with = "http_serde::uri")]
 		notice: Uri,
 	},
+	ReportCreated {
+		#[serde(skip_serializing)]
+		reporter: Option<String>,
+		report: Reference<Report>,
+	},
+	ReportUpdated {
+		#[serde(skip_serializing)]
+		reporter: Option<String>,
+		report: Reference<Report>,
+	},
+	ReportDeleted {
+		#[serde(skip_serializing)]
+		reporter: Option<String>,
+		#[serde(with = "http_serde::uri")]
+		report: Uri,
+	},
 }
 
 impl<'l> ServerPacket for EventPacket<'l> {}
@@ -188,6 +241,8 @@ enum Subscription {
 	Users,
 	UsersCurrent,
 	Notices,
+	Reports,
+	ReportsOwned,
 }
 
 impl Subscription {
@@ -211,6 +266,8 @@ impl From<Subscription> for Permission {
 			Subscription::Users => Permission::EventsUsers,
 			Subscription::UsersCurrent => Permission::EventsUsersCurrent,
 			Subscription::Notices => Permission::EventsNotices,
+			Subscription::Reports => Permission::EventsReports,
+			Subscription::ReportsOwned => Permission::EventsReportsOwned,
 		}
 	}
 }

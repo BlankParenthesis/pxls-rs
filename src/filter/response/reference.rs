@@ -5,8 +5,8 @@ use serde::Serialize;
 #[derive(Debug, Serialize, Clone)]
 pub struct Reference<T: Serialize> {
 	#[serde(with = "http_serde::uri")]
-	uri: Uri,
-	view: T,
+	pub uri: Uri,
+	pub view: T,
 }
 
 impl<T: Serialize> Reference<T> {
