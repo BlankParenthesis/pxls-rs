@@ -256,11 +256,9 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.exec_with_returning(&transaction.connection).await?;
 
 		transaction.replace_palette(palette, new_board.id).await?;
-
+		transaction.commit().await?;
 		
 		let board = self.board_from_model(new_board).await?;
-
-		transaction.commit().await?;
 
 		Ok(board)
 	}
