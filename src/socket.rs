@@ -233,15 +233,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 
 		let sender_receiver = UnboundedReceiverStream::new(sender_receiver);
 
-		tokio::task::spawn(
-			sender_receiver
-				.forward(ws_sender)
-				.map(|result| {
-					if let Err(e) = result {
-						eprintln!("error sending websocket msg: {}", e);
-					}
-				}),
-		);
+		tokio::task::spawn(sender_receiver.forward(ws_sender));
 
 		let auth_result = Socket::auth(
 			&mut ws_receiver,
