@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use enumset::EnumSet;
 use reqwest::StatusCode;
+use tokio::sync::RwLock;
 use warp::{Reply, Rejection};
 use warp::Filter;
 use serde::Deserialize;
@@ -20,8 +21,9 @@ use crate::filter::response::paginated_list::{
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
-use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase, UsersConnection};
+use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase};
 use crate::routes::board_moderation::boards::pixels::Overrides;
+use crate::routes::core::{Connections, EventPacket};
 
 #[derive(Debug, Deserialize)]
 pub struct PlacementFilter {
@@ -101,6 +103,7 @@ struct PlacementRequest {
 }
 
 pub fn post(
+	events: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
@@ -127,45 +130,61 @@ pub fn post(
 		})
 		.untuple_one()
 		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, mut users_connection: UsersConnection, connection: BoardsConnection| async move {
-			let user = user.expect("Default user shouldn't have place permisisons");
+		.then(move |board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, mut users_connection, boards_connection| {
+			let events = events.clone();
+			let boards = boards.clone();
+			async move {
+				let user = user.expect("Default user shouldn't have place permisisons");
 
-			let board = board.read().await;
-			let board = board.as_ref().expect("Board went missing when creating a pixel");
-			let place_attempt = board.try_place(
-				// TODO: maybe accept option but make sure not to allow
-				// undos etc for anon users
-				&user.id,
-				position,
-				placement.color,
-				placement.overrides,
-				&connection,
-				&mut users_connection,
-			).await;
+				let board = board.read().await;
+				let board = board.as_ref().expect("Board went missing when creating a pixel");
+				let place_attempt = board.try_place(
+					// TODO: maybe accept option but make sure not to allow
+					// undos etc for anon users
+					&user.id,
+					position,
+					placement.color,
+					placement.overrides,
+					&boards_connection,
+					&mut users_connection,
+				).await;
 
-			match place_attempt {
-				Ok((cooldown, placement)) => {
-					let mut response = warp::reply::with_status(
-						warp::reply::json(&placement).into_response(),
-						StatusCode::CREATED,
-					).into_response();
+				match place_attempt {
+					Ok((cooldown, placement)) => {
+						let stats = crate::routes::placement_statistics::users::calculate_stats(
+							user.id.clone(),
+							&boards,
+							&boards_connection,
+							&mut users_connection,
+						).await.map_err(|e| e.into_response())?;
+						let user = Some(user.id);
+						let packet = EventPacket::StatsUpdated { user, stats };
 
-					if CONFIG.undo_deadline_seconds != 0 {
-						response = warp::reply::with_header(
-							response,
-							"Pxls-Undo-Deadline",
-							placement.timestamp + CONFIG.undo_deadline_seconds,
+						let events = events.read().await;
+						events.send(&packet).await;
+
+						let mut response = warp::reply::with_status(
+							warp::reply::json(&placement).into_response(),
+							StatusCode::CREATED,
 						).into_response();
-					}
 
-					for (key, value) in cooldown.into_headers() {
-						response = warp::reply::with_header(response, key, value)
-							.into_response();
-					}
+						if CONFIG.undo_deadline_seconds != 0 {
+							response = warp::reply::with_header(
+								response,
+								"Pxls-Undo-Deadline",
+								placement.timestamp + CONFIG.undo_deadline_seconds,
+							).into_response();
+						}
 
-					response
-				},
-				Err(err) => err.into_response(),
+						for (key, value) in cooldown.into_headers() {
+							response = warp::reply::with_header(response, key, value)
+								.into_response();
+						}
+
+						Ok(response)
+					},
+					Err(err) => Err(err.into_response()),
+				}
 			}
 		})
 }

@@ -47,6 +47,7 @@ lazy_static! {
 			"board_notices",
 			"list_filtering",
 			"reports",
+			"placement_statistics",
 		],
 	};
 }

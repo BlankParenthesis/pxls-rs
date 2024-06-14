@@ -17,6 +17,7 @@ use crate::board::Board;
 use crate::database::{UsersDatabase, Role, User};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
+use crate::routes::placement_statistics::users::UserStats;
 use crate::routes::reports::reports::Report;
 use crate::routes::site_notices::notices::Notice;
 use crate::socket::ServerPacket;
@@ -158,6 +159,14 @@ impl Connections {
 					}
 				}
 			},
+			EventPacket::StatsUpdated { user, .. } => {
+				let sockets = self.by_uid.get(user).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::Statistics) {
+						socket.send(packet).await;
+					}
+				}
+			}
 		};
 
 	}
@@ -226,6 +235,11 @@ pub enum EventPacket<'l> {
 		#[serde(with = "http_serde::uri")]
 		report: Uri,
 	},
+	StatsUpdated {
+		#[serde(skip_serializing)]
+		user: Option<String>,
+		stats: UserStats,
+	}
 }
 
 impl<'l> ServerPacket for EventPacket<'l> {}
@@ -243,6 +257,7 @@ enum Subscription {
 	Notices,
 	Reports,
 	ReportsOwned,
+	Statistics,
 }
 
 impl Subscription {
@@ -268,6 +283,7 @@ impl From<Subscription> for Permission {
 			Subscription::Notices => Permission::EventsNotices,
 			Subscription::Reports => Permission::EventsReports,
 			Subscription::ReportsOwned => Permission::EventsReportsOwned,
+			Subscription::Statistics => Permission::EventsStatistics,
 		}
 	}
 }
@@ -284,6 +300,7 @@ impl TryFrom<&str> for Subscription {
 			"users.current.roles" => Ok(Subscription::UsersCurrentRoles),
 			"users" => Ok(Subscription::Users),
 			"users.current" => Ok(Subscription::UsersCurrent),
+			"statistics" => Ok(Subscription::Statistics),
 			_ => Err(()),
 		}
 	}

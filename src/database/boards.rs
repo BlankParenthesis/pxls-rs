@@ -29,14 +29,13 @@ use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
 
 use crate::config::CONFIG;
-use crate::board::LastPlacement;
 use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::routes::site_notices::notices::{Notice, NoticeFilter};
 use crate::routes::board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter};
 use crate::routes::reports::reports::{ReportPageToken, ReportFilter, Report, ReportStatus, Artifact};
 use crate::routes::core::boards::pixels::PlacementFilter;
-use crate::board::CachedPlacement;
-use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector};
+use crate::routes::placement_statistics::users::PlacementColorStatistics;
+use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, PlacementCache, CachedPlacement};
 use crate::routes::site_notices::notices::NoticePageToken;
 
 mod entities;
@@ -207,8 +206,10 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 	async fn board_from_model(&self, board: board::Model) -> DbResult<Board> {
 		let id = board.id;
 
+		let transaction = self.connection.begin().await?;
+
 		let palette: Palette = board.find_related(color::Entity)
-			.all(&self.connection).await?
+			.all(&transaction).await?
 			.into_iter()
 			.map(|color| {
 				let index = color.index as u32;
@@ -221,7 +222,59 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				(index, color)
 			})
 			.collect();
-		
+
+		let stats_query = placement::Entity::find()
+			.select_only()
+			.column(placement::Column::UserId)
+			.column(placement::Column::Color)
+			.column_as(placement::Column::Timestamp.count(), "count")
+			.group_by(placement::Column::UserId)
+			.group_by(placement::Column::Color)
+			.filter(placement::Column::Board.eq(id))
+			.build(transaction.get_database_backend());
+		let stats = transaction.query_all(stats_query).await?;
+
+		let user_field = placement::Column::UserId.to_string();
+		let color_field = placement::Column::Color.to_string();
+
+		let mut stats_by_user = HashMap::<_, PlacementColorStatistics>::new();
+
+		for stat in stats {
+			let user = stat.try_get::<i32>("", &user_field).unwrap();
+			let user_stats = stats_by_user.entry(user).or_default();
+
+			let color = stat.try_get::<i16>("", &color_field).unwrap() as _;
+			let placed = stat.try_get::<i64>("", "count").unwrap() as usize;
+
+			user_stats.colors.entry(color).or_default().placed += placed;
+		}
+
+		let statistics_cache = stats_by_user.into();
+
+		const SIZE: usize = 120_000;
+
+		let placements = placement::Entity::find()
+			.filter(placement::Column::Board.eq(id))
+			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
+			.order_by(placement::Column::Id, sea_orm::Order::Desc)
+			.limit(SIZE as u64)
+			.all(&transaction).await?
+			.into_iter()
+			.map(|placement| CachedPlacement {
+				timestamp: placement.timestamp as u32,
+				position: placement.position as u64,
+				user_id: placement.user_id,
+			})
+			.rev();
+
+		let mut placement_cache = PlacementCache::<SIZE>::default();
+		for placement in placements {
+			placement_cache.insert(placement);
+		}
+		let placement_cache = RwLock::new(placement_cache);
+
+		transaction.commit().await?;
+
 		Ok(Board::new(
 			id,
 			board.name,
@@ -229,6 +282,8 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			serde_json::from_value(board.shape).unwrap(),
 			palette,
 			board.max_stacked as u32,
+			statistics_cache,
+			placement_cache,
 		))
 	}
 
@@ -377,32 +432,6 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.map(|option| option.map(|placement| placement.timestamp))
 			.map(|timestamp| timestamp.unwrap_or(0) as u32)
 			.map_err(BoardsDatabaseError::from)
-	}
-
-	pub async fn list_placements_simple(
-		&self,
-		board_id: i32,
-		order: Order,
-		limit: usize,
-	) -> DbResult<Vec<CachedPlacement>> {
-		let order = match order {
-			Order::Forward => sea_orm::Order::Asc,
-			Order::Reverse => sea_orm::Order::Desc,
-		};
-
-		Ok(placement::Entity::find()
-			.filter(placement::Column::Board.eq(board_id))
-			.order_by(placement::Column::Timestamp, order.clone())
-			.order_by(placement::Column::Id, order)
-			.limit(limit as u64)
-			.all(&self.connection).await?
-			.into_iter()
-			.map(|placement| CachedPlacement {
-				timestamp: placement.timestamp as u32,
-				position: placement.position as u64,
-				user_id: placement.user_id,
-			})
-			.collect())
 	}
 
 	pub async fn list_placements(

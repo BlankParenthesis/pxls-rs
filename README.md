@@ -22,7 +22,7 @@ Important missing features:
 	- [ ] [cooldown_info](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/cooldown_info.md)
 	- [X] [factions](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/factions.md)
 	- [X] [list_filtering](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/list_filtering.md)
-	- [ ] [placement_statistics](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/placement_statistics.md)
+	- [X] [placement_statistics](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/placement_statistics.md)
 	- [X] [reports](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/reports.md)
 	- [X] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/roles.md)
 	- [X] [site_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/site_notices.md)

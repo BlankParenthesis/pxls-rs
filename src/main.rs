@@ -92,6 +92,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		)).boxed()
 		.or(routes::core::boards::pixels::post(
+			Arc::clone(&sockets),
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
@@ -223,6 +224,10 @@ async fn main() {
 		.or(routes::reports::reports::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::reports::reports::history(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
+	let routes_placement_statistics = 
+		routes::placement_statistics::users::list(Arc::clone(&boards), Arc::clone(&users_db), Arc::clone(&boards_db)).boxed()
+		.or(routes::placement_statistics::users::get(Arc::clone(&boards), Arc::clone(&users_db), Arc::clone(&boards_db)).boxed());
+
 	let routes = 
 		routes_core
 		.or(routes_lifecycle)
@@ -230,6 +235,8 @@ async fn main() {
 		.or(routes_data_mask)
 		.or(routes_data_timestamps)
 		.or(routes_authentication)
+		// NOTE: needs to go before users because /users/stats overlaps with /users/{id}
+		.or(routes_placement_statistics)
 		.or(routes_users)
 		.or(routes_roles)
 		.or(routes_usercount)
@@ -318,23 +325,37 @@ pub trait Len {
 }
 
 #[derive(Default)]
-pub struct HashLock<T> {
-	locks: tokio::sync::Mutex<HashMap<T, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+pub struct HashLock<K, V> {
+	locks: tokio::sync::Mutex<HashMap<K, std::sync::Arc<tokio::sync::Mutex<V>>>>,
 }
 
 
 use ouroboros::self_referencing;
 
 #[self_referencing]
-pub struct HashLockGuard {
-	lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+pub struct HashLockGuard<V: 'static> {
+	lock: std::sync::Arc<tokio::sync::Mutex<V>>,
 	#[covariant]
 	#[borrows(lock)]
-	guard: tokio::sync::MutexGuard<'this, ()>,
+	guard: tokio::sync::MutexGuard<'this, V>,
 }
 
-impl<T: Eq + PartialEq + std::hash::Hash> HashLock<T> {
-	async fn lock(&self, key: T) -> HashLockGuard {
+impl<V> std::ops::Deref for HashLockGuard<V> {
+	type Target = V;
+
+	fn deref(&self) -> &Self::Target {
+		self.borrow_guard().deref()
+	}
+}
+
+impl<V> std::ops::DerefMut for HashLockGuard<V> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		self.with_guard_mut(|v| v.deref_mut())
+	}
+}
+
+impl<T: Eq + PartialEq + std::hash::Hash, V: Default + Send + Sync> HashLock<T, V> {
+	async fn lock(&self, key: T) -> HashLockGuard<V> {
 		use std::collections::hash_map;
 		let mut locks = self.locks.lock().await;
 		let lock = match locks.entry(key) {
@@ -348,9 +369,20 @@ impl<T: Eq + PartialEq + std::hash::Hash> HashLock<T> {
 	}
 }
 
+impl<K: Eq + PartialEq + std::hash::Hash, V> From<HashMap<K, V>> for HashLock<K, V> {
+	fn from(value: HashMap<K, V>) -> Self {
+		let map = value.into_iter().map(|(k, v)| {
+			let value = std::sync::Arc::new(tokio::sync::Mutex::new(v));
+			(k, value)
+		}).collect();
+		let locks = tokio::sync::Mutex::new(map);
+		Self { locks }
+	}
+}
+
 #[tokio::test]
 async fn test_hashlock() {
-	let lock = HashLock::default();
+	let lock = HashLock::<_, ()>::default();
 	let a = lock.lock(1).await;
 	tokio::select! {
 		_ = lock.lock(1) => panic!("locked lock acquired"),

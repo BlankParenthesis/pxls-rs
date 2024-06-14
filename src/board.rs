@@ -20,6 +20,7 @@ use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
 use crate::routes::board_moderation::boards::pixels::Overrides;
+use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::routes::board_notices::boards::notices::BoardsNotice;
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::config::CONFIG;
@@ -129,40 +130,32 @@ impl Reply for PatchError {
 // *CachedPlacements* are just 16 bytes so this is now less than 2MB of data.
 const PLACEMENT_CACHE_SIZE: usize = 120_000;
 
-struct PlacementCache<const SIZE: usize> {
+pub struct PlacementCache<const SIZE: usize> {
 	ring_buffer: Box<[CachedPlacement; SIZE]>,
 	// assumes infinite size, wrapped at lookup
 	position: usize,
 }
 
-impl<const SIZE: usize> PlacementCache<SIZE> {
-	pub async fn fill(board_id: i32, connection: &BoardsConnection) -> Result<Self, BoardsDatabaseError> {
-		let mut placements = connection.list_placements_simple(
-			board_id,
-			Order::Reverse,
-			SIZE,
-		).await?;
-
-		placements.reverse();
-		let position = placements.len();
-
-		let mut ring_buffer: Box<[_; SIZE]> = vec![CachedPlacement::null(); SIZE]
-			.into_boxed_slice()
-			.try_into().unwrap();
-		
-		ring_buffer[0..placements.len()].copy_from_slice(&placements);
-
-		Ok(Self { ring_buffer, position })
+impl<const SIZE: usize> Default for PlacementCache<SIZE> {
+	fn default() -> Self {
+		Self {
+			ring_buffer: vec![CachedPlacement::default(); SIZE]
+				.into_boxed_slice()
+				.try_into().unwrap(),
+			position: 0,
+		}
 	}
+}
 
-	pub fn iter(&self) -> PlacementCacheIterator<'_, SIZE> {
+impl<const SIZE: usize> PlacementCache<SIZE> {
+	fn iter(&self) -> PlacementCacheIterator<'_, SIZE> {
 		PlacementCacheIterator {
 			placements: self,
 			offset: 0,
 		}
 	}
 
-	fn insert(&mut self, placement: CachedPlacement) {
+	pub fn insert(&mut self, placement: CachedPlacement) {
 		self.ring_buffer[self.position % SIZE] = placement;
 		self.position += 1;
 	}
@@ -221,16 +214,8 @@ pub struct Board {
 	pub info: BoardInfo,
 	connections: Connections,
 	sectors: SectorCache,
-	place_lock: crate::HashLock<i32>,
-	placement_cache: RwLock<Option<PlacementCache<PLACEMENT_CACHE_SIZE>>>,
-	// TODO: cache user stats
-	// this will allow us to determine if a user is new and avoid costly scans
-	// of the entire cache.
-	// Possibly instead store how many placements we have in the cache so scans
-	// can also be avoided for infrequent users:
-	// start with
-	// select user_id, count(*) from (select user_id from placement where board = ? limit ?) group by user_id;
-	// then sub 1 from old pixel and add 1 from new pixel every insert
+	statistics_cache: crate::HashLock<i32, PlacementColorStatistics>,
+	placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
 }
 
 impl From<&Board> for Uri {
@@ -256,6 +241,8 @@ impl Board {
 		shape: Shape,
 		palette: Palette,
 		max_pixels_available: u32,
+		statistics_cache: crate::HashLock<i32, PlacementColorStatistics>,
+		placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
 	) -> Self {
 		let info = BoardInfo {
 			name,
@@ -272,14 +259,14 @@ impl Board {
 		);
 
 		let connections = Connections::default();
-		let place_lock = crate::HashLock::default();
+
 		Self {
 			id,
 			info,
 			sectors,
 			connections,
-			place_lock,
-			placement_cache: RwLock::new(None),
+			statistics_cache,
+			placement_cache,
 		}
 	}
 
@@ -514,6 +501,9 @@ impl Board {
 			return Err(PlaceError::NoOp);
 		}
 
+		// This acts as a per-user lock to prevent exploits bypassing cooldown
+		let mut statistics_lock = self.statistics_cache.lock(uid).await;
+
 		if !overrides.cooldown {
 			let cooldown_info = self.user_cooldown_info(
 				user_id,
@@ -547,12 +537,13 @@ impl Board {
 			timestamp_slice
 				.as_mut()
 				.put_u32_le(timestamp);
+			
+			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
 		
 		let mut cache_lock = self.placement_cache.write().await;
-		let cache = cache_lock.as_mut().unwrap();
 		for &(position, _) in placements {
-			cache.insert(CachedPlacement {
+			cache_lock.insert(CachedPlacement {
 				position,
 				timestamp,
 				user_id: uid,
@@ -589,6 +580,9 @@ impl Board {
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
+		let stats = statistics_lock.clone();
+		self.connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
+
 		Ok((changes, timestamp))
 	}
 
@@ -598,6 +592,9 @@ impl Board {
 		position: u64,
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, UndoError> {
+		let uid = connection.get_uid(user_id).await
+			.map_err(UndoError::DatabaseError)?;
+
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
 			.ok_or(UndoError::OutOfBounds)?;
@@ -606,6 +603,9 @@ impl Board {
 			.get_sector_mut(sector_index, connection).await
 			.map_err(UndoError::DatabaseError)?
 			.expect("Missing sector");
+
+		// This acts as a per-user lock to prevent exploits bypassing cooldown
+		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		let transaction = connection.begin().await
 			.map_err(UndoError::DatabaseError)?;
@@ -644,6 +644,8 @@ impl Board {
 		transaction.commit().await
 			.map_err(UndoError::DatabaseError)?;
 
+		statistics_lock.colors.entry(color).or_default().placed -= 1;
+
 		let color = socket::Change {
 			position,
 			values: vec![color],
@@ -667,6 +669,9 @@ impl Board {
 		).await.map_err(UndoError::DatabaseError)?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+
+		let stats = statistics_lock.clone();
+		self.connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
 		
 		Ok(cooldown_info)
 	}
@@ -713,9 +718,8 @@ impl Board {
 			return Err(PlaceError::NoOp);
 		}
 
-		// TODO: this could maybe be replaced with SQL select locks, though
-		// that likely wouldn't work if a write buffer is implemented
-		let user_lock = self.place_lock.lock(uid).await;
+		// This acts as a per-user lock to prevent exploits bypassing cooldown
+		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		let timestamp = self.current_timestamp();
 		// TODO: ignore cooldown should probably also mark the pixel as not
@@ -741,14 +745,13 @@ impl Board {
 			users_connection,
 		).await.map_err(PlaceError::DatabaseError)?;
 
-		let mut cache_lock = self.placement_cache.write().await;
-		let cache = cache_lock.as_mut().unwrap();
+		let mut cache = self.placement_cache.write().await;
 		cache.insert(CachedPlacement {
 			position: new_placement.position,
 			timestamp: new_placement.timestamp,
 			user_id: uid,
 		});
-		drop(cache_lock);
+		drop(cache);
 
 		let sector = sectors.get_mut(&sector_index).unwrap();
 
@@ -756,6 +759,8 @@ impl Board {
 		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
 			.as_mut()
 			.put_u32_le(timestamp);
+
+		statistics_lock.colors.entry(color).or_default().placed += 1;
 
 		let color = socket::Change {
 			position,
@@ -781,7 +786,9 @@ impl Board {
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
-		drop(user_lock);
+		let stats = statistics_lock.clone();
+		self.connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
+
 		Ok((cooldown_info, new_placement))
 	}
 
@@ -892,19 +899,11 @@ impl Board {
 		let max_pixels = self.info.max_pixels_available as usize;
 		let cache = self.placement_cache.read().await;
 		let uid = connection.get_uid(user_id).await?;
-		let mut placements = match cache.as_ref() {
-			Some(cache) => {
-				cache.iter()
-					.filter(|p| p.user_id == uid)
-					.take(max_pixels)
-					.cloned()
-					.collect()
-			},
-			None => {
-				vec![]
-			},
-		};
-		drop(cache);
+		let mut placements = cache.iter()
+			.filter(|p| p.user_id == uid)
+			.take(max_pixels)
+			.cloned()
+			.collect::<Vec<_>>();
 		placements.reverse();
 
 		if placements.len() < max_pixels {
@@ -971,29 +970,6 @@ impl Board {
 		Ok(info)
 	}
 
-	async fn cached_placements(
-		&self,
-		connection: &BoardsConnection,
-	) -> Result<tokio::sync::RwLockReadGuard<'_, Option<PlacementCache<PLACEMENT_CACHE_SIZE>>>, BoardsDatabaseError> {
-
-		let cache_lock = self.placement_cache.read().await;
-
-		if cache_lock.is_none() {
-			drop(cache_lock);
-
-			let mut cache = self.placement_cache.write().await;
-			if cache.is_none() {
-				let new_cache = PlacementCache::fill(self.id, connection).await?;
-				cache.replace(new_cache);
-			}
-			drop(cache);
-
-			Ok(self.placement_cache.read().await)
-		} else {
-			Ok(cache_lock)
-		}
-	}
-
 	async fn user_count_for_time(
 		&self,
 		timestamp: u32,
@@ -1003,8 +979,7 @@ impl Board {
 		let max_time = i32::try_from(timestamp).unwrap();
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
 
-		let cache = self.cached_placements(connection).await?;
-		let cache = cache.as_ref().unwrap();
+		let cache = self.placement_cache.read().await;
 		let cache_age = cache.iter().last().unwrap().timestamp as i32;
 		if min_time > cache_age {
 			let user_count = cache.iter()
@@ -1123,5 +1098,14 @@ impl Board {
 		self.connections.send(packet).await;
 
 		Ok(notice)
+	}
+
+	pub async fn user_stats(
+		&self,
+		user: &str,
+		connection: &BoardsConnection,
+	) -> Result<PlacementColorStatistics, DatabaseError> {
+		let uid = connection.get_uid(user).await?;
+		Ok((*self.statistics_cache.lock(uid).await).clone())
 	}
 }

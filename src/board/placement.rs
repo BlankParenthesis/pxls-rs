@@ -14,6 +14,10 @@ pub struct CachedPlacement {
 	pub user_id: i32,
 }
 
+impl Default for CachedPlacement {
+	fn default() -> Self { Self::null() }
+}
+
 impl CachedPlacement {
 	pub fn null() -> Self {
 		Self {

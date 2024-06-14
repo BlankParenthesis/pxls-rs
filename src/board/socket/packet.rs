@@ -11,6 +11,7 @@ use crate::board::Palette;
 use crate::board::Shape;
 use crate::filter::response::reference::Reference;
 use crate::routes::board_notices::boards::notices::BoardsNotice;
+use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::socket::ServerPacket;
 
 use super::BoardSubscription;
@@ -234,6 +235,9 @@ pub enum Packet {
 		#[serde(with = "http_serde::uri")]
 		notice: Uri,
 	},
+	BoardStatsUpdated {
+		stats: PlacementColorStatistics,
+	}
 }
 
 impl From<&Packet> for BoardSubscription {
@@ -244,6 +248,7 @@ impl From<&Packet> for BoardSubscription {
 			Packet::BoardNoticeCreated { .. } => BoardSubscription::Notices,
 			Packet::BoardNoticeUpdated { .. } => BoardSubscription::Notices,
 			Packet::BoardNoticeDeleted { .. } => BoardSubscription::Notices,
+			Packet::BoardStatsUpdated { .. } => BoardSubscription::Statistics,
 		}
 	}
 }
