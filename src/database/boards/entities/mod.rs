@@ -2,6 +2,7 @@
 
 pub mod prelude;
 
+pub mod ban;
 pub mod board;
 pub mod board_notice;
 pub mod board_sector;

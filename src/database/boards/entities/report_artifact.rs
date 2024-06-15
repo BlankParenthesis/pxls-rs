@@ -7,6 +7,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
 	#[sea_orm(primary_key, auto_increment = false)]
 	pub report: i32,
+	#[sea_orm(primary_key, auto_increment = false)]
 	pub revision: i32,
 	#[sea_orm(primary_key, auto_increment = false)]
 	pub timestamp: i64,

@@ -51,6 +51,13 @@ pub enum PlaceError {
 	Cooldown,
 	OutOfBounds,
 	DatabaseError(BoardsDatabaseError),
+	Banned,
+}
+
+impl From<BoardsDatabaseError> for PlaceError {
+	fn from(value: BoardsDatabaseError) -> Self {
+		Self::DatabaseError(value)
+	}
 }
 
 impl Reject for PlaceError {}
@@ -70,6 +77,7 @@ impl Reply for PlaceError {
 			Self::DatabaseError(_) => {
 				StatusCode::INTERNAL_SERVER_ERROR
 			},
+			Self::Banned => StatusCode::FORBIDDEN,
 		}
 		.into_response()
 	}
@@ -81,6 +89,13 @@ pub enum UndoError {
 	WrongUser,
 	Expired,
 	DatabaseError(BoardsDatabaseError),
+	Banned,
+}
+
+impl From<BoardsDatabaseError> for UndoError {
+	fn from(value: BoardsDatabaseError) -> Self {
+		Self::DatabaseError(value)
+	}
 }
 
 impl Reject for UndoError {}
@@ -94,6 +109,7 @@ impl Reply for UndoError {
 			Self::DatabaseError(_) => {
 				StatusCode::INTERNAL_SERVER_ERROR
 			},
+			Self::Banned => StatusCode::FORBIDDEN,
 		}
 		.into_response()
 	}
@@ -446,8 +462,11 @@ impl Board {
 		overrides: Overrides,
 		connection: &BoardsConnection,
 	) -> Result<(usize, u32), PlaceError> {
-		let uid = connection.get_uid(user_id).await
-			.map_err(PlaceError::DatabaseError)?;
+		if connection.is_user_banned(user_id).await? {
+			return Err(PlaceError::Banned)
+		}
+
+		let uid = connection.get_uid(user_id).await?;
 		// preliminary checks and mapping to sector local values
 		let sector_placements = placements.iter()
 			.copied()
@@ -470,8 +489,7 @@ impl Board {
 		for sector_index in used_sectors {
 			if let Entry::Vacant(vacant) = sectors.entry(sector_index) {
 				let sector =  self.sectors
-					.get_sector_mut(sector_index, connection).await
-					.map_err(PlaceError::DatabaseError)?
+					.get_sector_mut(sector_index, connection).await?
 					.expect("Missing sector");
 
 				vacant.insert(sector);
@@ -509,7 +527,7 @@ impl Board {
 				user_id,
 				connection,
 				&sectors,
-			).await.map_err(PlaceError::DatabaseError)?;
+			).await?;
 
 			if cooldown_info.pixels_available < changes {
 				return Err(PlaceError::Cooldown);
@@ -524,7 +542,7 @@ impl Board {
 			placements,
 			timestamp,
 			user_id,
-		).await.map_err(PlaceError::DatabaseError)?;
+		).await?;
 
 		for ((sector_index, sector_offset), color) in sector_placements {
 			let sector = sectors.get_mut(&sector_index).unwrap();
@@ -576,7 +594,7 @@ impl Board {
 			user_id,
 			connection,
 			&sectors,
-		).await.map_err(PlaceError::DatabaseError)?; // TODO: maybe cooldown err instead
+		).await?; // TODO: maybe cooldown err instead
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
@@ -592,30 +610,29 @@ impl Board {
 		position: u64,
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, UndoError> {
-		let uid = connection.get_uid(user_id).await
-			.map_err(UndoError::DatabaseError)?;
+		if connection.is_user_banned(user_id).await? {
+			return Err(UndoError::Banned)
+		}
+
+		let uid = connection.get_uid(user_id).await?;
 
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
 			.ok_or(UndoError::OutOfBounds)?;
 
 		let mut sector = self.sectors
-			.get_sector_mut(sector_index, connection).await
-			.map_err(UndoError::DatabaseError)?
+			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
-		let transaction = connection.begin().await
-			.map_err(UndoError::DatabaseError)?;
+		let transaction = connection.begin().await?;
 		
 		let (undone_placement, last_placement) = transaction
-			.get_two_placements(self.id, position).await
-			.map_err(UndoError::DatabaseError)?;
+			.get_two_placements(self.id, position).await?;
 
-		let uid = connection.get_uid(user_id).await
-			.map_err(UndoError::DatabaseError)?;
+		let uid = connection.get_uid(user_id).await?;
 
 		let placement_id = match undone_placement {
 			Some(placement) if placement.user_id == uid => {
@@ -628,8 +645,7 @@ impl Board {
 			_ => return Err(UndoError::WrongUser)
 		};
 
-		transaction.delete_placement(placement_id).await
-			.map_err(UndoError::DatabaseError)?;
+		transaction.delete_placement(placement_id).await?;
 
 		let (color, timestamp) = match last_placement {
 			Some(placement) => (placement.color, placement.timestamp),
@@ -641,8 +657,7 @@ impl Board {
 			.as_mut()
 			.put_u32_le(timestamp);
 
-		transaction.commit().await
-			.map_err(UndoError::DatabaseError)?;
+		transaction.commit().await?;
 
 		statistics_lock.colors.entry(color).or_default().placed -= 1;
 
@@ -666,7 +681,7 @@ impl Board {
 			user_id,
 			connection,
 			&HashMap::from([(sector_index, sector)]),
-		).await.map_err(UndoError::DatabaseError)?;
+		).await?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
@@ -686,8 +701,11 @@ impl Board {
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
 	) -> Result<(CooldownInfo, Placement), PlaceError> {
-		let uid = connection.get_uid(user_id).await
-			.map_err(PlaceError::DatabaseError)?;
+		if connection.is_user_banned(user_id).await? {
+			return Err(PlaceError::Banned)
+		}
+
+		let uid = connection.get_uid(user_id).await?;
 
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
@@ -696,8 +714,7 @@ impl Board {
 		self.check_placement_palette(color, overrides.color)?;
 		
 		let sector = self.sectors
-			.get_sector_mut(sector_index, connection).await
-			.map_err(PlaceError::DatabaseError)?
+			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
 
 		let mut sectors = HashMap::from([(sector_index, sector)]);
@@ -729,7 +746,7 @@ impl Board {
 				user_id,
 				connection,
 				&sectors,
-			).await.map_err(PlaceError::DatabaseError)?;
+			).await?;
 
 			if cooldown_info.pixels_available == 0 {
 				return Err(PlaceError::Cooldown);
@@ -743,7 +760,7 @@ impl Board {
 			timestamp,
 			user_id,
 			users_connection,
-		).await.map_err(PlaceError::DatabaseError)?;
+		).await?;
 
 		let mut cache = self.placement_cache.write().await;
 		cache.insert(CachedPlacement {
@@ -782,7 +799,7 @@ impl Board {
 			user_id,
 			connection,
 			&sectors,
-		).await.map_err(PlaceError::DatabaseError)?; // TODO: maybe cooldown err instead
+		).await?; // TODO: maybe cooldown err instead
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 

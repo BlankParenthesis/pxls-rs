@@ -228,6 +228,13 @@ async fn main() {
 		routes::placement_statistics::users::list(Arc::clone(&boards), Arc::clone(&users_db), Arc::clone(&boards_db)).boxed()
 		.or(routes::placement_statistics::users::get(Arc::clone(&boards), Arc::clone(&users_db), Arc::clone(&boards_db)).boxed());
 
+	let routes_user_bans = 
+		routes::user_bans::users::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
+		.or(routes::user_bans::users::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::user_bans::users::post(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::user_bans::users::patch(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
+		.or(routes::user_bans::users::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
+
 	let routes = 
 		routes_core
 		.or(routes_lifecycle)
@@ -246,6 +253,7 @@ async fn main() {
 		.or(routes_site_notices)
 		.or(routes_board_notices)
 		.or(routes_reports)
+		.or(routes_user_bans)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())

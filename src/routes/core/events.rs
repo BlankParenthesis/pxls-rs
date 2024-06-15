@@ -20,6 +20,7 @@ use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::UserStats;
 use crate::routes::reports::reports::Report;
 use crate::routes::site_notices::notices::Notice;
+use crate::routes::user_bans::users::Ban;
 use crate::socket::ServerPacket;
 
 type Socket = crate::socket::Socket<Subscription>;
@@ -166,7 +167,46 @@ impl Connections {
 						socket.send(packet).await;
 					}
 				}
-			}
+			},
+			EventPacket::UserBanCreated { user, .. } => {
+				for socket in self.by_subscription[Subscription::UsersBans].iter() {
+					socket.send(packet).await
+				}
+				
+				let user = Some(user.clone());
+				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
+						socket.send(packet).await;
+					}
+				}
+			},
+			EventPacket::UserBanUpdated { user, .. } => {
+				for socket in self.by_subscription[Subscription::UsersBans].iter() {
+					socket.send(packet).await
+				}
+				
+				let user = Some(user.clone());
+				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
+						socket.send(packet).await;
+					}
+				}
+			},
+			EventPacket::UserBanDeleted { user, .. } => {
+				for socket in self.by_subscription[Subscription::UsersBans].iter() {
+					socket.send(packet).await
+				}
+				
+				let user = Some(user.clone());
+				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+				for socket in sockets {
+					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
+						socket.send(packet).await;
+					}
+				}
+			},
 		};
 
 	}
@@ -239,7 +279,23 @@ pub enum EventPacket<'l> {
 		#[serde(skip_serializing)]
 		user: Option<String>,
 		stats: UserStats,
-	}
+	},
+	UserBanCreated {
+		#[serde(skip_serializing)]
+		user: String,
+		ban: Reference<Ban>,
+	},
+	UserBanUpdated {
+		#[serde(skip_serializing)]
+		user: String,
+		ban: Reference<Ban>,
+	},
+	UserBanDeleted {
+		#[serde(skip_serializing)]
+		user: String,
+		#[serde(with = "http_serde::uri")]
+		ban: Uri,
+	},
 }
 
 impl<'l> ServerPacket for EventPacket<'l> {}
@@ -258,6 +314,8 @@ enum Subscription {
 	Reports,
 	ReportsOwned,
 	Statistics,
+	UsersBans,
+	UsersCurrentBans,
 }
 
 impl Subscription {
@@ -284,6 +342,8 @@ impl From<Subscription> for Permission {
 			Subscription::Reports => Permission::EventsReports,
 			Subscription::ReportsOwned => Permission::EventsReportsOwned,
 			Subscription::Statistics => Permission::EventsStatistics,
+			Subscription::UsersBans => Permission::EventsUsersBans,
+			Subscription::UsersCurrentBans => Permission::EventsUsersCurrentBans,
 		}
 	}
 }

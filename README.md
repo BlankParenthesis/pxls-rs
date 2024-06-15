@@ -26,7 +26,7 @@ Important missing features:
 	- [X] [reports](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/reports.md)
 	- [X] [roles](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/roles.md)
 	- [X] [site_notices](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/site_notices.md)
-	- [ ] [user_bans](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/user_bans.md)
+	- [X] [user_bans](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/user_bans.md)
 	- [X] [user_count](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/user_count.md)
 	- [X] [users](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/users.md)
 

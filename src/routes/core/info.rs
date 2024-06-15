@@ -48,6 +48,7 @@ lazy_static! {
 			"list_filtering",
 			"reports",
 			"placement_statistics",
+			"user_bans",
 		],
 	};
 }

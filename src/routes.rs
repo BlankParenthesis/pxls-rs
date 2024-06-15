@@ -14,3 +14,4 @@ pub mod site_notices;
 pub mod board_notices;
 pub mod reports;
 pub mod placement_statistics;
+pub mod user_bans;

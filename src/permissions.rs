@@ -68,6 +68,13 @@ pub enum Permission {
 	FactionsMembersDelete,
 	UsersStatsGet,
 	UsersStatsList,
+	UsersBansList,
+	UsersBansGet,
+	UsersBansPost,
+	UsersBansPatch,
+	UsersBansDelete,
+	UsersCurrentBansList,
+	UsersCurrentBansGet,
 	BoardsEventsDataColors,
 	BoardsEventsDataTimestamps,
 	BoardsEventsDataInitial,
@@ -87,6 +94,8 @@ pub enum Permission {
 	EventsReports,
 	EventsReportsOwned,
 	EventsStatistics,
+	EventsUsersBans,
+	EventsUsersCurrentBans,
 }
 
 impl Permission {
@@ -110,6 +119,8 @@ impl Permission {
 			Self::ReportsGet => Some(Self::ReportsOwnedGet),
 			Self::ReportsPatch => Some(Self::ReportsOwnedPatch),
 			Self::ReportsDelete => Some(Self::ReportsOwnedDelete),
+			Self::UsersBansList => Some(Self::UsersCurrentBansList),
+			Self::UsersBansGet => Some(Self::UsersCurrentBansGet),
 			_ => None,
 		}
 	}
@@ -179,8 +190,15 @@ impl From<&Permission> for &str {
 			Permission::FactionsMembersPost => "factions.members.post",
 			Permission::FactionsMembersPatch => "factions.members.patch",
 			Permission::FactionsMembersDelete => "factions.members.delete",
-			Permission::UsersStatsGet => "users.stats.get",
 			Permission::UsersStatsList => "users.stats.list",
+			Permission::UsersStatsGet => "users.stats.get",
+			Permission::UsersBansList => "users.bans.list",
+			Permission::UsersBansGet => "users.bans.get",
+			Permission::UsersBansPost => "users.bans.post",
+			Permission::UsersBansPatch => "users.bans.patch",
+			Permission::UsersBansDelete => "users.bans.delete",
+			Permission::UsersCurrentBansGet => "users.current.bans.get",
+			Permission::UsersCurrentBansList => "users.current.bans.list",
 			Permission::BoardsEventsDataColors => "boards.events.data.colors",
 			Permission::BoardsEventsDataTimestamps => "boards.events.data.timestamps",
 			Permission::BoardsEventsDataInitial => "boards.events.data.initial",
@@ -200,6 +218,8 @@ impl From<&Permission> for &str {
 			Permission::EventsReports => "events.reports",
 			Permission::EventsReportsOwned => "events.reports.owned",
 			Permission::EventsStatistics => "events.stats",
+			Permission::EventsUsersBans => "events.users.bans",
+			Permission::EventsUsersCurrentBans => "events.users.current.bans",
 		}
 	}
 }
@@ -271,8 +291,15 @@ impl TryFrom<&str> for Permission {
 			"factions.members.get" => Ok(Permission::FactionsMembersGet),
 			"factions.members.post" => Ok(Permission::FactionsMembersPost),
 			"factions.members.patch" => Ok(Permission::FactionsMembersPatch),
-			"users.stats.get" => Ok(Permission::UsersStatsGet),
 			"users.stats.list" => Ok(Permission::UsersStatsList),
+			"users.stats.get" => Ok(Permission::UsersStatsGet),
+			"users.bans.list" => Ok(Permission::UsersBansList),
+			"users.bans.get" => Ok(Permission::UsersBansGet),
+			"users.bans.post" => Ok(Permission::UsersBansPost),
+			"users.bans.patch" => Ok(Permission::UsersBansPatch),
+			"users.bans.delete" => Ok(Permission::UsersBansDelete),
+			"users.current.bans.get" => Ok(Permission::UsersCurrentBansGet),
+			"users.current.bans.list" => Ok(Permission::UsersCurrentBansList),
 			"factions.members.delete" => Ok(Permission::FactionsMembersDelete),
 			"boards.events.data.colors" => Ok(Permission::BoardsEventsDataColors),
 			"boards.events.data.timestamps" => Ok(Permission::BoardsEventsDataTimestamps),
@@ -293,6 +320,8 @@ impl TryFrom<&str> for Permission {
 			"events.reports" => Ok(Permission::EventsReports),
 			"events.reports.owned" => Ok(Permission::EventsReportsOwned),
 			"events.stats" => Ok(Permission::EventsStatistics),
+			"events.users.bans" => Ok(Permission::EventsUsersBans),
+			"events.users.current.bans" => Ok(Permission::EventsUsersCurrentBans),
 			_ => Err(()),
 		}
 	}
