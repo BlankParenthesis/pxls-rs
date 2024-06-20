@@ -8,11 +8,8 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use url::form_urlencoded::byte_serialize;
 use warp::http::Uri;
-use warp::hyper::Response;
 use warp::ws::Ws;
-use warp::{Reply, Rejection};
-use warp::{http::header, Filter};
-use warp::path::Tail;
+use warp::{Reply, Rejection, Filter};
 
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
 use crate::filter::header::authorization::{Bearer, authorized};
@@ -169,22 +166,23 @@ pub fn list(
 		})
 }
 
-pub fn default() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+pub fn default(boards: BoardDataMap) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path("default"))
-		.and(warp::path::tail())
-		.map(|path_tail: Tail| {
-			// TODO: determine which board to use as default.
-			let id = 1;
+		.and(warp::path::end())
+		.then(move || {
+			let boards = boards.clone();
+			async move {
+				// TODO: determine which board to use as default.
+				let id = 1;
 
-			Response::builder()
-				.status(StatusCode::SEE_OTHER)
-				.header(
-					header::LOCATION,
-					format!("/boards/{}/{}", id, path_tail.as_str()),
-				)
-				.body("")
-				.unwrap()
+				let boards = boards.read().await;
+				let board = boards.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+				let board = board.read().await;
+				let board = board.as_ref().expect("Board went missing");
+				let reference = Reference::new(Uri::from(board), board);
+				Ok::<_, StatusCode>(warp::reply::json(&reference))
+			}
 		})
 }
 

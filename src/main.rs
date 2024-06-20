@@ -70,7 +70,7 @@ async fn main() {
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
 		)).boxed()
-		.or(routes::core::boards::default()).boxed()
+		.or(routes::core::boards::default(Arc::clone(&boards))).boxed()
 		.or(routes::core::boards::events(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
