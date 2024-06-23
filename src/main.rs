@@ -276,6 +276,9 @@ async fn main() {
 					Method::POST,
 					Method::DELETE,
 					Method::PATCH,
+				])
+				.allow_headers([
+					"authorization"
 				]), // TODO: allow headers
 		);
 
