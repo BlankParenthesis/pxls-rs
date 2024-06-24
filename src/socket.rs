@@ -174,8 +174,8 @@ impl<S: EnumSetType> SocketWrapperInit<S> where Permission: From<S> {
 		F: FnOnce(Arc<Socket<S>>) -> O,
 		O: std::future::Future<Output = ()>,
 	{
+		self.socket.ready().await;
 		f(self.socket.clone()).await;
-
 		self.socket.run(self.receiver).await;
 
 		SocketWrapperShutdown {
@@ -433,7 +433,6 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		&self,
 		mut receiver: SplitStream<ws::WebSocket>,
 	) {
-		self.ready().await;
 		while let Some(Ok(msg)) = receiver.receive().await {
 			match msg {
 				Message::Packet(ClientPacket::Authenticate { token }) => {

@@ -412,8 +412,27 @@ impl Board {
 			}),
 			data: None,
 		};
+		
+		let users = if max_pixels_available.is_some() {
+			self.connections.users()
+		} else {
+			vec![]
+		};
+		
+		let mut cooldowns = Vec::with_capacity(users.len());
+		// NOTE: we don't need to worry about race conditions because we have
+		// exclusive access to board here (&mut).
+		let locks = HashMap::new();
+		for user in users {
+			let cooldown = self.user_cooldown_info(user, connection, &locks).await?;
+			cooldowns.push((user, cooldown));
+		}
 
 		self.connections.send(packet).await;
+
+		for (user, cooldown) in cooldowns {
+			self.connections.set_user_cooldown(user, cooldown).await;
+		}
 
 		Ok(())
 	}
@@ -1031,6 +1050,7 @@ impl Board {
 	) -> Result<(), BoardsDatabaseError> {
 		let id = socket.user_id().await;
 
+		// TODO: is this needed?
 		let cooldown_info = if let Some(ref user_id) = id {
 			Some(self.user_cooldown_info(user_id, connection, &HashMap::new()).await?)
 		} else {

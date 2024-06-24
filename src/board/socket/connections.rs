@@ -309,4 +309,10 @@ impl Connections {
 			}
 		}
 	}
+
+	pub fn users(&self) -> Vec<&str> {
+		self.by_uid.keys()
+			.filter_map(|u| u.as_ref().map(|s| s.as_str()))
+			.collect()
+	}
 }
