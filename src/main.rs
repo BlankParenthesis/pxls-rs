@@ -277,9 +277,13 @@ async fn main() {
 					Method::DELETE,
 					Method::PATCH,
 				])
+				.expose_headers([
+					"pxls-pixels-available",
+					"pxls-next-available",
+				])
 				.allow_headers([
-					"authorization"
-				]), // TODO: allow headers
+					"authorization",
+				]),
 		);
 
 	// Temporary fix for gzip until https://github.com/seanmonstar/warp/pull/513
