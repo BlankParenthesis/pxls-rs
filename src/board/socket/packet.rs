@@ -166,29 +166,35 @@ impl BoardUpdateBuilder {
 		let initial = self.initial.map(Vec::into_boxed_slice);
 		let mask = self.mask.map(Vec::into_boxed_slice);
 
-		let mut available_types = vec![];
+		let mut used_types = vec![];
 
 		if colors.is_some() {
-			available_types.push(DataType::Colors);
+			used_types.push(DataType::Colors);
 		}
 
 		if timestamps.is_some() {
-			available_types.push(DataType::Timestamps);
+			used_types.push(DataType::Timestamps);
 		}
 
 		if initial.is_some() {
-			available_types.push(DataType::Initial);
+			used_types.push(DataType::Initial);
 		}
 
 		if mask.is_some() {
-			available_types.push(DataType::Mask);
+			used_types.push(DataType::Mask);
 		}
 
 		if self.info.is_some() {
-			available_types.push(DataType::Info);
+			used_types.push(DataType::Info);
 		}
 
-		for combination in available_types.into_iter().powerset().skip(1) {
+		for combination in EnumSet::<DataType>::all().iter().powerset().skip(1) {
+			if !used_types.iter().any(|t| combination.iter().contains(t)) {
+				// if the combination does not contain any used type,
+				// it is empty and can be  skipped
+				continue;
+			}
+
 			let mut info = None;
 			let mut data = BoardData::default();
 
