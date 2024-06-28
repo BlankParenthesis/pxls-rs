@@ -846,7 +846,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.stream(&self.connection).await?;
 
 		while let Some(placement) = placements.try_next().await? {
-			let index = placement.position as usize;
+			let index = placement.position as usize % sector_size;
 			colors[index] = placement.color as u8;
 			
 			let index4 = index * 4..index * 4 + 4;
