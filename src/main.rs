@@ -283,6 +283,7 @@ async fn main() {
 				])
 				.allow_headers([
 					"authorization",
+					"content-type",
 				]),
 		);
 
