@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use tokio::sync::RwLock;
+use warp::http::StatusCode;
 use warp::{
-	http::{StatusCode, Uri},
 	Filter,
 	Reply,
 	Rejection,
-	path::Tail,
 };
 
 use crate::routes::core::{EventPacket, Connections};
@@ -89,14 +88,14 @@ pub fn current(
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path("current"))
-		.and(warp::path::tail())
+		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorization::authorized(users_db, Permission::UsersCurrentGet.into()))
-		.then(|tail: Tail, user: Option<Bearer>, _| async move {
+		.then(|user: Option<Bearer>, mut connection: UsersConnection| async move {
 			if let Some(uid) = user.map(|b| b.id) {
-				let location = format!("/users/{}/{}", uid, tail.as_str())
-					.parse::<Uri>().unwrap();
-				Ok(warp::redirect::temporary(location))
+				connection.get_user(&uid).await
+					.map(|user| Reference::new(User::uri(&uid), &user).reply())
+					.map_err(StatusCode::from)
 			} else {
 				Err(StatusCode::UNAUTHORIZED)
 			}
