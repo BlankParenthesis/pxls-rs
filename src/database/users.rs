@@ -1016,6 +1016,103 @@ impl UsersConnection {
 		Ok(Page { items, next, previous: None })
 	}
 
+	pub async fn list_user_factions(
+		&mut self,
+		page: LdapPageToken,
+		limit: usize,
+		filter: FactionFilter,
+		uid: &str,
+	) -> Result<Page<Reference<Faction>>, UsersDatabaseError> {
+		let pager = PagedResults {
+			size: limit as i32,
+			cookie: page.0,
+		};
+
+		let mut filters = vec![
+			format!("(member={})", user_dn(uid)),
+		];
+
+		if let Some(ref name) = filter.name {
+			filters.push(format!("(cn={})", name))
+		}
+		
+		if let Some(start) = filter.created_at.start {
+			let timestamp = LDAPTimestamp::from(start);
+			filters.push(format!("(createTimestamp>={})", String::from(timestamp)));
+		}
+
+		if let Some(end) = filter.created_at.end {
+			let timestamp = LDAPTimestamp::from(end);
+			filters.push(format!("(createTimestamp<={})", String::from(timestamp)));
+		}
+
+		// TODO: filter by member count
+		// NOTE: this is not trivial because the count is implicit but ldap won't count it for us
+
+		let (results, status) = self.connection.with_controls(pager)
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				&if filters.is_empty() {
+					"(cn=*)".to_string()
+				} else {
+					format!("(&{})", filters.join(""))
+				},
+				Faction::search_fields(),
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			// a bit presumptuous, but should be correct enough
+			// Update: too presumptuous, this errors if the ou doesn't exist
+			// TODO: try to determine error type and use that
+			.map_err(|_| FetchError::InvalidPage)?;
+
+		let page_data = status.ctrls.iter()
+			.find(|Control(t, _)| matches!(t, Some(ControlType::PagedResults)))
+			.map(|Control(_, d)| d.parse::<PagedResults>())
+			.ok_or(FetchError::MissingPagerData)?;
+
+		let items = results.into_iter()
+			.map(SearchEntry::construct)
+			.map(|f| {
+				let fid = Faction::id_from(&f)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)?;
+				let faction = Faction::try_from(f)
+					.map_err(ParseError::from)
+					.map_err(FetchError::ParseError)?;
+				Ok::<_, FetchError>(Reference::new(Faction::uri(&fid), faction))
+			})
+			.collect::<Result<_, _>>()?;
+		
+
+		let next = if page_data.cookie.is_empty() {
+			None
+		} else {
+			let page = LdapPageToken(page_data.cookie);
+			let mut uri = format!(
+				"/factions?limit={}&page={}",
+				limit, page
+			);
+
+			if let Some(name) = filter.name {
+				if let Some(name) = byte_serialize(name.as_bytes()).next() {
+					uri.push_str(&format!("&name={}", name))
+				}
+			}
+			if !filter.created_at.is_open() {
+				uri.push_str(&format!("&created_at={}", filter.created_at))
+			}
+			if !filter.size.is_open() {
+				uri.push_str(&format!("&size={}", filter.size))
+			}
+
+			Some(uri.parse().unwrap())
+		};
+
+		Ok(Page { items, next, previous: None })
+	}
+
 	pub async fn get_faction(
 		&mut self,
 		id: &str,

@@ -44,7 +44,7 @@ async fn main() {
 	let boards_db = BoardsDatabase::connect().await
 		.expect("Failed to connect to boards database");
 	let boards_db = Arc::new(boards_db);
-	
+
 	let users_db = UsersDatabase::connect().await
 		.expect("Failed to connect to users database");
 	let users_db = Arc::new(users_db);
@@ -60,7 +60,7 @@ async fn main() {
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
 	let sockets = Arc::new(RwLock::new(Connections::default()));
 
-	let routes_core = 
+	let routes_core =
 		routes::core::info::get(Arc::clone(&users_db)).boxed()
 		.or(routes::core::events(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
 		.or(routes::core::access::get(Arc::clone(&users_db)).boxed())
@@ -98,7 +98,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		)).boxed();
 
-	let routes_lifecycle = 
+	let routes_lifecycle =
 		routes::board_lifecycle::boards::post(
 			Arc::clone(&sockets),
 			Arc::clone(&boards),
@@ -117,7 +117,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		)).boxed();
 
-	let routes_data_initial = 
+	let routes_data_initial =
 		routes::board_data_initial::boards::data::get_initial(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
@@ -129,7 +129,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		)).boxed();
 
-	let routes_data_mask = 
+	let routes_data_mask =
 		routes::board_data_mask::boards::data::get_mask(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
@@ -141,23 +141,23 @@ async fn main() {
 			Arc::clone(&users_db),
 		)).boxed();
 
-	let routes_data_timestamps = 
+	let routes_data_timestamps =
 		routes::board_data_timestamps::boards::data::get_timestamps(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
 		).boxed();
 
-	let routes_authentication = 
+	let routes_authentication =
 		routes::authentication::authentication::get().boxed();
 
-	let routes_users = 
+	let routes_users =
 		routes::users::users::list(Arc::clone(&users_db)).boxed()
 		.or(routes::users::users::current(Arc::clone(&users_db)).boxed())
 		.or(routes::users::users::get(Arc::clone(&users_db)).boxed())
 		.or(routes::users::users::patch(Arc::clone(&users_db), Arc::clone(&sockets)).boxed())
 		.or(routes::users::users::delete(Arc::clone(&users_db)).boxed());
-		
+
 	let routes_roles =
 		routes::roles::users::roles::list(Arc::clone(&users_db)).boxed()
 		.or(routes::roles::users::roles::post(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
@@ -167,8 +167,8 @@ async fn main() {
 		.or(routes::roles::roles::post(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
 		.or(routes::roles::roles::patch(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
 		.or(routes::roles::roles::delete(Arc::clone(&sockets), Arc::clone(&users_db)).boxed());
-	
-	let routes_usercount = 
+
+	let routes_usercount =
 		routes::user_count::boards::users(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
@@ -182,7 +182,7 @@ async fn main() {
 			Arc::clone(&users_db),
 		).boxed();
 
-	let routes_undo = 
+	let routes_undo =
 		routes::board_undo::boards::pixels::delete(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
@@ -199,23 +199,24 @@ async fn main() {
 		.or(routes::factions::factions::members::get(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::post(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::patch(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::members::delete(Arc::clone(&users_db)).boxed());
+		.or(routes::factions::factions::members::delete(Arc::clone(&users_db)).boxed())
+		.or(routes::factions::users::factions::list(Arc::clone(&users_db)).boxed());
 
-	let routes_site_notices = 
+	let routes_site_notices =
 		routes::site_notices::notices::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
 		.or(routes::site_notices::notices::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::site_notices::notices::post(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::site_notices::notices::patch(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::site_notices::notices::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
-	let routes_board_notices = 
+	let routes_board_notices =
 		routes::board_notices::boards::notices::list(Arc::clone(&boards), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
 		.or(routes::board_notices::boards::notices::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::board_notices::boards::notices::post(Arc::clone(&boards), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::board_notices::boards::notices::patch(Arc::clone(&boards), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::board_notices::boards::notices::delete(Arc::clone(&boards), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
-	let routes_reports = 
+	let routes_reports =
 		routes::reports::reports::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
 		.or(routes::reports::reports::owned(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::reports::reports::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
@@ -224,18 +225,18 @@ async fn main() {
 		.or(routes::reports::reports::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::reports::reports::history(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
-	let routes_placement_statistics = 
+	let routes_placement_statistics =
 		routes::placement_statistics::users::list(Arc::clone(&boards), Arc::clone(&users_db), Arc::clone(&boards_db)).boxed()
 		.or(routes::placement_statistics::users::get(Arc::clone(&boards), Arc::clone(&users_db), Arc::clone(&boards_db)).boxed());
 
-	let routes_user_bans = 
+	let routes_user_bans =
 		routes::user_bans::users::list(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed()
 		.or(routes::user_bans::users::get(Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::user_bans::users::post(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::user_bans::users::patch(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed())
 		.or(routes::user_bans::users::delete(Arc::clone(&sockets), Arc::clone(&boards_db), Arc::clone(&users_db)).boxed());
 
-	let routes = 
+	let routes =
 		routes_core
 		.or(routes_lifecycle)
 		.or(routes_data_initial)
