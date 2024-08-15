@@ -54,7 +54,28 @@ pub fn get(
 		.and(authorization::authorized(users_db, Permission::FactionsMembersGet.into()))
 		.then(move |fid: String, uid: String, _, mut connection: UsersConnection| async move {
 			connection.get_faction_member(&fid, &uid).await
-				.map(|member| warp::reply::json(&member))
+				.map(|member| member.deref())
+		})
+}
+
+pub fn current(
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+	warp::path("factions")
+		.and(warp::path::param())
+		.and(warp::path("members"))
+		.and(warp::path("current"))
+		.and(warp::path::end())
+		.and(warp::get())
+		.and(authorization::authorized(users_db, Permission::FactionsMembersCurrentGet.into()))
+		.then(move |fid: String, user: Option<Bearer>, mut connection: UsersConnection| async move {
+			if let Some(uid) = user.map(|b| b.id) {
+				connection.get_faction_member(&fid, &uid).await
+					.map(|member| member.reply())
+					.map_err(StatusCode::from)
+			} else {
+				Err(StatusCode::UNAUTHORIZED)
+			}
 		})
 }
 

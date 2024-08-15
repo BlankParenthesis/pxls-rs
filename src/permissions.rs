@@ -63,6 +63,7 @@ pub enum Permission {
 	FactionsDelete,
 	FactionsMembersList,
 	FactionsMembersGet,
+	FactionsMembersCurrentGet,
 	FactionsMembersPost,
 	FactionsMembersPatch,
 	FactionsMembersDelete,
@@ -124,6 +125,7 @@ impl Permission {
 			Self::UsersBansList => Some(Self::UsersCurrentBansList),
 			Self::UsersBansGet => Some(Self::UsersCurrentBansGet),
 			Self::UsersFactionsList => Some(Self::UsersCurrentFactionsList),
+			Self::FactionsMembersGet => Some(Self::FactionsMembersCurrentGet),
 			_ => None,
 		}
 	}
@@ -190,6 +192,7 @@ impl From<&Permission> for &str {
 			Permission::FactionsDelete => "factions.delete",
 			Permission::FactionsMembersList => "factions.members.list",
 			Permission::FactionsMembersGet => "factions.members.get",
+			Permission::FactionsMembersCurrentGet => "factions.members.current.get",
 			Permission::FactionsMembersPost => "factions.members.post",
 			Permission::FactionsMembersPatch => "factions.members.patch",
 			Permission::FactionsMembersDelete => "factions.members.delete",
@@ -294,6 +297,7 @@ impl TryFrom<&str> for Permission {
 			"factions.delete" => Ok(Permission::FactionsDelete),
 			"factions.members.list" => Ok(Permission::FactionsMembersList),
 			"factions.members.get" => Ok(Permission::FactionsMembersGet),
+			"factions.members.current.get" => Ok(Permission::FactionsMembersCurrentGet),
 			"factions.members.post" => Ok(Permission::FactionsMembersPost),
 			"factions.members.patch" => Ok(Permission::FactionsMembersPatch),
 			"factions.members.delete" => Ok(Permission::FactionsMembersDelete),

@@ -196,6 +196,7 @@ async fn main() {
 		.or(routes::factions::factions::patch(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::delete(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::list(Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::members::current(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::get(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::post(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::patch(Arc::clone(&users_db)).boxed())
