@@ -936,7 +936,21 @@ impl UsersConnection {
 		let mut filters = vec![];
 
 		if let Some(ref name) = filter.name {
-			filters.push(format!("(cn={})", name))
+			let escaped = ldap_escape(name);
+			// allow wildcards
+			let split = escaped.split("\\2a").collect::<Vec<_>>();
+			let last = split.len() - 1;
+			let name = split.into_iter()
+			.enumerate()
+				// but merge consecutive *'s (as they produce an ldap error).
+				// We keep the first and last ones always so we have a point to
+				// join at.
+				.filter(|(i, s)| !s.is_empty() || *i == 0 || *i == last)
+				.map(|(_, s)| s)
+				.collect::<Vec<_>>()
+				.join("*");
+
+			filters.push(format!("(pxlsspaceFactionName={})", name));
 		}
 		
 		if let Some(start) = filter.created_at.start {
