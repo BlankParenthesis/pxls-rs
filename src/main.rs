@@ -13,6 +13,7 @@ mod routes;
 mod socket;
 mod permissions;
 
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use database::{BoardsDatabase, UsersDatabase, Database, UsersDatabaseError};
@@ -271,6 +272,7 @@ async fn main() {
 		})
 		.with(
 			warp::cors::cors()
+				.max_age(Duration::from_secs(60 * 60 * 24))
 				.allow_any_origin()
 				.allow_credentials(true)
 				.allow_methods([
