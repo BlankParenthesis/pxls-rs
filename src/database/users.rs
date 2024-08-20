@@ -105,7 +105,7 @@ impl From<&UsersDatabaseError> for StatusCode {
 }
 impl From<UsersDatabaseError> for StatusCode {
 	fn from(error: UsersDatabaseError) -> Self {
-		error.into()
+		StatusCode::from(&error)
 	}
 }
 impl Reply for &UsersDatabaseError {
