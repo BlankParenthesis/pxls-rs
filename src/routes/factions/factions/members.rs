@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::sync::RwLock;
 use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
@@ -10,8 +11,10 @@ use crate::filter::response::paginated_list::{
 	MAX_PAGE_ITEM_LIMIT
 };
 use crate::filter::header::authorization::{self, Bearer};
+use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
+use crate::database::{UsersDatabase, UsersConnection, LdapPageToken, UsersDatabaseError, FactionMember, User, JoinIntent};
+use crate::routes::core::{Connections, EventPacket};
 
 #[derive(Deserialize, Debug, Default)]
 pub struct MemberFilter {
@@ -135,6 +138,7 @@ struct FactionMemberPost {
 }
 
 pub fn post(
+	events: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("factions")
@@ -144,10 +148,37 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsMembersGet | Permission::FactionsMembersPost))
-		.then(move |fid: String, member: FactionMemberPost, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// FIXME: validate permissions
-			connection.add_faction_member(&fid, &member.user.0, member.owner).await
-				.map(|member| member.created())
+		.then(move |fid: String, member: FactionMemberPost, user: Option<Bearer>, mut connection: UsersConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				// FIXME: validate permissions
+
+				let uid = member.user.0;
+				
+				// TODO: event update for size change
+				// NOTE: maybe bundle these as with place events since a lot of them
+				// could happen in a given time frame (to reduce network load)
+
+				let member = connection.add_faction_member(
+					&fid,
+					&uid,
+					member.owner,
+				).await?;
+				
+				let faction = connection.get_faction(&fid).await?;
+				let owners = connection.get_faction_owners(&fid).await?;
+
+				let packet = EventPacket::FactionMemberUpdated {
+					owners,
+					user: uid,
+					faction,
+					member: member.clone(),
+				};
+				let events = events.read().await;
+				events.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(member.created())
+			}
 		})
 }
 
@@ -158,6 +189,7 @@ struct FactionMemberPatch {
 }
 
 pub fn patch(
+	events: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("factions")
@@ -168,14 +200,37 @@ pub fn patch(
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsMembersGet | Permission::FactionsMembersPatch))
-		.then(move |fid: String, uid: String, member: FactionMemberPatch, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// FIXME: validate permissions
-			connection.edit_faction_member(&fid, &uid, member.owner).await
-				.map(|member| warp::reply::json(&member))
+		.then(move |fid: String, uid: String, member: FactionMemberPatch, user: Option<Bearer>, mut connection: UsersConnection|  {
+			let events = Arc::clone(&events);
+			async move {
+				// FIXME: validate permissions
+
+				let member = connection.edit_faction_member(
+					&fid,
+					&uid,
+					member.owner,
+				).await?;
+
+
+				let faction = connection.get_faction(&fid).await?;
+				let owners = connection.get_faction_owners(&fid).await?;
+
+				let packet = EventPacket::FactionMemberUpdated {
+					owners,
+					user: uid,
+					faction,
+					member: member.clone(),
+				};
+				let events = events.read().await;
+				events.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(member.reply())
+			}
 		})
 }
 
 pub fn delete(
+	events: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("factions")
@@ -185,9 +240,39 @@ pub fn delete(
 		.and(warp::path::end())
 		.and(warp::delete())
 		.and(authorization::authorized(users_db, Permission::FactionsDelete.into()))
-		.then(move |fid: String, uid: String, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// FIXME: validate permissions
-			connection.remove_faction_member(&fid, &uid).await
-				.map(|()| StatusCode::NO_CONTENT)
+		.then(move |fid: String, uid: String, user: Option<Bearer>, mut connection: UsersConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				// FIXME: validate permissions
+				
+				// TODO: event update for size change
+				// NOTE: maybe bundle these as with place events since a lot of them
+				// could happen in a given time frame (to reduce network load)
+
+				connection.remove_faction_member(&fid, &uid).await?;
+
+				let faction = connection.get_faction(&fid).await?;
+				let owners = connection.get_faction_owners(&fid).await?;
+				let user = connection.get_user(&uid).await?;
+				let member = FactionMember {
+					owner: false,
+					join_intent: JoinIntent {
+						member: false,
+						faction: false,
+					},
+					user: Reference::new(User::uri(&uid), user),
+				};
+
+				let packet = EventPacket::FactionMemberUpdated {
+					owners,
+					faction,
+					member: Reference::new(FactionMember::uri(&fid, &uid), member),
+					user: uid,
+				};
+				let events = events.read().await;
+				events.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(StatusCode::NO_CONTENT)
+			}
 		})
 }

@@ -246,7 +246,7 @@ pub enum FactionParseError {
 	BadTimestamp(TimestampParseError),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Faction {
 	pub name: String,
 	pub created_at: i64,
@@ -309,10 +309,10 @@ impl TryFrom<SearchEntry> for Faction {
 	}
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct JoinIntent {
-	member: bool,
-	faction: bool,
+	pub member: bool,
+	pub faction: bool,
 }
 
 impl Default for JoinIntent {
@@ -321,7 +321,7 @@ impl Default for JoinIntent {
 	}
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FactionMember {
 	pub owner: bool,
 	pub join_intent: JoinIntent,

@@ -11,6 +11,9 @@ pub use users::{
 	Role,
 	UsersDatabaseError,
 	LdapPageToken,
+	Faction,
+	FactionMember,
+	JoinIntent,
 };
 pub use boards::{BoardsDatabase, BoardsDatabaseError};
 use warp::{reject::Reject, reply::Reply};

@@ -193,15 +193,15 @@ async fn main() {
 	let routes_factions =
 		routes::factions::factions::list(Arc::clone(&users_db)).boxed()
 		.or(routes::factions::factions::get(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::post(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::patch(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::delete(Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::post(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::patch(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::delete(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::list(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::current(Arc::clone(&users_db)).boxed())
 		.or(routes::factions::factions::members::get(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::members::post(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::members::patch(Arc::clone(&users_db)).boxed())
-		.or(routes::factions::factions::members::delete(Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::members::post(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::members::patch(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
+		.or(routes::factions::factions::members::delete(Arc::clone(&sockets), Arc::clone(&users_db)).boxed())
 		.or(routes::factions::users::factions::list(Arc::clone(&users_db)).boxed());
 
 	let routes_site_notices =

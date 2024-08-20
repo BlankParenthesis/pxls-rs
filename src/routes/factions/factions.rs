@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::sync::RwLock;
 use warp::http::StatusCode;
 use warp::{Filter, Reply, Rejection};
 
@@ -12,7 +13,8 @@ use crate::filter::response::paginated_list::{
 };
 use crate::filter::header::authorization::{self, Bearer};
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
+use crate::database::{UsersDatabase, UsersConnection, LdapPageToken, UsersDatabaseError, Faction};
+use crate::routes::core::{Connections, EventPacket};
 
 pub mod members;
 
@@ -65,6 +67,7 @@ struct FactionPost {
 }
 
 pub fn post(
+	events: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("factions")
@@ -72,17 +75,31 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsGet | Permission::FactionsPost))
-		.then(move |faction: FactionPost, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// FIXME: validate name
+		.then(move |faction: FactionPost, user: Option<Bearer>, mut connection: UsersConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				// FIXME: validate name
 
-			let id = connection.create_faction(&faction.name).await?;
+				let id = connection.create_faction(&faction.name).await?;
 
-			if let Some(owner) = user {
-				connection.add_faction_member(&id, &owner.id, true).await?;
+				let mut members = vec![];
+
+				if let Some(owner) = user {
+					connection.add_faction_member(&id, &owner.id, true).await?;
+					members.push(owner.id);
+				}
+
+				let faction = connection.get_faction(&id).await?;
+
+				let packet = EventPacket::FactionCreated {
+					members,
+					faction: faction.clone(),
+				};
+				let events = events.read().await;
+				events.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(faction.created())
 			}
-
-			connection.get_faction(&id).await
-				.map(|faction| faction.created())
 		})
 }
 
@@ -92,6 +109,7 @@ struct FactionPatch {
 }
 
 pub fn patch(
+	events: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("factions")
@@ -100,17 +118,30 @@ pub fn patch(
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsGet | Permission::FactionsPatch))
-		.then(move |id: String, faction: FactionPatch, user: Option<Bearer>, mut connection: UsersConnection| async move {
-			// FIXME: validate name
-			// FIXME: check if user is owner, possibly add new related permissions
-			connection.update_faction(&id, &faction.name).await?;
+		.then(move |id: String, faction: FactionPatch, user: Option<Bearer>, mut connection: UsersConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				// FIXME: validate name
+				// FIXME: check if user is owner, possibly add new related permissions
+				connection.update_faction(&id, &faction.name).await?;
 
-			connection.get_faction(&id).await
-				.map(|faction| warp::reply::json(&faction))
+				let faction = connection.get_faction(&id).await?;
+				let members = connection.get_all_faction_members(&id).await?;
+
+				let packet = EventPacket::FactionUpdated {
+					members,
+					faction: faction.clone(),
+				};
+				let events = events.read().await;
+				events.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(faction.reply())
+			}
 		})
 }
 
 pub fn delete(
+	events: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("factions")
@@ -118,9 +149,21 @@ pub fn delete(
 		.and(warp::path::end())
 		.and(warp::delete())
 		.and(authorization::authorized(users_db, Permission::FactionsDelete.into()))
-		.then(move |id: String, _, mut connection: UsersConnection| async move {
-			connection.delete_faction(&id).await
-				.map(|()| StatusCode::NO_CONTENT)
+		.then(move |id: String, _, mut connection: UsersConnection| {
+			let events = Arc::clone(&events);
+			async move {
+				let members = connection.get_all_faction_members(&id).await?;
+				connection.delete_faction(&id).await?;
+
+				let packet = EventPacket::FactionDeleted {
+					members,
+					faction: Faction::uri(&id),
+				};
+				let events = events.read().await;
+				events.send(&packet).await;
+
+				Ok::<_, UsersDatabaseError>(StatusCode::NO_CONTENT)
+			}
 		})
 }
 

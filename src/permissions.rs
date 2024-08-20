@@ -99,6 +99,10 @@ pub enum Permission {
 	EventsStatistics,
 	EventsUsersBans,
 	EventsUsersCurrentBans,
+	EventsFactions,
+	EventsFactionsCurrent,
+	EventsFactionsMembers,
+	EventsFactionsCurrentMembers,
 }
 
 impl Permission {
@@ -115,8 +119,6 @@ impl Permission {
 			Self::UsersRolesGet => Some(Self::UsersCurrentRolesGet),
 			Self::UsersRolesPost => Some(Self::UsersCurrentRolesPost),
 			Self::UsersRolesDelete => Some(Self::UsersCurrentRolesDelete),
-			Self::EventsUsersRoles => Some(Self::EventsUsersCurrentRoles),
-			Self::EventsUsers => Some(Self::EventsUsersCurrent),
 			Self::ReportsList => Some(Self::ReportsOwnedList),
 			Self::ReportsHistoryList => Some(Self::ReportsOwnedHistoryList),
 			Self::ReportsGet => Some(Self::ReportsOwnedGet),
@@ -126,6 +128,11 @@ impl Permission {
 			Self::UsersBansGet => Some(Self::UsersCurrentBansGet),
 			Self::UsersFactionsList => Some(Self::UsersCurrentFactionsList),
 			Self::FactionsMembersGet => Some(Self::FactionsMembersCurrentGet),
+			Self::EventsUsersRoles => Some(Self::EventsUsersCurrentRoles),
+			Self::EventsUsers => Some(Self::EventsUsersCurrent),
+			Self::EventsUsersBans => Some(Self::EventsUsersCurrentBans),
+			Self::EventsFactions => Some(Self::EventsFactionsCurrent),
+			Self::EventsFactionsMembers => Some(Self::EventsFactionsCurrentMembers),
 			_ => None,
 		}
 	}
@@ -228,6 +235,10 @@ impl From<&Permission> for &str {
 			Permission::EventsStatistics => "events.stats",
 			Permission::EventsUsersBans => "events.users.bans",
 			Permission::EventsUsersCurrentBans => "events.users.current.bans",
+			Permission::EventsFactions => "events.factions",
+			Permission::EventsFactionsCurrent => "events.factions.current",
+			Permission::EventsFactionsMembers => "events.factions.members",
+			Permission::EventsFactionsCurrentMembers => "events.factions.current.members",
 		}
 	}
 }
@@ -333,6 +344,10 @@ impl TryFrom<&str> for Permission {
 			"events.stats" => Ok(Permission::EventsStatistics),
 			"events.users.bans" => Ok(Permission::EventsUsersBans),
 			"events.users.current.bans" => Ok(Permission::EventsUsersCurrentBans),
+			"events.factions" => Ok(Permission::EventsFactions),
+			"events.factions.current" => Ok(Permission::EventsFactionsCurrent),
+			"events.factions.members" => Ok(Permission::EventsFactionsMembers),
+			"events.factions.current.members" => Ok(Permission::EventsFactionsCurrentMembers),
 			_ => Err(()),
 		}
 	}

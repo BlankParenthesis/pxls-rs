@@ -14,7 +14,7 @@ use warp::Filter;
 use warp::http::Uri;
 
 use crate::board::Board;
-use crate::database::{UsersDatabase, Role, User};
+use crate::database::{UsersDatabase, Role, User, Faction, FactionMember};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::UserStats;
@@ -109,45 +109,15 @@ impl Connections {
 					}
 				}
 			},
-			EventPacket::SiteNoticeCreated { .. } => {
-				for socket in self.by_subscription[Subscription::Notices].iter() {
-					socket.send(packet).await
-				}
-			},
-			EventPacket::SiteNoticeUpdated { .. } => {
-				for socket in self.by_subscription[Subscription::Notices].iter() {
-					socket.send(packet).await
-				}
-			},
+			EventPacket::SiteNoticeCreated { .. } |
+			EventPacket::SiteNoticeUpdated { .. } |
 			EventPacket::SiteNoticeDeleted { .. } => {
 				for socket in self.by_subscription[Subscription::Notices].iter() {
 					socket.send(packet).await
 				}
 			},
-			EventPacket::ReportCreated { reporter, .. } => {
-				for socket in self.by_subscription[Subscription::Reports].iter() {
-					socket.send(packet).await
-				}
-
-				let sockets = self.by_uid.get(reporter).unwrap_or(&empty_set);
-				for socket in sockets {
-					if socket.subscriptions.contains(Subscription::ReportsOwned) {
-						socket.send(packet).await;
-					}
-				}
-			},
-			EventPacket::ReportUpdated { reporter, .. } => {
-				for socket in self.by_subscription[Subscription::Reports].iter() {
-					socket.send(packet).await
-				}
-
-				let sockets = self.by_uid.get(reporter).unwrap_or(&empty_set);
-				for socket in sockets {
-					if socket.subscriptions.contains(Subscription::ReportsOwned) {
-						socket.send(packet).await;
-					}
-				}
-			},
+			EventPacket::ReportCreated { reporter, .. } |
+			EventPacket::ReportUpdated { reporter, .. } |
 			EventPacket::ReportDeleted { reporter, .. } => {
 				for socket in self.by_subscription[Subscription::Reports].iter() {
 					socket.send(packet).await
@@ -168,32 +138,8 @@ impl Connections {
 					}
 				}
 			},
-			EventPacket::UserBanCreated { user, .. } => {
-				for socket in self.by_subscription[Subscription::UsersBans].iter() {
-					socket.send(packet).await
-				}
-				
-				let user = Some(user.clone());
-				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
-				for socket in sockets {
-					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
-						socket.send(packet).await;
-					}
-				}
-			},
-			EventPacket::UserBanUpdated { user, .. } => {
-				for socket in self.by_subscription[Subscription::UsersBans].iter() {
-					socket.send(packet).await
-				}
-				
-				let user = Some(user.clone());
-				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
-				for socket in sockets {
-					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
-						socket.send(packet).await;
-					}
-				}
-			},
+			EventPacket::UserBanCreated { user, .. } |
+			EventPacket::UserBanUpdated { user, .. } |
 			EventPacket::UserBanDeleted { user, .. } => {
 				for socket in self.by_subscription[Subscription::UsersBans].iter() {
 					socket.send(packet).await
@@ -204,6 +150,48 @@ impl Connections {
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
 						socket.send(packet).await;
+					}
+				}
+			},
+			EventPacket::FactionCreated { members, .. } |
+			EventPacket::FactionUpdated { members, .. } |
+			EventPacket::FactionDeleted { members, .. } => {
+				for socket in self.by_subscription[Subscription::Factions].iter() {
+					socket.send(packet).await
+				}
+
+				for member in members {
+					let user = Some(member.clone());
+					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+					for socket in sockets {
+						if socket.subscriptions.contains(Subscription::FactionsCurrent) {
+							socket.send(packet).await
+						}
+					}
+				}
+			},
+			EventPacket::FactionMemberUpdated { owners, user, .. } => {
+				for socket in self.by_subscription[Subscription::FactionsMembers].iter() {
+					socket.send(packet).await
+				}
+
+				for owner in owners {
+					let user = Some(owner.clone());
+					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+					for socket in sockets {
+						if socket.subscriptions.contains(Subscription::FactionsCurrentMembers) {
+							socket.send(packet).await
+						}
+					}
+				}
+
+				if !owners.contains(user) {
+					let user = Some(user.clone());
+					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+					for socket in sockets {
+						if socket.subscriptions.contains(Subscription::FactionsCurrentMembers) {
+							socket.send(packet).await
+						}
 					}
 				}
 			},
@@ -296,6 +284,30 @@ pub enum EventPacket<'l> {
 		#[serde(with = "http_serde::uri")]
 		ban: Uri,
 	},
+	FactionCreated {
+		#[serde(skip_serializing)]
+		members: Vec<String>,
+		faction: Reference<Faction>,
+	},
+	FactionUpdated {
+		#[serde(skip_serializing)]
+		members: Vec<String>,
+		faction: Reference<Faction>,
+	},
+	FactionDeleted {
+		#[serde(skip_serializing)]
+		members: Vec<String>,
+		#[serde(with = "http_serde::uri")]
+		faction: Uri,
+	},
+	FactionMemberUpdated {
+		#[serde(skip_serializing)]
+		owners: Vec<String>,
+		#[serde(skip_serializing)]
+		user: String,
+		faction: Reference<Faction>,
+		member: Reference<FactionMember>,
+	},
 }
 
 impl<'l> ServerPacket for EventPacket<'l> {}
@@ -316,6 +328,10 @@ enum Subscription {
 	Statistics,
 	UsersBans,
 	UsersCurrentBans,
+	Factions,
+	FactionsCurrent,
+	FactionsMembers,
+	FactionsCurrentMembers,
 }
 
 impl Subscription {
@@ -323,6 +339,8 @@ impl Subscription {
 		match self {
 			Subscription::UsersRoles => Some(Subscription::UsersCurrentRoles),
 			Subscription::Users => Some(Subscription::UsersCurrent),
+			Subscription::Factions => Some(Subscription::FactionsCurrent),
+			Subscription::FactionsMembers => Some(Subscription::FactionsCurrentMembers),
 			_ => None,
 		}
 	}
@@ -344,6 +362,10 @@ impl From<Subscription> for Permission {
 			Subscription::Statistics => Permission::EventsStatistics,
 			Subscription::UsersBans => Permission::EventsUsersBans,
 			Subscription::UsersCurrentBans => Permission::EventsUsersCurrentBans,
+			Subscription::Factions => Permission::EventsFactions,
+			Subscription::FactionsCurrent => Permission::EventsFactionsCurrent,
+			Subscription::FactionsMembers => Permission::EventsFactionsMembers,
+			Subscription::FactionsCurrentMembers => Permission::EventsFactionsCurrentMembers,
 		}
 	}
 }
@@ -361,6 +383,10 @@ impl TryFrom<&str> for Subscription {
 			"users" => Ok(Subscription::Users),
 			"users.current" => Ok(Subscription::UsersCurrent),
 			"statistics" => Ok(Subscription::Statistics),
+			"factions" => Ok(Subscription::Factions),
+			"factions.current" => Ok(Subscription::FactionsCurrent),
+			"factions.members" => Ok(Subscription::FactionsMembers),
+			"factions.current.members" => Ok(Subscription::FactionsCurrentMembers),
 			_ => Err(()),
 		}
 	}

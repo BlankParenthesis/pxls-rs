@@ -14,7 +14,7 @@ use ldap3::{
 mod connection;
 mod entities;
 
-pub use entities::{User, Role, Faction, ParseError};
+pub use entities::{User, Role, Faction, FactionMember, JoinIntent, ParseError};
 use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
@@ -30,7 +30,7 @@ use crate::routes::factions::factions::{FactionFilter, members::MemberFilter};
 use crate::permissions::Permission;
 use crate::filter::response::paginated_list::{Page, PageToken};
 
-use self::entities::{FactionMember, LDAPTimestamp, JoinIntent};
+use self::entities::LDAPTimestamp;
 
 #[derive(Debug, Default)]
 pub struct LdapPageToken(Vec<u8>);
@@ -1340,6 +1340,74 @@ impl UsersConnection {
 
 		Ok(Page { items, next, previous: None })
 	}
+	
+	pub async fn get_faction_owners(
+		&mut self,
+		fid: &str,
+	) -> Result<Vec<String>, UsersDatabaseError> {
+		let (results, _) = self.connection
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				&format!("(cn={})", ldap_escape(fid)),
+				["pxlsspaceFactionOwner"],
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			// a bit presumptuous, but should be correct enough
+			// Update: too presumptuous, this errors if the ou doesn't exist
+			// TODO: try to determine error type and use that
+			.map_err(|_| FetchError::InvalidPage)?;
+
+		let entry = results.into_iter()
+			.map(SearchEntry::construct)
+			.next()
+			.ok_or_else(|| FetchError::NoItems)?;
+
+		
+		let empty = vec![];
+		let user_cns = entry.attrs.get("pxlsspaceFactionOwner").unwrap_or(&empty);
+		let user_ids = user_cns.iter()
+			.map(|cn| &cn.split_once(',').unwrap().0[4..])
+			.map(|s| s.to_owned())
+			.collect::<Vec<_>>();
+
+		Ok(user_ids)
+	}
+	
+	pub async fn get_all_faction_members(
+		&mut self,
+		fid: &str,
+	) -> Result<Vec<String>, UsersDatabaseError> {
+		let (results, _) = self.connection
+			.search(
+				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
+				Scope::OneLevel,
+				&format!("(cn={})", ldap_escape(fid)),
+				["member"],
+			).await
+			.map_err(FetchError::LdapError)?
+			.success()
+			// a bit presumptuous, but should be correct enough
+			// Update: too presumptuous, this errors if the ou doesn't exist
+			// TODO: try to determine error type and use that
+			.map_err(|_| FetchError::InvalidPage)?;
+
+		let entry = results.into_iter()
+			.map(SearchEntry::construct)
+			.next()
+			.ok_or_else(|| FetchError::NoItems)?;
+
+		
+		let empty = vec![];
+		let user_cns = entry.attrs.get("member").unwrap_or(&empty);
+		let user_ids = user_cns.iter()
+			.map(|cn| &cn.split_once(',').unwrap().0[4..])
+			.map(|s| s.to_owned())
+			.collect::<Vec<_>>();
+
+		Ok(user_ids)
+	}
 
 	pub async fn get_faction_member(
 		&mut self,
@@ -1349,7 +1417,7 @@ impl UsersConnection {
 		let user_dn = user_dn(uid);
 		let user = self.get_user(uid).await?;
 		let user = Reference::new(User::uri(uid), user);
-		
+
 		let (entries, _result) = self.connection
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_factions_ou, CONFIG.ldap_base),
@@ -1500,7 +1568,7 @@ impl UsersConnection {
 			.modify(faction_dn.as_str(), owner_attribute).await
 			.map_err(UpdateError::LdapError)?;
 
-		// try deleting owner first so that we don't error if the're no owner
+		// try deleting owner first so that we don't error if there's no owner
 		match result.rc {
 			0 => Ok(()),
 			16 => Ok(()), // no such attribute (no owner)
@@ -1521,7 +1589,7 @@ impl UsersConnection {
 
 		match result.rc {
 			0 => Ok(()),
-			32 => Err(UpdateError::NoItem.into()),
+			16 | 32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
