@@ -284,6 +284,7 @@ async fn main() {
 				.expose_headers([
 					"pxls-pixels-available",
 					"pxls-next-available",
+					"location",
 				])
 				.allow_headers([
 					"authorization",
