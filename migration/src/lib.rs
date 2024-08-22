@@ -1,6 +1,5 @@
 pub use sea_orm_migration::prelude::*;
 
-
 mod m0_create_boards_colors_placements;
 mod m1_advanced_shapes;
 mod m2_max_stacked_board_property;
@@ -12,6 +11,7 @@ mod m7_indices;
 mod m8_small_uid;
 mod m9_reports;
 mod m10_bans;
+mod m11_deferred_palette;
 
 pub struct Migrator;
 
@@ -44,6 +44,7 @@ impl MigratorTrait for Migrator {
 			Box::new(m8_small_uid::Migration),
 			Box::new(m9_reports::Migration),
 			Box::new(m10_bans::Migration),
+			Box::new(m11_deferred_palette::Migration),
 		]
 	}
 }

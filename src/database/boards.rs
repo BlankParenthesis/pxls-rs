@@ -20,7 +20,7 @@ use sea_orm::{
 	QueryOrder,
 	PaginatorTrait,
 	Iden,
-	ConnectionTrait, QueryTrait, StreamTrait,
+	ConnectionTrait, QueryTrait, StreamTrait, SqlErr,
 };
 use sea_orm_migration::MigratorTrait;
 use tokio::sync::RwLock;
@@ -408,9 +408,28 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				.exec(&transaction.connection).await?;
 		}
 		
-		transaction.commit().await?;
+		match transaction.commit().await {
+			Err(BoardsDatabaseError::DbErr(err)) => {
+				if let Some(SqlErr::ForeignKeyConstraintViolation(_)) = err.sql_err() {
+					// TODO: This is a user error (the new palette removes
+					// colors which are currently used). It should either be
+					// passed back up from here, or detected earlier and this
+					// is essential asserted as unreachable.
+					
+					// FIXME: this is a hack to get the right error code back
+					// to the user but will cause much confusion if more details
+					// ever get returned.
+					let fake_error = UsersDatabaseError::Create(
+						super::users::CreateError::AlreadyExists
+					);
 
-		Ok(())
+					Err(BoardsDatabaseError::UsersError(fake_error))
+				} else {
+					Err(BoardsDatabaseError::DbErr(err))
+				}
+			},
+			other => other,
+		}
 	}
 
 	pub async fn update_board_info(
