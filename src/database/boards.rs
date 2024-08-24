@@ -327,7 +327,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.all(&transaction).await?
 			.into_iter()
 			.map(|placement| CachedPlacement {
-				timestamp: placement.timestamp as u32,
+				modified: placement.timestamp as u32,
 				position: placement.position as u64,
 				user_id: placement.user_id,
 			})
@@ -605,7 +605,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			items.push(Placement {
 				position: placement.position as u64,
 				color: placement.color as u8,
-				timestamp: placement.timestamp as u32,
+				modified: placement.timestamp as u32,
 				user: Reference::new(User::uri(&user_id), user.clone()),
 			})
 		}
@@ -635,7 +635,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			Ok(Some(Placement {
 				position: placement.position as u64,
 				color: placement.color as u8,
-				timestamp: placement.timestamp as u32,
+				modified: placement.timestamp as u32,
 				user: Reference::new(User::uri(&user_id), user.clone()),
 			}))
 		} else {
@@ -662,7 +662,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		for placement in placements {
 			let placement = LastPlacement {
 				id: placement.id,
-				timestamp: placement.timestamp as _,
+				modified: placement.timestamp as _,
 				color: placement.color as _,
 				user_id: placement.user_id,
 			};
@@ -707,7 +707,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		.map(|placement| Placement {
 			position: placement.position as u64,
 			color: placement.color as u8,
-			timestamp: placement.timestamp as u32,
+			modified: placement.timestamp as u32,
 			user: Reference::new(User::uri(user_id), user.clone()),
 		})
 		.map_err(BoardsDatabaseError::from)
@@ -776,7 +776,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 
 		Ok(placements.into_iter().rev().map(|placement| CachedPlacement {
 			position: placement.position as _,
-			timestamp: placement.timestamp as _,
+			modified: placement.timestamp as _,
 			user_id: uid,
 		}).collect())
 	}

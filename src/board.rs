@@ -582,7 +582,7 @@ impl Board {
 		for &(position, _) in placements {
 			cache_lock.insert(CachedPlacement {
 				position,
-				timestamp,
+				modified: timestamp,
 				user_id: uid,
 			});
 		}
@@ -655,7 +655,7 @@ impl Board {
 
 		let placement_id = match undone_placement {
 			Some(placement) if placement.user_id == uid => {
-				let deadline = placement.timestamp + CONFIG.undo_deadline_seconds;
+				let deadline = placement.modified + CONFIG.undo_deadline_seconds;
 				if deadline > self.current_timestamp() {
 					return Err(UndoError::Expired)
 				}
@@ -667,7 +667,7 @@ impl Board {
 		transaction.delete_placement(placement_id).await?;
 
 		let (color, timestamp) = match last_placement {
-			Some(placement) => (placement.color, placement.timestamp),
+			Some(placement) => (placement.color, placement.modified),
 			None => (sector.initial[sector_offset], 0),
 		};
 
@@ -784,7 +784,7 @@ impl Board {
 		let mut cache = self.placement_cache.write().await;
 		cache.insert(CachedPlacement {
 			position: new_placement.position,
-			timestamp: new_placement.timestamp,
+			modified: new_placement.modified,
 			user_id: uid,
 		});
 		drop(cache);
@@ -879,7 +879,7 @@ impl Board {
 	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
 			let activity = self.user_count_for_time(
-				placement.timestamp,
+				placement.modified,
 				connection
 			).await?;
 
@@ -898,7 +898,7 @@ impl Board {
 
 			let density = u32::from_le_bytes(density_slice);
 
-			let timestamp = placement.timestamp;
+			let timestamp = placement.modified;
 			
 			CooldownParameters { activity, density, timestamp }
 		} else {
@@ -991,7 +991,7 @@ impl Board {
 					self.calculate_cooldowns(Some(&pair[0]), connection, sector_locks).await?,
 					UNIX_EPOCH
 						+ Duration::from_secs(
-							u64::from(pair[1].timestamp) + self.info.created_at,
+							u64::from(pair[1].modified) + self.info.created_at,
 						),
 				);
 
@@ -1016,12 +1016,12 @@ impl Board {
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
 
 		let cache = self.placement_cache.read().await;
-		let cache_age = cache.iter().last().unwrap().timestamp as i32;
+		let cache_age = cache.iter().last().unwrap().modified as i32;
 		if min_time > cache_age {
 			let user_count = cache.iter()
 				// TODO: binary search
-				.skip_while(|p| p.timestamp > max_time as u32)
-				.take_while(|p| p.timestamp >= min_time as u32)
+				.skip_while(|p| p.modified > max_time as u32)
+				.take_while(|p| p.modified >= min_time as u32)
 				.map(|p| p.user_id)
 				.collect::<HashSet<_>>().len();
 

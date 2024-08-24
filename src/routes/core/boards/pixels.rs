@@ -172,7 +172,7 @@ pub fn post(
 							response = warp::reply::with_header(
 								response,
 								"Pxls-Undo-Deadline",
-								placement.timestamp + CONFIG.undo_deadline_seconds,
+								placement.modified + CONFIG.undo_deadline_seconds,
 							).into_response();
 						}
 

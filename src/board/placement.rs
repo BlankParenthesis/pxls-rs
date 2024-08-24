@@ -10,7 +10,7 @@ use crate::filter::response::reference::Reference;
 #[derive(Debug, Clone, Copy)]
 pub struct CachedPlacement {
 	pub position: u64,
-	pub timestamp: u32,
+	pub modified: u32,
 	pub user_id: i32,
 }
 
@@ -22,7 +22,7 @@ impl CachedPlacement {
 	pub fn null() -> Self {
 		Self {
 			position: 0,
-			timestamp: 0,
+			modified: 0,
 			user_id: 0
 		}
 	}
@@ -31,7 +31,7 @@ impl CachedPlacement {
 #[derive(Debug, Clone, Copy)]
 pub struct LastPlacement {
 	pub id: i64,
-	pub timestamp: u32,
+	pub modified: u32,
 	pub color: u8,
 	pub user_id: i32,
 }
@@ -40,7 +40,7 @@ pub struct LastPlacement {
 pub struct Placement {
 	pub position: u64,
 	pub color: u8,
-	pub timestamp: u32,
+	pub modified: u32,
 	pub user: Reference<User>,
 }
 
