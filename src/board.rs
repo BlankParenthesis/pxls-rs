@@ -15,7 +15,7 @@ use std::{
 
 use bytes::BufMut;
 use serde::Serialize;
-use tokio::sync::{RwLock, RwLockMappedWriteGuard};
+use tokio::sync::{Mutex, RwLock, RwLockMappedWriteGuard};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -218,6 +218,67 @@ impl<'a, const SIZE: usize> Iterator for PlacementCacheIterator<'a, SIZE> {
 	}
 }
 
+
+// TODO: This was generic but self referencing things do not like generics so it
+// has been made concrete here. That said, it's ugly and it would be nice to
+// refactor it if possible:
+
+use ouroboros::self_referencing;
+
+#[derive(Default)]
+pub struct StatisticsHashLock<K> {
+	locks: Mutex<HashMap<K, Arc<Mutex<PlacementColorStatistics>>>>,
+}
+
+#[self_referencing]
+pub struct StatisticsHashLockGuard {
+	lock: Arc<Mutex<PlacementColorStatistics>>,
+	#[covariant]
+	#[borrows(lock)]
+	guard: tokio::sync::MutexGuard<'this, PlacementColorStatistics>,
+}
+
+impl std::ops::Deref for StatisticsHashLockGuard {
+	type Target = PlacementColorStatistics;
+
+	fn deref(&self) -> &Self::Target {
+		self.borrow_guard().deref()
+	}
+}
+
+impl std::ops::DerefMut for StatisticsHashLockGuard {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		self.with_guard_mut(|v| v.deref_mut())
+	}
+}
+
+impl<T: Eq + PartialEq + std::hash::Hash> StatisticsHashLock<T> {
+	async fn lock(&self, key: T) -> StatisticsHashLockGuard {
+		use std::collections::hash_map;
+		let mut locks = self.locks.lock().await;
+		let lock = match locks.entry(key) {
+			hash_map::Entry::Occupied(o) => o.get().clone(),
+			hash_map::Entry::Vacant(v) => v.insert(Default::default()).clone(),
+		};
+		StatisticsHashLockGuardAsyncSendBuilder {
+			lock,
+			guard_builder: |lock| Box::pin(lock.lock())
+		}.build().await
+	}
+}
+
+impl<K: Eq + PartialEq + std::hash::Hash> From<HashMap<K, PlacementColorStatistics>> for StatisticsHashLock<K> {
+	fn from(value: HashMap<K, PlacementColorStatistics>) -> Self {
+		let map = value.into_iter().map(|(k, v)| {
+			let value = std::sync::Arc::new(tokio::sync::Mutex::new(v));
+			(k, value)
+		}).collect();
+		let locks = tokio::sync::Mutex::new(map);
+		Self { locks }
+	}
+}
+
+
 #[derive(Debug, Default, Clone, Copy)]
 struct CooldownParameters {
 	activity: usize,
@@ -230,7 +291,7 @@ pub struct Board {
 	pub info: BoardInfo,
 	connections: Connections,
 	sectors: SectorCache,
-	statistics_cache: crate::HashLock<i32, PlacementColorStatistics>,
+	statistics_cache: StatisticsHashLock<i32>,
 	placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
 }
 
@@ -257,7 +318,7 @@ impl Board {
 		shape: Shape,
 		palette: Palette,
 		max_pixels_available: u32,
-		statistics_cache: crate::HashLock<i32, PlacementColorStatistics>,
+		statistics_cache: StatisticsHashLock<i32>,
 		placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
 	) -> Self {
 		let info = BoardInfo {
