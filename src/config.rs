@@ -1,6 +1,26 @@
 use serde::Deserialize;
 use url::Url;
 
+fn default_ldap_users_ou() -> String {
+	"users".to_string()
+}
+
+fn default_users_id_field() -> String {
+	"uid".to_string()
+}
+
+fn default_users_username_field() -> String {
+	"displayName".to_string()
+}
+
+fn default_roles_ou() -> String {
+	"roles".to_string()
+}
+
+fn default_factions_ou() -> String {
+	"factions".to_string()
+}
+
 #[derive(Deserialize)]
 pub struct Config {
 	pub host: String,
@@ -12,11 +32,15 @@ pub struct Config {
 	pub ldap_manager_user: String,
 	pub ldap_manager_password: String,
 	pub ldap_base: String,
-	// TODO: defaults for ldap stuff
+	#[serde(default = "default_ldap_users_ou")]
 	pub ldap_users_ou: String,
+	#[serde(default = "default_users_id_field")]
 	pub ldap_users_id_field: String,
+	#[serde(default = "default_users_username_field")]
 	pub ldap_users_username_field: String,
+	#[serde(default = "default_roles_ou")]
 	pub ldap_roles_ou: String,
+	#[serde(default = "default_factions_ou")]
 	pub ldap_factions_ou: String,
 	pub undo_deadline_seconds: u32,
 }
