@@ -43,7 +43,11 @@ pub struct Config {
 	#[serde(default = "default_factions_ou")]
 	pub ldap_factions_ou: String,
 	pub undo_deadline_seconds: u32,
+	/// The role granted to all authenticated users.
 	pub default_role: Option<String>,
+	/// The role granted to all unauthentited users.
+	/// If None, default_role will be used.
+	pub unauthenticated_role: Option<String>,
 }
 
 impl Config {
@@ -88,5 +92,9 @@ pub fn check() {
 
 	if CONFIG.default_role.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
 		eprintln!("Warning: default user role is the empty string");
+	}
+
+	if CONFIG.unauthenticated_role.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+		eprintln!("Warning: unauthenticated user role is the empty string");
 	}
 }

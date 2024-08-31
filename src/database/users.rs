@@ -817,13 +817,20 @@ impl UsersConnection {
 
 		let mut filters = vec![];
 
-
-		if let Some(ref default) = CONFIG.default_role {
-			filters.push(format!("(cn={})", default));
-		}
-
-		if let Some(user_dn) = id.as_ref().map(|uid| user_dn(uid)) {
-			filters.push(format!("(member={})", user_dn))
+		match id {
+			Some(ref uid) => {
+				if let Some(ref default) = CONFIG.default_role {
+					filters.push(format!("(cn={})", default));
+				}
+				filters.push(format!("(member={})", user_dn(uid)));
+			},
+			None => {
+				if let Some(ref role) = CONFIG.unauthenticated_role {
+					filters.push(format!("(cn={})", role));
+				} else if let Some(ref default) = CONFIG.default_role {
+					filters.push(format!("(cn={})", default));
+				}
+			}
 		}
 
 		let filter = format!("(|{})", filters.join(""));
