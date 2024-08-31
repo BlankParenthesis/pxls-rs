@@ -43,6 +43,7 @@ pub struct Config {
 	#[serde(default = "default_factions_ou")]
 	pub ldap_factions_ou: String,
 	pub undo_deadline_seconds: u32,
+	pub default_role: Option<String>,
 }
 
 impl Config {
@@ -83,5 +84,9 @@ pub fn check() {
 
 	if CONFIG.ldap_factions_ou.is_empty() {
 		panic!("Missing LDAP_FACTIONS_OU value");
+	}
+
+	if CONFIG.default_role.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+		eprintln!("Warning: default user role is the empty string");
 	}
 }

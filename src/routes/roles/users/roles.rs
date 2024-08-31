@@ -103,9 +103,9 @@ pub fn post(
 		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection|{
 			let event_sockets = event_sockets.clone();
 			async move {
-				let prior = connection.user_permissions(&uid).await?;
+				let prior = connection.user_permissions(Some(uid.clone())).await?;
 				connection.add_user_role(&uid, &role.role).await?;
-				let after = connection.user_permissions(&uid).await?;
+				let after = connection.user_permissions(Some(uid.clone())).await?;
 				let roles = connection.list_user_roles(
 					&uid,
 					PageToken::start(),
@@ -168,9 +168,9 @@ pub fn delete(
 		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| {
 			let event_sockets = event_sockets.clone();
 			async move {
-				let prior = connection.user_permissions(&uid).await?;
+				let prior = connection.user_permissions(Some(uid.clone())).await?;
 				connection.remove_user_role(&uid, &role.role).await?;
-				let after = connection.user_permissions(&uid).await?;
+				let after = connection.user_permissions(Some(uid.clone())).await?;
 				let roles = connection.list_user_roles(
 					&uid,
 					PageToken::start(),

@@ -112,12 +112,8 @@ pub fn permissions(
 		.and(bearer())
 		.and(database::connection(users_db))
 		.and_then(|bearer: Option<Bearer>, mut connection: UsersConnection| async {
-			let user_permissions = match bearer {
-				Some(ref user) => {
-					connection.user_permissions(&user.id).await?
-				}
-				None => Permission::defaults(),
-			};
+			let user = bearer.as_ref().map(|b| b.id.clone());
+			let user_permissions = connection.user_permissions(user).await?;
 
 			Ok::<_, Rejection>((user_permissions, bearer, connection))
 		})

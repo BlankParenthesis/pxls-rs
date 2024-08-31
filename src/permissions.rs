@@ -106,11 +106,6 @@ pub enum Permission {
 }
 
 impl Permission {
-	pub fn defaults() -> EnumSet<Self> {
-		// TODO: better defaults
-		EnumSet::all() - Self::BoardsPixelsPost
-	}
-
 	pub fn to_current(self) -> Option<Self> {
 		match self {
 			Self::UsersGet => Some(Self::UsersCurrentGet),

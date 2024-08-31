@@ -11,7 +11,7 @@ use warp::http::Uri;
 use warp::ws::Ws;
 use warp::{Reply, Rejection, Filter};
 
-use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase, Database};
 use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::resource::{board::{self, PassableBoard}, database};
@@ -22,6 +22,8 @@ use crate::filter::response::paginated_list::*;
 use crate::board::{Board, BoardSubscription};
 
 use crate::{BoardRef, BoardDataMap};
+
+use super::events::SocketError;
 
 pub mod data;
 pub mod pixels;
@@ -250,83 +252,94 @@ pub fn events(
 		.and(warp::ws())
 		.and(serde_qs::warp::query(Default::default()))
 		.and(database::connection(boards_db))
-		.map(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
-			options.subscribe
-				.ok_or(StatusCode::UNPROCESSABLE_ENTITY)
-				.and_then(|subscriptions| {
+		.and_then(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
+			let users_db = Arc::clone(&users_db);
+			// TODO: deduplicate with regular socket?
+			async move {
+				let subscriptions = options.subscribe
+					.ok_or(SocketError::MissingSubscriptions)
+					.map_err(Rejection::from)?;
 
-					if subscriptions.is_empty() {
-						return Err(StatusCode::UNPROCESSABLE_ENTITY);
-					}
-
-					let anonymous = !options.authenticate.unwrap_or(false);
-
-					if anonymous {
-						let permissions = Permission::defaults();
-						let has_permissions = subscriptions.iter()
-							.map(Permission::from)
-							.all(|p| permissions.contains(p));
-					
-						if !has_permissions {
-							return Err(StatusCode::FORBIDDEN);
-						}
-					}
+				if subscriptions.is_empty() {
+					return Err(Rejection::from(SocketError::MissingSubscriptions));
+				}
 				
-					let users_db = Arc::clone(&users_db);
-					let init_board = Arc::downgrade(&*board);
-					let shutdown_board = Arc::downgrade(&*board);
+				let anonymous = !options.authenticate.unwrap_or(false);
 
-					Ok(ws.on_upgrade(move |websocket| async move {
-						let connect_result = Socket::connect(
-							websocket,
-							subscriptions,
-							users_db,
-							anonymous,
-						).await;
+				if anonymous {
+					let mut connection = users_db.connection().await
+						.map_err(SocketError::DatabaseConnectionError)
+						.map_err(Rejection::from)?;
 
-						let socket = match connect_result {
-							Ok(socket) => socket,
-							Err(err) => return,
-						};
-						
-						socket.init(|socket| async move {
-							// add socket to board
-							if let Some(board) = init_board.upgrade() {
-								let mut board = board.write().await;
-								let board = match *board {
-									Some(ref mut board) => board,
-									None => {
-										let reason = Some(CloseReason::ServerClosing);
-										socket.close(reason);
-										return;
-									},
-								};
-								
-								let insert_result = board.insert_socket(
-									&socket,
-									&connection,
-								).await;
+					let permissions = connection.user_permissions(None).await
+						.map_err(SocketError::DatabaseError)
+						.map_err(Rejection::from)?;
+					let has_permissions = subscriptions.iter()
+						.map(Permission::from)
+						.all(|p| permissions.contains(p));
+				
+					if !has_permissions {
+						return Err(Rejection::from(SocketError::MissingPermissions));
+					}
+				}
+			
+				let users_db = Arc::clone(&users_db);
+				let init_board = Arc::downgrade(&*board);
+				let shutdown_board = Arc::downgrade(&*board);
 
-								if let Err(err) = insert_result {
-									let reason = Some(CloseReason::ServerError);
+				Ok(ws.on_upgrade(move |websocket| async move {
+					let connect_result = Socket::connect(
+						websocket,
+						subscriptions,
+						users_db,
+						anonymous,
+					).await;
+
+					let socket = match connect_result {
+						Ok(socket) => socket,
+						Err(err) => return,
+					};
+					
+					socket.init(|socket| async move {
+						// add socket to board
+						if let Some(board) = init_board.upgrade() {
+							let mut board = board.write().await;
+							let board = match *board {
+								Some(ref mut board) => board,
+								None => {
+									let reason = Some(CloseReason::ServerClosing);
 									socket.close(reason);
-								}
+									return;
+								},
+							};
+							
+							let insert_result = board.insert_socket(
+								&socket,
+								&connection,
+							).await;
+
+							if let Err(err) = insert_result {
+								let reason = Some(CloseReason::ServerError);
+								socket.close(reason);
 							}
-						}).await.shutdown(|socket| async move {
-							// remove socket from board
-							if let Some(board) = shutdown_board.upgrade() {
-								let mut board = board.write().await;
-								if let Some(ref mut board) = *board {
-									board.remove_socket(&socket).await;
-								}
+						}
+					}).await.shutdown(|socket| async move {
+						// remove socket from board
+						if let Some(board) = shutdown_board.upgrade() {
+							let mut board = board.write().await;
+							if let Some(ref mut board) = *board {
+								board.remove_socket(&socket).await;
 							}
-						}).await;
-					}))
-				})
+						}
+					}).await;
+				}))
+			}
 		})
 		.recover(|rejection: Rejection| async {
 			if let Some(err) = rejection.find::<serde_qs::Error>() {
 				Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
+			} else if let Some(err) = rejection.find::<SocketError>() {
+				Ok(StatusCode::from(err).into_response())
 			} else {
 				Err(rejection)
 			}

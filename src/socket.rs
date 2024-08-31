@@ -131,13 +131,9 @@ impl Authorized {
 		permissions: &[Permission],
 		connection: &mut UsersConnection,
 	) -> Result<Self, AuthFailure> {
-		let user_permissions = match credentials {
-			Some(Authenticated(ref bearer)) => {
-				connection.user_permissions(&bearer.id).await
-					.map_err(|_| AuthFailure::ServerError)?
-			},
-			None => Permission::defaults(),
-		};
+		let user = credentials.as_ref().map(|Authenticated(bearer)| bearer.id.clone());
+		let user_permissions = connection.user_permissions(user).await
+			.map_err(|_| AuthFailure::ServerError)?;
 
 		if permissions.iter().copied().all(|p| user_permissions.contains(p)) {
 			Ok(Self(credentials))

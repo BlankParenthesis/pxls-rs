@@ -211,7 +211,7 @@ lazy_static! {
 	static ref USER_CACHE: RwLock<HashMap<String, User>> = {
 		RwLock::new(HashMap::new())
 	};
-	static ref PERMISSIONS_CACHE: RwLock<HashMap<String, EnumSet<Permission>>> = {
+	static ref PERMISSIONS_CACHE: RwLock<HashMap<Option<String>, EnumSet<Permission>>> = {
 		RwLock::new(HashMap::new())
 	};
 }
@@ -458,16 +458,14 @@ impl UsersConnection {
 			cookie: page.0,
 		};
 
-		let user_dn = format!(
-			"{}={},ou={},{}",
-			CONFIG.ldap_users_id_field,
-			ldap_escape(id),
-			CONFIG.ldap_users_ou,
-			CONFIG.ldap_base,
-		);
+		let user_dn = user_dn(id);
 
 		let mut filters = vec![
-			format!("(member={})", user_dn)
+			if let Some(ref default) = CONFIG.default_role {
+				format!("(|(member={})(cn={}))", user_dn, default)
+			} else {
+				format!("(member={})", user_dn)
+			}
 		];
 
 		if let Some(ref name) = filter.name {
@@ -809,16 +807,27 @@ impl UsersConnection {
 
 	pub async fn user_permissions(
 		&mut self,
-		id: &str,
+		id: Option<String>,
 	) -> Result<EnumSet<Permission>, UsersDatabaseError> {
-		let id_string = id.to_string();
 		let cache = PERMISSIONS_CACHE.read().await;
-		if let Some(cached) = cache.get(&id_string) {
+		if let Some(cached) = cache.get(&id) {
 			return Ok(*cached);
 		}
 		drop(cache);
 
-		let filter = format!("(member={})", user_dn(id));
+		let mut filters = vec![];
+
+
+		if let Some(ref default) = CONFIG.default_role {
+			filters.push(format!("(cn={})", default));
+		}
+
+		if let Some(user_dn) = id.as_ref().map(|uid| user_dn(uid)) {
+			filters.push(format!("(member={})", user_dn))
+		}
+
+		let filter = format!("(|{})", filters.join(""));
+
 		let (results, _) = self.connection
 			.search(
 				&format!("ou={},{}", CONFIG.ldap_roles_ou, CONFIG.ldap_base),
@@ -840,10 +849,8 @@ impl UsersConnection {
 				.filter_map(|v| Permission::try_from(v.as_str()).ok())
 		}).collect::<EnumSet<Permission>>();
 
-		let permissions = Permission::defaults() | permissions | Permission::BoardsPixelsPost;
-
 		let mut cache = PERMISSIONS_CACHE.write().await;
-		cache.insert(id_string, permissions);
+		cache.insert(id, permissions);
 
 		Ok(permissions)
 	}
@@ -878,7 +885,7 @@ impl UsersConnection {
 		match response {
 			Ok(()) => {
 				let mut cache = PERMISSIONS_CACHE.write().await;
-				cache.remove(&uid.to_string());
+				cache.remove(&Some(uid.to_string()));
 				Ok(())
 			},
 			Err(e) => Err(e),
@@ -915,7 +922,7 @@ impl UsersConnection {
 		match response {
 			Ok(()) => {
 				let mut cache = PERMISSIONS_CACHE.write().await;
-				cache.remove(&uid.to_string());
+				cache.remove(&Some(uid.to_string()));
 				Ok(())
 			},
 			Err(e) => Err(e),

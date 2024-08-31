@@ -8,13 +8,14 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde::de::Visitor;
 use tokio::sync::RwLock;
+use warp::reject::Reject;
 use warp::ws::Ws;
 use warp::{Reply, Rejection};
 use warp::Filter;
 use warp::http::Uri;
 
 use crate::board::Board;
-use crate::database::{UsersDatabase, Role, User, Faction, FactionMember};
+use crate::database::{Faction, FactionMember, Role, User, UsersDatabase, UsersDatabaseError, Database};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::UserStats;
@@ -431,6 +432,35 @@ struct SocketOptions {
 	authenticate: Option<bool>,
 }
 
+#[derive(Debug)]
+pub enum SocketError {
+	MissingSubscriptions,
+	ConflictingPermissions,
+	MissingPermissions,
+	DatabaseConnectionError(deadpool::managed::PoolError<ldap3::LdapError>),
+	DatabaseError(UsersDatabaseError),
+}
+
+impl Reject for SocketError {}
+
+impl From<&SocketError> for StatusCode {
+	fn from(value: &SocketError) -> Self {
+		match value {
+			SocketError::MissingSubscriptions => StatusCode::UNPROCESSABLE_ENTITY,
+			SocketError::ConflictingPermissions => StatusCode::UNPROCESSABLE_ENTITY,
+			SocketError::MissingPermissions => StatusCode::FORBIDDEN,
+			SocketError::DatabaseConnectionError(err) => StatusCode::INTERNAL_SERVER_ERROR,
+			SocketError::DatabaseError(err) => StatusCode::INTERNAL_SERVER_ERROR,
+		}
+	}
+}
+
+impl Reply for SocketError {
+	fn into_response(self) -> warp::reply::Response {
+		StatusCode::from(&self).into_response()
+	}
+}
+
 pub fn events(
 	connections: Arc<RwLock<Connections>>,
 	users_db: Arc<UsersDatabase>,
@@ -439,68 +469,80 @@ pub fn events(
 		.and(warp::path::end())
 		.and(warp::ws())
 		.and(serde_qs::warp::query(Default::default()))
-		.map(move |ws: Ws, options: SocketOptions| {
-			options.subscribe
-				.ok_or(StatusCode::UNPROCESSABLE_ENTITY)
-				.and_then(|subscriptions| {
-					
-					if subscriptions.is_empty() {
-						return Err(StatusCode::UNPROCESSABLE_ENTITY);
-					}
-					// check mutually exclusive permissions
-					for subscription in subscriptions {
-						if let Some(current) = subscription.to_current() {
-							if subscriptions.contains(current) {
-								return Err(StatusCode::UNPROCESSABLE_ENTITY);
-							}
-						}
-					}
-
-					let anonymous = !options.authenticate.unwrap_or(false);
-
-					if anonymous {
-						let permissions = Permission::defaults();
-						let has_permissions = subscriptions.iter()
-							.map(Permission::from)
-							.all(|p| permissions.contains(p));
-					
-						if !has_permissions {
-							return Err(StatusCode::FORBIDDEN);
-						}
-					}
+		.and_then(move |ws: Ws, options: SocketOptions| {
+			let connections = Arc::clone(&connections);
+			let users_db = Arc::clone(&users_db);
+			async move {
+				let subscriptions = options.subscribe
+					.ok_or(SocketError::MissingSubscriptions)
+					.map_err(Rejection::from)?;
 				
-					let users_db = Arc::clone(&users_db);
-					let connections_init = Arc::clone(&connections);
-					let connections_shutdown = Arc::clone(&connections);
+				if subscriptions.is_empty() {
+					return Err(Rejection::from(SocketError::MissingSubscriptions));
+				}
+				// check mutually exclusive permissions
+				for subscription in subscriptions {
+					if let Some(current) = subscription.to_current() {
+						if subscriptions.contains(current) {
+							return Err(Rejection::from(SocketError::ConflictingPermissions));
+						}
+					}
+				}
 
-					Ok(ws.on_upgrade(move |websocket| async move {
-						let connect_result = Socket::connect(
-							websocket,
-							subscriptions,
-							users_db,
-							anonymous,
-						).await;
+				let anonymous = !options.authenticate.unwrap_or(false);
 
-						let socket = match connect_result {
-							Ok(socket) => socket,
-							Err(_) => return,
-						};
-						
-						socket.init(|socket| async move {
-							// add socket to connections
-							let mut connections = connections_init.write().await;
-							connections.insert_socket(socket).await;
-						}).await.shutdown(|socket| async move {
-							// remove socket from connections
-							let mut connections = connections_shutdown.write().await;
-							connections.remove_socket(&socket).await;
-						}).await;
-					}))
-				})
+				if anonymous {
+					let mut connection = users_db.connection().await
+						.map_err(SocketError::DatabaseConnectionError)
+						.map_err(Rejection::from)?;
+
+					let permissions = connection.user_permissions(None).await
+						.map_err(SocketError::DatabaseError)
+						.map_err(Rejection::from)?;
+
+					let has_permissions = subscriptions.iter()
+						.map(Permission::from)
+						.all(|p| permissions.contains(p));
+				
+					if !has_permissions {
+						return Err(Rejection::from(SocketError::MissingPermissions));
+					}
+				}
+			
+				let users_db = Arc::clone(&users_db);
+				let connections_init = Arc::clone(&connections);
+				let connections_shutdown = Arc::clone(&connections);
+
+				Ok(ws.on_upgrade(move |websocket| async move {
+					let connect_result = Socket::connect(
+						websocket,
+						subscriptions,
+						users_db,
+						anonymous,
+					).await;
+
+					let socket = match connect_result {
+						Ok(socket) => socket,
+						Err(_) => return,
+					};
+					
+					socket.init(|socket| async move {
+						// add socket to connections
+						let mut connections = connections_init.write().await;
+						connections.insert_socket(socket).await;
+					}).await.shutdown(|socket| async move {
+						// remove socket from connections
+						let mut connections = connections_shutdown.write().await;
+						connections.remove_socket(&socket).await;
+					}).await;
+				}))
+			}
 		})
 		.recover(|rejection: Rejection| async {
 			if let Some(err) = rejection.find::<serde_qs::Error>() {
 				Ok(StatusCode::UNPROCESSABLE_ENTITY.into_response())
+			} else if let Some(err) = rejection.find::<SocketError>() {
+				Ok(StatusCode::from(err).into_response())
 			} else {
 				Err(rejection)
 			}
