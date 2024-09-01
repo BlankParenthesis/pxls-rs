@@ -168,11 +168,15 @@ pub fn list(
 		})
 }
 
-pub fn default(boards: BoardDataMap) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+pub fn default(
+	boards: BoardDataMap,
+	users_db: Arc<UsersDatabase>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path("default"))
 		.and(warp::path::end())
-		.then(move || {
+		.and(authorized(users_db, Permission::BoardsGet.into()))
+		.then(move |_ , _| {
 			let boards = boards.clone();
 			async move {
 				// TODO: determine which board to use as default.
