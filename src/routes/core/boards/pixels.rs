@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::board::PlacementPageToken;
 use crate::config::CONFIG;
-use crate::filter::header::authorization::{Bearer, authorized, self, PermissionsError};
+use crate::filter::header::authorization::{self, authorized, has_permissions, permissions, Bearer, PermissionsError};
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::filter::resource::filter::FilterRange;
@@ -21,7 +21,7 @@ use crate::filter::response::paginated_list::{
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
-use crate::database::{Order, BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{BoardsConnection, BoardsDatabase, Order, User, UsersDatabase};
 use crate::routes::board_moderation::boards::pixels::Overrides;
 use crate::routes::core::{Connections, EventPacket};
 
@@ -84,13 +84,35 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
+		.and(permissions(users_db))
+		.and_then(move |board, position, user_permissions: EnumSet<_>, _, connection| async move {
+			if !has_permissions(user_permissions, Permission::BoardsPixelsGet.into()) {
+				let error = PermissionsError::MissingPermission;
+				return Err(Rejection::from(error));
+			}
+			Ok((board, position, user_permissions, connection))
+		})
+		.untuple_one()
 		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, position, _, mut users_connection, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, position, user_permissions: EnumSet<_>, mut users_connection, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting a pixel");
 			board.lookup(position, &connection, &mut users_connection).await?
-				.map(|placement| warp::reply::json(&placement))
+				.map(|placement| {
+					if user_permissions.contains(Permission::UsersGet) {
+						warp::reply::json(&placement)
+					} else {
+						warp::reply::json(&serde_json::json!({
+							"position": placement.position,
+							"color": placement.color,
+							"modified": placement.modified,
+							"user": {
+								"uri": placement.user.uri.to_string(),
+								"view": None::<User>
+							}
+						}))
+					}
+				})
 				.ok_or(StatusCode::NOT_FOUND)
 		})
 }

@@ -76,7 +76,7 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorized(users_db, Permission::BoardsList.into()))
+		.and(authorized(users_db, Permission::BoardsList | Permission::BoardsGet))
 		.then(move |pagination: PaginationOptions<BoardPageToken>, filter: BoardFilter, _, _| {
 			let boards = Arc::clone(&boards);
 			async move {
