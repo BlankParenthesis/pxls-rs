@@ -48,6 +48,9 @@ pub struct Config {
 	/// The role granted to all unauthentited users.
 	/// If None, default_role will be used.
 	pub unauthenticated_role: Option<String>,
+	// If True, self-signed certificate responses from the oidc server will be accepted
+	#[serde(default)]
+	pub allow_oidc_selfsigned: bool,
 }
 
 impl Config {

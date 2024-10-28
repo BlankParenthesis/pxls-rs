@@ -134,7 +134,9 @@ unsafe fn find_key_by_algorithm(
 }
 
 lazy_static! {
-	static ref CLIENT: Client = Client::new();
+	static ref CLIENT: Client = Client::builder()
+		.danger_accept_invalid_certs(CONFIG.allow_oidc_selfsigned)
+		.build().unwrap();
 	static ref CACHED_DECODE_KEYS: RwLock<DecodeKeysCache> = {
 		RwLock::new(DecodeKeysCache::default())
 	};
