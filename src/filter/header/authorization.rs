@@ -27,7 +27,9 @@ impl Reply for BearerError {
 			Self::Invalid => StatusCode::BAD_REQUEST,
 			Self::MissingScheme => StatusCode::BAD_REQUEST,
 			Self::MissingToken => StatusCode::BAD_REQUEST,
-			Self::ValidationError(_) => StatusCode::UNAUTHORIZED,
+			Self::ValidationError(ValidationError::JWTError(_),) => StatusCode::UNAUTHORIZED,
+			Self::ValidationError(ValidationError::DiscoveryError(_)) => StatusCode::INTERNAL_SERVER_ERROR,
+			Self::ValidationError(ValidationError::NoValidKeys) => StatusCode::INTERNAL_SERVER_ERROR,
 		}
 		.into_response()
 	}
