@@ -19,6 +19,7 @@ use crate::filter::response::paginated_list::{
 	MAX_PAGE_ITEM_LIMIT,
 };
 use crate::permissions::Permission;
+use crate::routes::placement_statistics::users::calculate_stats;
 use crate::BoardDataMap;
 
 use crate::database::{BoardsConnection, BoardsDatabase, Order, User, UsersDatabase};
@@ -158,22 +159,29 @@ pub fn post(
 			async move {
 				let user = user.expect("Default user shouldn't have place permisisons");
 
-				let board = board.read().await;
-				let board = board.as_ref().expect("Board went missing when creating a pixel");
-				let place_attempt = board.try_place(
-					// TODO: maybe accept option but make sure not to allow
-					// undos etc for anon users
-					&user.id,
-					position,
-					placement.color,
-					placement.overrides,
-					&boards_connection,
-					&mut users_connection,
-				).await;
+				let place_attempt = {
+					let board = board.read().await;
+					let board = board.as_ref().expect("Board went missing when creating a pixel");
+					board.try_place(
+						// TODO: maybe accept option but make sure not to allow
+						// undos etc for anon users
+						&user.id,
+						position,
+						placement.color,
+						placement.overrides,
+						&boards_connection,
+						&mut users_connection,
+					).await
+				};
+
+				// This is required because read locking a rwlock twice in the
+				// same thread can cause a deadlock and we're about to lock
+				// boards in calculate_stats.
+				drop(board);
 
 				match place_attempt {
 					Ok((cooldown, placement)) => {
-						let stats = crate::routes::placement_statistics::users::calculate_stats(
+						let stats = calculate_stats(
 							user.id.clone(),
 							&boards,
 							&boards_connection,
