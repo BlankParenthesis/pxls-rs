@@ -25,6 +25,10 @@ fn default_cooldown() -> u64 {
 	30
 }
 
+fn default_board() -> usize {
+	1
+}
+
 #[derive(Deserialize)]
 pub struct Config {
 	pub host: String,
@@ -58,6 +62,9 @@ pub struct Config {
 	// Cooldown in seconds
 	#[serde(default = "default_cooldown")]
 	pub cooldown: u64,
+	// Default board ID
+	#[serde(default = "default_board")]
+	pub default_board: usize,
 }
 
 impl Config {

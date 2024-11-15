@@ -11,6 +11,7 @@ use warp::http::Uri;
 use warp::ws::Ws;
 use warp::{Reply, Rejection, Filter};
 
+use crate::config::CONFIG;
 use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase, Database};
 use crate::filter::header::authorization::{Bearer, authorized};
 use crate::filter::resource::filter::FilterRange;
@@ -179,8 +180,7 @@ pub fn default(
 		.then(move |_ , _| {
 			let boards = boards.clone();
 			async move {
-				// TODO: determine which board to use as default.
-				let id = 1;
+				let id = CONFIG.default_board;
 
 				let boards = boards.read().await;
 				let board = boards.get(&id).ok_or(StatusCode::NOT_FOUND)?;
