@@ -973,10 +973,8 @@ impl Board {
 		let max_pixels = self.info.max_pixels_available;
 		let max_pixels = usize::try_from(max_pixels).unwrap();
 
-		const COOLDOWN: Duration = Duration::from_secs(30);
-
 		// TODO: proper cooldown
-		Ok(std::iter::repeat(COOLDOWN)
+		Ok(std::iter::repeat(Duration::from_secs(CONFIG.cooldown))
 			.take(max_pixels)
 			.enumerate()
 			.map(|(i, c)| c * (i + 1) as u32)

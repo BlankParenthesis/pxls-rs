@@ -21,6 +21,10 @@ fn default_factions_ou() -> String {
 	"factions".to_string()
 }
 
+fn default_cooldown() -> u64 {
+	30
+}
+
 #[derive(Deserialize)]
 pub struct Config {
 	pub host: String,
@@ -51,6 +55,9 @@ pub struct Config {
 	// If True, self-signed certificate responses from the oidc server will be accepted
 	#[serde(default)]
 	pub allow_oidc_selfsigned: bool,
+	// Cooldown in seconds
+	#[serde(default = "default_cooldown")]
+	pub cooldown: u64,
 }
 
 impl Config {
