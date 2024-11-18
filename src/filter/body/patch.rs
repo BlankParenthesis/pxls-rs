@@ -68,13 +68,13 @@ impl BinaryPatch {
 // TODO: size limit
 pub fn bytes() -> impl Filter<Extract = (BinaryPatch,), Error = Rejection> + Copy {
 	warp::patch()
-		.and(warp::body::bytes())
 		.and(warp::header::exact(
 			header::CONTENT_TYPE.as_str(),
 			"application/octet-stream",
 		))
 		.and(content_range::content_range())
-		.and_then(|bytes, range| async move {
+		.and(warp::body::bytes())
+		.and_then(|range, bytes| async move {
 			BinaryPatch::new(bytes, range).map_err(warp::reject::custom)
 		})
 }
