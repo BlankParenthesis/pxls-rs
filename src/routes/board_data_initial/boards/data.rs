@@ -58,7 +58,6 @@ pub fn patch_initial(
 		.and(warp::path("data"))
 		.and(warp::path("initial"))
 		.and(warp::path::end())
-		.and(warp::patch())
 		.and(patch::bytes())
 		.and(authorized(users_db, Permission::BoardsDataPatch.into()))
 		.and(database::connection(boards_db))

@@ -59,7 +59,6 @@ pub fn patch_mask(
 		.and(warp::path("data"))
 		.and(warp::path("mask"))
 		.and(warp::path::end())
-		.and(warp::patch())
 		.and(patch::bytes())
 		.and(authorized(users_db, Permission::BoardsDataPatch.into()))
 		.and(database::connection(boards_db))
