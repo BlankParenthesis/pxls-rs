@@ -481,11 +481,8 @@ impl Board {
 		};
 		
 		let mut cooldowns = Vec::with_capacity(users.len());
-		// NOTE: we don't need to worry about race conditions because we have
-		// exclusive access to board here (&mut).
-		let locks = HashMap::new();
 		for user in users {
-			let cooldown = self.user_cooldown_info(user, connection, &locks).await?;
+			let cooldown = self.user_cooldown_info(user, connection).await?;
 			cooldowns.push((user, cooldown));
 		}
 
@@ -563,6 +560,8 @@ impl Board {
 		let used_sectors = sector_placements.iter()
 			.map(|((i, _), _)| *i)
 			.collect::<HashSet<_>>();
+		
+		let mut cache_lock = self.placement_cache.write().await;
 
 		// lock all the relevant sectors
 		let mut sectors = HashMap::new();
@@ -600,12 +599,14 @@ impl Board {
 		}
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
+		// NOTE: no longer needed as placement_cache eclipses it and is a global lock
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		if !overrides.cooldown {
-			let cooldown_info = self.user_cooldown_info(
+			let cooldown_info = self.user_cooldown_info_cache(
 				user_id,
 				connection,
+				&cache_lock,
 				&sectors,
 			).await?;
 
@@ -639,7 +640,6 @@ impl Board {
 			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
 		
-		let mut cache_lock = self.placement_cache.write().await;
 		for &(position, _) in placements {
 			cache_lock.insert(CachedPlacement {
 				position,
@@ -647,7 +647,6 @@ impl Board {
 				user_id: uid,
 			});
 		}
-		drop(cache_lock);
 
 		let mut colors = vec![];
 		let mut timestamps = vec![];
@@ -670,9 +669,10 @@ impl Board {
 
 		self.connections.queue_board_change(data).await;
 
-		let cooldown_info = self.user_cooldown_info(
+		let cooldown_info = self.user_cooldown_info_cache(
 			user_id,
 			connection,
+			&cache_lock,
 			&sectors,
 		).await?; // TODO: maybe cooldown err instead
 
@@ -695,6 +695,9 @@ impl Board {
 		}
 
 		let uid = connection.get_uid(user_id).await?;
+		
+		// FIXME: use this to remove pixel from cache
+		let mut cache = self.placement_cache.write().await;
 
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
@@ -705,6 +708,7 @@ impl Board {
 			.expect("Missing sector");
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
+		// NOTE: no longer needed as placement_cache eclipses it and is a global lock
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		let transaction = connection.begin().await?;
@@ -757,9 +761,10 @@ impl Board {
 
 		self.connections.queue_board_change(data).await;
 
-		let cooldown_info = self.user_cooldown_info(
+		let cooldown_info = self.user_cooldown_info_cache(
 			user_id,
 			connection,
+			&cache,
 			&HashMap::from([(sector_index, sector)]),
 		).await?;
 
@@ -793,6 +798,8 @@ impl Board {
 
 		self.check_placement_palette(color, overrides.color)?;
 		
+		let mut cache = self.placement_cache.write().await;
+		
 		let sector = self.sectors
 			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
@@ -816,15 +823,17 @@ impl Board {
 		}
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
+		// NOTE: no longer needed as placement_cache eclipses it and is a global lock
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		let timestamp = self.current_timestamp();
 		// TODO: ignore cooldown should probably also mark the pixel as not
 		// contributing to the pixels available
 		if !overrides.cooldown {
-			let cooldown_info = self.user_cooldown_info(
+			let cooldown_info = self.user_cooldown_info_cache(
 				user_id,
 				connection,
+				&cache,
 				&sectors,
 			).await?;
 
@@ -842,13 +851,11 @@ impl Board {
 			users_connection,
 		).await?;
 
-		let mut cache = self.placement_cache.write().await;
 		cache.insert(CachedPlacement {
 			position: new_placement.position,
 			modified: new_placement.modified,
 			user_id: uid,
 		});
-		drop(cache);
 
 		let sector = sectors.get_mut(&sector_index).unwrap();
 
@@ -875,9 +882,10 @@ impl Board {
 
 		self.connections.queue_board_change(data).await;
 
-		let cooldown_info = self.user_cooldown_info(
+		let cooldown_info = self.user_cooldown_info_cache(
 			user_id,
 			connection,
+			&cache,
 			&sectors,
 		).await?; // TODO: maybe cooldown err instead
 
@@ -931,17 +939,19 @@ impl Board {
 		.unwrap()
 	}
 
-	async fn calculate_cooldowns(
+	async fn calculate_cooldowns<const T: usize>(
 		&self,
 		placement: Option<&CachedPlacement>,
 		connection: &BoardsConnection,
+		cache: &PlacementCache<T>,
 		// must be passed if the caller already holds a lock to prevent deadlock
 		sector_locks: &HashMap<usize, RwLockMappedWriteGuard<'_, Sector>>,
 	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
 			let activity = self.user_count_for_time(
 				placement.modified,
-				connection
+				connection,
+				cache,
 			).await?;
 
 			let (sector_index, sector_offset) = self.info.shape
@@ -982,19 +992,34 @@ impl Board {
 			.collect())
 	}
 
-	// TODO: If any code here is a mess, this certainly is.
-	// The explanations don't even make sense: just make it readable.
 	pub async fn user_cooldown_info(
 		&self,
 		user_id: &str,
 		connection: &BoardsConnection,
+	) -> Result<CooldownInfo, BoardsDatabaseError> {
+		let placement_cache = self.placement_cache.read().await;
+		let sector_locks = HashMap::new();
+		self.user_cooldown_info_cache(
+			user_id,
+			connection,
+			&placement_cache,
+			&sector_locks,
+		).await
+	}
+
+	// TODO: If any code here is a mess, this certainly is.
+	// The explanations don't even make sense: just make it readable.
+	async fn user_cooldown_info_cache<const T: usize>(
+		&self,
+		user_id: &str,
+		connection: &BoardsConnection,
+		placement_cache: &PlacementCache<T>,
 		// must be passed if the caller already holds a lock to prevent deadlock
 		sector_locks: &HashMap<usize, RwLockMappedWriteGuard<'_, Sector>>,
 	) -> Result<CooldownInfo, BoardsDatabaseError> {
 		let max_pixels = self.info.max_pixels_available as usize;
-		let cache = self.placement_cache.read().await;
 		let uid = connection.get_uid(user_id).await?;
-		let mut placements = cache.iter()
+		let mut placements = placement_cache.iter()
 			.filter(|p| p.user_id == uid)
 			.take(max_pixels)
 			.cloned()
@@ -1012,7 +1037,12 @@ impl Board {
 			).await?;
 		};
 
-		let cooldowns = self.calculate_cooldowns(placements.last(), connection, sector_locks).await?;
+		let cooldowns = self.calculate_cooldowns(
+			placements.last(),
+			connection,
+			placement_cache,
+			sector_locks,
+		).await?;
 
 		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
 
@@ -1047,7 +1077,12 @@ impl Board {
 
 			for pair in placements.windows(2) {
 				let info = CooldownInfo::new(
-					self.calculate_cooldowns(Some(&pair[0]), connection, sector_locks).await?,
+					self.calculate_cooldowns(
+						Some(&pair[0]),
+						connection,
+						placement_cache,
+						sector_locks,
+					).await?,
 					UNIX_EPOCH
 						+ Duration::from_secs(
 							u64::from(pair[1].modified) + self.info.created_at,
@@ -1065,16 +1100,16 @@ impl Board {
 		Ok(info)
 	}
 
-	async fn user_count_for_time(
+	async fn user_count_for_time<const T: usize>(
 		&self,
 		timestamp: u32,
 		connection: &BoardsConnection,
+		cache: &PlacementCache<T>,
 	) -> Result<usize, BoardsDatabaseError> {
 		let idle_timeout = self.idle_timeout();
 		let max_time = i32::try_from(timestamp).unwrap();
 		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
 
-		let cache = self.placement_cache.read().await;
 		let cache_age = cache.iter().last().unwrap().modified as i32;
 		if min_time > cache_age {
 			let user_count = cache.iter()
@@ -1094,7 +1129,8 @@ impl Board {
 		&self,
 		connection: &BoardsConnection,
 	) -> Result<usize, BoardsDatabaseError> {
-		self.user_count_for_time(self.current_timestamp(), connection).await
+		let cache = self.placement_cache.read().await;
+		self.user_count_for_time(self.current_timestamp(), connection, &cache).await
 	}
 
 	// TODO: make configurable
@@ -1110,8 +1146,8 @@ impl Board {
 		let id = socket.user_id().await;
 
 		// TODO: is this needed?
-		let cooldown_info = if let Some(ref user_id) = id {
-			Some(self.user_cooldown_info(user_id, connection, &HashMap::new()).await?)
+		let cooldown_info = if let Some(user_id) = id {
+			Some(self.user_cooldown_info(&user_id, connection).await?)
 		} else {
 			None
 		};

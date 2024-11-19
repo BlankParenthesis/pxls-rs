@@ -137,7 +137,6 @@ pub fn patch(
 					let cooldown_info = board.user_cooldown_info(
 						&user.id,
 						&connection,
-						&std::collections::HashMap::new(),
 					).await;
 
 					#[allow(clippy::single_match)]
