@@ -607,7 +607,6 @@ impl Board {
 				user_id,
 				connection,
 				&cache_lock,
-				&sectors,
 			).await?;
 
 			if cooldown_info.pixels_available < changes {
@@ -673,7 +672,6 @@ impl Board {
 			user_id,
 			connection,
 			&cache_lock,
-			&sectors,
 		).await?; // TODO: maybe cooldown err instead
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
@@ -765,7 +763,6 @@ impl Board {
 			user_id,
 			connection,
 			&cache,
-			&HashMap::from([(sector_index, sector)]),
 		).await?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
@@ -834,7 +831,6 @@ impl Board {
 				user_id,
 				connection,
 				&cache,
-				&sectors,
 			).await?;
 
 			if cooldown_info.pixels_available == 0 {
@@ -886,7 +882,6 @@ impl Board {
 			user_id,
 			connection,
 			&cache,
-			&sectors,
 		).await?; // TODO: maybe cooldown err instead
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
@@ -944,32 +939,21 @@ impl Board {
 		placement: Option<&CachedPlacement>,
 		connection: &BoardsConnection,
 		cache: &PlacementCache<T>,
-		// must be passed if the caller already holds a lock to prevent deadlock
-		sector_locks: &HashMap<usize, RwLockMappedWriteGuard<'_, Sector>>,
 	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
 		let parameters = if let Some(placement) = placement {
+			let timestamp = placement.modified;
+
 			let activity = self.user_count_for_time(
-				placement.modified,
+				timestamp,
 				connection,
 				cache,
 			).await?;
 
-			let (sector_index, sector_offset) = self.info.shape
-				.to_local(placement.position as usize).unwrap();
-
-			
-			let range = sector_offset..(sector_offset + 4);
-			let density_slice = if let Some(sector) = sector_locks.get(&sector_index) {
-				sector.density[range].try_into().unwrap()
-			} else {
-				let sector = self.sectors.get_sector(sector_index, connection)
-					.await?.expect("Missing sector");
-				sector.density[range].try_into().unwrap()
-			};
-
-			let density = u32::from_le_bytes(density_slice);
-
-			let timestamp = placement.modified;
+			let density = self.density_for_time(
+				timestamp,
+				placement.position,
+				connection,
+			).await?;
 			
 			CooldownParameters { activity, density, timestamp }
 		} else {
@@ -998,12 +982,10 @@ impl Board {
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, BoardsDatabaseError> {
 		let placement_cache = self.placement_cache.read().await;
-		let sector_locks = HashMap::new();
 		self.user_cooldown_info_cache(
 			user_id,
 			connection,
 			&placement_cache,
-			&sector_locks,
 		).await
 	}
 
@@ -1014,8 +996,6 @@ impl Board {
 		user_id: &str,
 		connection: &BoardsConnection,
 		placement_cache: &PlacementCache<T>,
-		// must be passed if the caller already holds a lock to prevent deadlock
-		sector_locks: &HashMap<usize, RwLockMappedWriteGuard<'_, Sector>>,
 	) -> Result<CooldownInfo, BoardsDatabaseError> {
 		let max_pixels = self.info.max_pixels_available as usize;
 		let uid = connection.get_uid(user_id).await?;
@@ -1041,7 +1021,6 @@ impl Board {
 			placements.last(),
 			connection,
 			placement_cache,
-			sector_locks,
 		).await?;
 
 		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
@@ -1081,7 +1060,6 @@ impl Board {
 						Some(&pair[0]),
 						connection,
 						placement_cache,
-						sector_locks,
 					).await?,
 					UNIX_EPOCH
 						+ Duration::from_secs(
@@ -1123,6 +1101,19 @@ impl Board {
 		} else {
 			connection.user_count_between(self.id, min_time, max_time).await
 		}
+	}
+
+	async fn density_for_time(
+		&self,
+		timestamp: u32,
+		position: u64,
+		connection: &BoardsConnection,
+	) -> Result<u32, BoardsDatabaseError> {
+		connection.density_for_time(
+			self.id,
+			position as i64,
+			timestamp as i32,
+		).await
 	}
 
 	pub async fn user_count(

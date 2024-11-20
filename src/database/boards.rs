@@ -796,6 +796,22 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.map_err(BoardsDatabaseError::from)
 	}
 
+	pub async fn density_for_time(
+		&self,
+		board_id: i32,
+		position: i64,
+		max_time: i32,
+	) -> DbResult<u32> {
+		placement::Entity::find()
+			.distinct_on([placement::Column::UserId])
+			.filter(placement::Column::Board.eq(board_id))
+			.filter(placement::Column::Position.eq(position))
+			.filter(placement::Column::Timestamp.lt(max_time))
+			.count(&self.connection).await
+			.map(|count| u32::try_from(count).expect("Board too dense"))
+			.map_err(BoardsDatabaseError::from)
+	}
+
 	pub async fn create_sector(
 		&self,
 		board_id: i32,
