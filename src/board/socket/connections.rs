@@ -250,15 +250,17 @@ impl Connections {
 		&mut self,
 		socket: &Arc<Socket>,
 	) {
-		let id = socket.user_id().await;
-		let connections = self.by_uid.get(&id).unwrap();
-		let mut connections = connections.write().await;
+		{
+			let id = socket.user_id().await;
+			let connections = self.by_uid.get(&id).unwrap();
+			let mut connections = connections.write().await;
 
-		connections.remove(Arc::clone(socket));
-		if connections.is_empty() {
-			connections.cleanup();
-			drop(connections);
-			self.by_uid.remove(&id);
+			connections.remove(Arc::clone(socket));
+			if connections.is_empty() {
+				connections.cleanup();
+				drop(connections);
+				self.by_uid.remove(&id);
+			}
 		}
 
 		for subscription in socket.subscriptions {
