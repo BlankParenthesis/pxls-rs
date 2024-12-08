@@ -5,6 +5,7 @@ mod sector;
 mod shape;
 mod info;
 mod placement;
+mod activity;
 
 use std::{
 	convert::TryFrom,
@@ -36,6 +37,7 @@ use sector::{SectorAccessor, SectorCache, MaskValue, IoError};
 use cooldown::CooldownInfo;
 use info::BoardInfo;
 
+pub use activity::ActivityCache;
 pub use color::{Color, Palette};
 pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
@@ -293,6 +295,7 @@ pub struct Board {
 	sectors: SectorCache,
 	statistics_cache: StatisticsHashLock<i32>,
 	placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
+	activity_cache: Mutex<ActivityCache>,
 }
 
 impl From<&Board> for Uri {
@@ -320,6 +323,7 @@ impl Board {
 		max_pixels_available: u32,
 		statistics_cache: StatisticsHashLock<i32>,
 		placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
+		activity_cache: Mutex<ActivityCache>,
 	) -> Self {
 		let info = BoardInfo {
 			name,
@@ -344,6 +348,7 @@ impl Board {
 			connections,
 			statistics_cache,
 			placement_cache,
+			activity_cache,
 		}
 	}
 
@@ -639,12 +644,15 @@ impl Board {
 			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
 		
+		let mut activity_cache = self.activity_cache.lock().await;
 		for &(position, _) in placements {
 			cache_lock.insert(CachedPlacement {
 				position,
 				modified: timestamp,
 				user_id: uid,
 			});
+
+			activity_cache.insert(timestamp, uid);
 		}
 
 		let mut colors = vec![];
@@ -740,6 +748,9 @@ impl Board {
 			.put_u32_le(timestamp);
 
 		transaction.commit().await?;
+
+		let mut activity_cache = self.activity_cache.lock().await;
+		activity_cache.remove(timestamp, uid);
 
 		statistics_lock.colors.entry(color).or_default().placed -= 1;
 
@@ -852,6 +863,9 @@ impl Board {
 			modified: new_placement.modified,
 			user_id: uid,
 		});
+
+		let mut activity_cache = self.activity_cache.lock().await;
+		activity_cache.insert(new_placement.modified, uid);
 
 		let sector = sectors.get_mut(&sector_index).unwrap();
 
@@ -1116,12 +1130,9 @@ impl Board {
 		).await
 	}
 
-	pub async fn user_count(
-		&self,
-		connection: &BoardsConnection,
-	) -> Result<usize, BoardsDatabaseError> {
-		let cache = self.placement_cache.read().await;
-		self.user_count_for_time(self.current_timestamp(), connection, &cache).await
+	pub async fn user_count(&self) -> usize {
+		let mut cache = self.activity_cache.lock().await;
+		cache.count(self.current_timestamp())
 	}
 
 	// TODO: make configurable

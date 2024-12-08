@@ -23,7 +23,7 @@ use sea_orm::{
 	ConnectionTrait, QueryTrait, StreamTrait, SqlErr,
 };
 use sea_orm_migration::MigratorTrait;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio_stream::StreamExt;
 use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
@@ -36,7 +36,7 @@ use crate::routes::reports::reports::{ReportPageToken, ReportFilter, Report, Rep
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::routes::user_bans::users::{Ban, BanPageToken, BanFilter};
-use crate::board::{Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, PlacementCache, CachedPlacement};
+use crate::board::{ActivityCache, Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, PlacementCache, CachedPlacement};
 use crate::routes::site_notices::notices::NoticePageToken;
 
 mod entities;
@@ -334,11 +334,26 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			.rev();
 
 		let mut placement_cache = PlacementCache::<SIZE>::default();
+		// TODO: make configurable
+		const IDLE_TIMEOUT: u32 = 5 * 30;
+		let mut activity_cache = ActivityCache::new(IDLE_TIMEOUT);
+		
+		let unix_time = SystemTime::now()
+			.duration_since(SystemTime::UNIX_EPOCH).unwrap()
+			.as_secs();
+		let timestamp: u32 = unix_time.saturating_sub(board.created_at as u64).max(1)
+ 			.try_into().unwrap();
+		let idle_begin = timestamp.saturating_sub(IDLE_TIMEOUT);
+		
 		for placement in placements {
 			placement_cache.insert(placement);
+			if placement.modified >= idle_begin {
+				activity_cache.insert(placement.modified, placement.user_id);
+			}
 		}
 		let placement_cache = RwLock::new(placement_cache);
-
+		let activity_cache = Mutex::new(activity_cache);
+		
 		transaction.commit().await?;
 
 		Ok(Board::new(
@@ -350,6 +365,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			board.max_stacked as u32,
 			statistics_cache,
 			placement_cache,
+			activity_cache,
 		))
 	}
 

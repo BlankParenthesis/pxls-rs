@@ -175,7 +175,6 @@ async fn main() {
 	let routes_usercount =
 		routes::user_count::boards::users(
 			Arc::clone(&boards),
-			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
 		).boxed();
 

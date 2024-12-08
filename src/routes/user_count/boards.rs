@@ -5,9 +5,8 @@ use warp::Filter;
 
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard};
-use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{BoardsDatabase, UsersDatabase};
 use crate::BoardDataMap;
 
 use serde::Serialize;
@@ -20,7 +19,6 @@ pub struct UserCount {
 
 pub fn users(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
@@ -29,14 +27,11 @@ pub fn users(
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(authorized(users_db, Permission::BoardsUsers.into()))
-		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, _, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, _, _| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting user count");
-			board.user_count(&connection).await
-				.map(|active| {
-					let idle_timeout = board.idle_timeout();
-					warp::reply::json(&UserCount { active, idle_timeout })
-				})
+			let active = board.user_count().await;
+			let idle_timeout = board.idle_timeout();
+			warp::reply::json(&UserCount { active, idle_timeout })
 		})
 }
