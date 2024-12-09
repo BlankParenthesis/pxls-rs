@@ -79,29 +79,12 @@ impl UserConnections {
 	) {
 		let weak = Arc::downgrade(&connections);
 		let new_token = CancellationToken::new();
-
 		let cloned_token = CancellationToken::clone(&new_token);
-
 		let mut connections = connections.write().await;
-
 		let old_timer = connections.cooldown_timer.replace(new_token);
 		if let Some(cancellable) = old_timer {
 			cancellable.cancel();
 		}
-
-		let packet = Packet::PixelsAvailable {
-			count: u32::try_from(cooldown_info.pixels_available).unwrap(),
-			next: cooldown_info
-				.cooldown()
-				.map(|timestamp| {
-					timestamp
-						.duration_since(UNIX_EPOCH)
-						.unwrap()
-						.as_secs()
-				}),
-		};
-
-		connections.send(&packet).await;
 
 		tokio::task::spawn(async move {
 			tokio::select! {
@@ -127,25 +110,12 @@ impl UserConnections {
 		connections: Weak<RwLock<Self>>,
 		mut cooldown_info: CooldownInfo,
 	) {
-		let mut next = cooldown_info.next();
-		while let Some(time) = next {
-			let instant = Instant::now()
-				+ time
-					.duration_since(SystemTime::now())
-					.unwrap_or(Duration::ZERO);
-			let count = cooldown_info.pixels_available;
-			tokio::time::sleep_until(instant).await;
+		while let Some((time, count)) = cooldown_info.next() {
+			let cooldown = time.duration_since(SystemTime::now())
+				.unwrap_or(Duration::ZERO);
 
-			next = cooldown_info.next();
-
-			let packet = Packet::PixelsAvailable {
-				count: u32::try_from(count).unwrap(),
-				next: next.map(|time| {
-					time.duration_since(UNIX_EPOCH)
-						.unwrap()
-						.as_secs()
-				}),
-			};
+			let next = Some(time.duration_since(UNIX_EPOCH).unwrap().as_secs());
+			let packet = Packet::PixelsAvailable { count, next };
 
 			match connections.upgrade() {
 				Some(connections) => {
@@ -156,6 +126,21 @@ impl UserConnections {
 					return;
 				},
 			}
+			
+			tokio::time::sleep_until(Instant::now() + cooldown).await;
+		}
+		
+		let count = cooldown_info.pixels_available;
+		let packet = Packet::PixelsAvailable { count, next: None };
+		
+		match connections.upgrade() {
+			Some(connections) => {
+				let connections = connections.write().await;
+				connections.send(&packet).await;
+			},
+			None => {
+				return;
+			},
 		}
 	}
 }

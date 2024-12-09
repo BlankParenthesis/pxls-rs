@@ -21,7 +21,7 @@ fn default_factions_ou() -> String {
 	"factions".to_string()
 }
 
-fn default_cooldown() -> u64 {
+fn default_cooldown() -> u32 {
 	30
 }
 
@@ -61,7 +61,7 @@ pub struct Config {
 	pub allow_oidc_selfsigned: bool,
 	// Cooldown in seconds
 	#[serde(default = "default_cooldown")]
-	pub cooldown: u64,
+	pub cooldown: u32,
 	// Default board ID
 	#[serde(default = "default_board")]
 	pub default_board: usize,

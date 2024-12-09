@@ -28,7 +28,7 @@ use tokio_stream::StreamExt;
 use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
 
-use crate::config::CONFIG;
+use crate::{board::CooldownCache, config::CONFIG};
 use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::routes::site_notices::notices::{Notice, NoticeFilter};
 use crate::routes::board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter};
@@ -36,7 +36,7 @@ use crate::routes::reports::reports::{ReportPageToken, ReportFilter, Report, Rep
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::routes::user_bans::users::{Ban, BanPageToken, BanFilter};
-use crate::board::{ActivityCache, Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, PlacementCache, CachedPlacement};
+use crate::board::{ActivityCache, Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, CachedPlacement};
 use crate::routes::site_notices::notices::NoticePageToken;
 
 mod entities;
@@ -316,14 +316,33 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		}
 
 		let statistics_cache = stats_by_user.into();
+		
+		// TODO: make configurable
+		const IDLE_TIMEOUT: u32 = 5 * 60;
+		
+		let unix_time = SystemTime::now()
+			.duration_since(SystemTime::UNIX_EPOCH).unwrap()
+			.as_secs();
+		let timestamp: u32 = unix_time.saturating_sub(board.created_at as u64).max(1)
+ 			.try_into().unwrap();
+		let epoch = SystemTime::now() - Duration::from_secs(timestamp as u64);
+		
+		// the point after which activity from users will be considered currently active
+		let idle_begin = timestamp - IDLE_TIMEOUT;
+		
+		let max_stack_cooldown = board.max_stacked as u32 * CONFIG.cooldown;
+		// the point after which users may possibly not have a full stack of pixels
+		let cooldown_begin = timestamp - max_stack_cooldown;
 
-		const SIZE: usize = 120_000;
-
+		let mut activity_cache = ActivityCache::new(IDLE_TIMEOUT);
+		let mut cooldown_cache = CooldownCache::new(board.max_stacked as u32, epoch);
+		
 		let placements = placement::Entity::find()
 			.filter(placement::Column::Board.eq(id))
+			.filter(placement::Column::Timestamp.gt(cooldown_begin)
+				.or(placement::Column::Timestamp.gt(idle_begin)))
 			.order_by(placement::Column::Timestamp, sea_orm::Order::Desc)
 			.order_by(placement::Column::Id, sea_orm::Order::Desc)
-			.limit(SIZE as u64)
 			.all(&transaction).await?
 			.into_iter()
 			.map(|placement| CachedPlacement {
@@ -332,27 +351,21 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 				user_id: placement.user_id,
 			})
 			.rev();
-
-		let mut placement_cache = PlacementCache::<SIZE>::default();
-		// TODO: make configurable
-		const IDLE_TIMEOUT: u32 = 5 * 30;
-		let mut activity_cache = ActivityCache::new(IDLE_TIMEOUT);
-		
-		let unix_time = SystemTime::now()
-			.duration_since(SystemTime::UNIX_EPOCH).unwrap()
-			.as_secs();
-		let timestamp: u32 = unix_time.saturating_sub(board.created_at as u64).max(1)
- 			.try_into().unwrap();
-		let idle_begin = timestamp.saturating_sub(IDLE_TIMEOUT);
 		
 		for placement in placements {
-			placement_cache.insert(placement);
-			if placement.modified >= idle_begin {
-				activity_cache.insert(placement.modified, placement.user_id);
-			}
+			// TODO
+			let density = 0;
+			let uid = placement.user_id;
+			let timestamp = placement.modified;
+			
+			activity_cache.insert(timestamp, uid);
+			let activity = activity_cache.count(timestamp) as u32;
+			
+			cooldown_cache.insert(timestamp, uid, activity, density);
 		}
-		let placement_cache = RwLock::new(placement_cache);
+		
 		let activity_cache = Mutex::new(activity_cache);
+		let cooldown_cache = RwLock::new(cooldown_cache);
 		
 		transaction.commit().await?;
 
@@ -364,8 +377,8 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			palette,
 			board.max_stacked as u32,
 			statistics_cache,
-			placement_cache,
 			activity_cache,
+			cooldown_cache,
 		))
 	}
 

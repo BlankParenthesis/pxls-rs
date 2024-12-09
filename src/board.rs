@@ -11,12 +11,13 @@ use std::{
 	convert::TryFrom,
 	io::{Seek, SeekFrom},
 	sync::Arc,
-	time::{Duration, SystemTime, UNIX_EPOCH}, collections::{HashMap, hash_map::Entry, HashSet},
+	time::{SystemTime, UNIX_EPOCH},
+	collections::{HashMap, hash_map::Entry, HashSet},
 };
 
 use bytes::BufMut;
 use serde::Serialize;
-use tokio::sync::{Mutex, RwLock, RwLockMappedWriteGuard};
+use tokio::sync::{Mutex, RwLock};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -38,6 +39,7 @@ use cooldown::CooldownInfo;
 use info::BoardInfo;
 
 pub use activity::ActivityCache;
+pub use cooldown::CooldownCache;
 pub use color::{Color, Palette};
 pub use sector::{SectorBuffer, Sector};
 pub use shape::Shape;
@@ -136,91 +138,6 @@ impl Reply for PatchError {
 	}
 }
 
-
-// If we want to handle x active users we need x * stack stored pixels to
-// keep their cooldown lookup in cache. Since this is by far the most
-// expensive part of placing, this is highly desirable so we can spend some
-// memory here.
-// So for 10,000 users, a stack size of 6, and doubled for margins:
-// 10_000 * 6 * 2 = 120_000
-// NOTE: ~~Placements are currently 48 bytes + id Strings (~40 bytes each)
-// So entries are about 90B in size and so this is 10MB of data.~~
-// *CachedPlacements* are just 16 bytes so this is now less than 2MB of data.
-const PLACEMENT_CACHE_SIZE: usize = 120_000;
-
-pub struct PlacementCache<const SIZE: usize> {
-	ring_buffer: Box<[CachedPlacement; SIZE]>,
-	// assumes infinite size, wrapped at lookup
-	position: usize,
-}
-
-impl<const SIZE: usize> Default for PlacementCache<SIZE> {
-	fn default() -> Self {
-		Self {
-			ring_buffer: vec![CachedPlacement::default(); SIZE]
-				.into_boxed_slice()
-				.try_into().unwrap(),
-			position: 0,
-		}
-	}
-}
-
-impl<const SIZE: usize> PlacementCache<SIZE> {
-	fn iter(&self) -> PlacementCacheIterator<'_, SIZE> {
-		PlacementCacheIterator {
-			placements: self,
-			offset: 0,
-		}
-	}
-
-	pub fn insert(&mut self, placement: CachedPlacement) {
-		self.ring_buffer[self.position % SIZE] = placement;
-		self.position += 1;
-	}
-}
-
-struct PlacementCacheIterator<'a, const SIZE: usize> {
-	placements: &'a PlacementCache<SIZE>,
-	offset: usize,
-}
-
-
-impl<'a, const SIZE: usize> Iterator for PlacementCacheIterator<'a, SIZE> {
-	type Item = &'a CachedPlacement;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		let (remaining, _) = self.size_hint();
-		if remaining > 0 {
-			self.offset += 1;
-			let index = (self.placements.position - self.offset) % SIZE;
-			Some(&self.placements.ring_buffer[index])
-		} else {
-			None
-		}
-	}
-
-	fn size_hint(&self) -> (usize, Option<usize>) {
-		let limit = usize::min(self.placements.position, SIZE);
-		let remaining = limit - self.offset;
-		(remaining, Some(remaining))
-	}
-
-	fn count(self) -> usize {
-		self.size_hint().0
-	}
-
-	fn last(self) -> Option<Self::Item> where Self: Sized {
-		let last_offset = usize::min(self.placements.position, SIZE);
-		if last_offset > 0 {
-			let index = (self.placements.position - (last_offset - 1)) % SIZE;
-			Some(&self.placements.ring_buffer[index])
-		} else {
-			None
-		}
-	}
-}
-
-
 // TODO: This was generic but self referencing things do not like generics so it
 // has been made concrete here. That said, it's ugly and it would be nice to
 // refactor it if possible:
@@ -280,22 +197,14 @@ impl<K: Eq + PartialEq + std::hash::Hash> From<HashMap<K, PlacementColorStatisti
 	}
 }
 
-
-#[derive(Debug, Default, Clone, Copy)]
-struct CooldownParameters {
-	activity: usize,
-	density: u32,
-	timestamp: u32,
-}
-
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
 	connections: Connections,
 	sectors: SectorCache,
 	statistics_cache: StatisticsHashLock<i32>,
-	placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
 	activity_cache: Mutex<ActivityCache>,
+	cooldown_cache: RwLock<CooldownCache>,
 }
 
 impl From<&Board> for Uri {
@@ -322,8 +231,8 @@ impl Board {
 		palette: Palette,
 		max_pixels_available: u32,
 		statistics_cache: StatisticsHashLock<i32>,
-		placement_cache: RwLock<PlacementCache<PLACEMENT_CACHE_SIZE>>,
 		activity_cache: Mutex<ActivityCache>,
+		cooldown_cache: RwLock<CooldownCache>,
 	) -> Self {
 		let info = BoardInfo {
 			name,
@@ -347,8 +256,8 @@ impl Board {
 			sectors,
 			connections,
 			statistics_cache,
-			placement_cache,
 			activity_cache,
+			cooldown_cache,
 		}
 	}
 
@@ -533,6 +442,55 @@ impl Board {
 			None => Err(PlaceError::InvalidColor),
 		}
 	}
+	
+	async fn insert_placement(
+		&self,
+		user_id: &str,
+		position: u64,
+		color: u8,
+		timestamp: u32,
+		sector_offset: usize,
+		sector: &mut Sector,
+		connection: &BoardsConnection,
+		users_connection: &mut UsersConnection,
+	) -> Result<Placement, BoardsDatabaseError> {
+		let four_byte_range = (sector_offset * 4)..((sector_offset + 1) * 4);
+		
+		let uid = connection.get_uid(user_id).await?;
+		
+		let mut cooldown_cache = self.cooldown_cache.write().await;
+		let mut activity_cache = self.activity_cache.lock().await;
+		
+		let new_placement = connection.insert_placement(
+			self.id,
+			position,
+			color,
+			timestamp,
+			user_id,
+			users_connection,
+		).await?;
+		activity_cache.insert(new_placement.modified, uid);
+		
+		let activity = activity_cache.count(new_placement.modified) as u32;
+		let density = u32::from_le_bytes(
+			sector.density[four_byte_range.clone()].try_into().unwrap()
+		);
+		
+		cooldown_cache.insert(new_placement.modified, uid, activity, density);
+		
+		sector.colors[sector_offset] = color;
+		sector.timestamps[four_byte_range]
+			.as_mut()
+			.put_u32_le(timestamp);
+		
+		let data = socket::BoardData::builder()
+			.colors(vec![socket::Change { position, values: vec![color] }])
+			.timestamps(vec![socket::Change { position, values: vec![timestamp] }]);
+
+		self.connections.queue_board_change(data).await;
+		
+		Ok(new_placement)
+	}
 
 	// Returns a tuple of:
 	// - the number of placements that changed the board 
@@ -543,6 +501,7 @@ impl Board {
 		placements: &[(u64, u8)],
 		overrides: Overrides,
 		connection: &BoardsConnection,
+		users_connection: &mut UsersConnection,
 	) -> Result<(usize, u32), PlaceError> {
 		if connection.is_user_banned(user_id).await? {
 			return Err(PlaceError::Banned)
@@ -558,15 +517,13 @@ impl Board {
 						self.info.shape.to_local(position as usize)
 							.ok_or(PlaceError::OutOfBounds)
 					})
-					.map(|(s_i, s_o)| ((s_i, s_o), color))
+					.map(|(s_i, s_o)| (position, (s_i, s_o), color))
 			})
 			.collect::<Result<Vec<_>, _>>()?;
 
 		let used_sectors = sector_placements.iter()
-			.map(|((i, _), _)| *i)
+			.map(|(_, (i, _), _)| *i)
 			.collect::<HashSet<_>>();
-		
-		let mut cache_lock = self.placement_cache.write().await;
 
 		// lock all the relevant sectors
 		let mut sectors = HashMap::new();
@@ -580,9 +537,9 @@ impl Board {
 			}
 		}
 
-		let mut changes = 0;
+		let mut changes: usize = 0;
 		// final checks
-		for ((sector_index, sector_offset), color) in sector_placements.iter() {
+		for (_, (sector_index, sector_offset), color) in sector_placements.iter() {
 			let sector = sectors.get(sector_index).unwrap();
 
 			if !overrides.mask {
@@ -604,82 +561,41 @@ impl Board {
 		}
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
-		// NOTE: no longer needed as placement_cache eclipses it and is a global lock
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		if !overrides.cooldown {
-			let cooldown_info = self.user_cooldown_info_cache(
+			let cooldown_info = self.user_cooldown_info(
 				user_id,
 				connection,
-				&cache_lock,
 			).await?;
 
-			if cooldown_info.pixels_available < changes {
+			if (cooldown_info.pixels_available as usize) < changes {
 				return Err(PlaceError::Cooldown);
 			}
 		}
 
 		let timestamp = self.current_timestamp();
 		
-		// commit the placements
-		connection.insert_placements(
-			self.id,
-			placements,
-			timestamp,
-			user_id,
-		).await?;
-
-		for ((sector_index, sector_offset), color) in sector_placements {
+		for (position, (sector_index, sector_offset), color) in sector_placements {
 			let sector = sectors.get_mut(&sector_index).unwrap();
 
-			sector.colors[sector_offset] = color;
-			
-			let timestamp_slice =
-				&mut sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)];
-			
-			timestamp_slice
-				.as_mut()
-				.put_u32_le(timestamp);
+			self.insert_placement(
+				user_id,
+				position,
+				color,
+				timestamp,
+				sector_offset,
+				sector,
+				connection,
+				users_connection,
+			).await?;
 			
 			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
-		
-		let mut activity_cache = self.activity_cache.lock().await;
-		for &(position, _) in placements {
-			cache_lock.insert(CachedPlacement {
-				position,
-				modified: timestamp,
-				user_id: uid,
-			});
 
-			activity_cache.insert(timestamp, uid);
-		}
-
-		let mut colors = vec![];
-		let mut timestamps = vec![];
-
-		for (position, color) in placements {
-			colors.push(socket::Change {
-				position: *position,
-				values: vec![*color],
-			});
-
-			timestamps.push(socket::Change {
-				position: *position,
-				values: vec![timestamp],
-			});
-		}
-
-		let data = socket::BoardData::builder()
-			.colors(colors)
-			.timestamps(timestamps);
-
-		self.connections.queue_board_change(data).await;
-
-		let cooldown_info = self.user_cooldown_info_cache(
+		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
-			&cache_lock,
 		).await?; // TODO: maybe cooldown err instead
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
@@ -702,9 +618,6 @@ impl Board {
 
 		let uid = connection.get_uid(user_id).await?;
 		
-		// FIXME: use this to remove pixel from cache
-		let mut cache = self.placement_cache.write().await;
-
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
 			.ok_or(UndoError::OutOfBounds)?;
@@ -749,8 +662,10 @@ impl Board {
 
 		transaction.commit().await?;
 
+		let mut cooldown_cache = self.cooldown_cache.write().await;
 		let mut activity_cache = self.activity_cache.lock().await;
 		activity_cache.remove(timestamp, uid);
+		cooldown_cache.remove(timestamp, uid);
 
 		statistics_lock.colors.entry(color).or_default().placed -= 1;
 
@@ -770,10 +685,9 @@ impl Board {
 
 		self.connections.queue_board_change(data).await;
 
-		let cooldown_info = self.user_cooldown_info_cache(
+		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
-			&cache,
 		).await?;
 
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
@@ -806,8 +720,6 @@ impl Board {
 
 		self.check_placement_palette(color, overrides.color)?;
 		
-		let mut cache = self.placement_cache.write().await;
-		
 		let sector = self.sectors
 			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
@@ -838,10 +750,9 @@ impl Board {
 		// TODO: ignore cooldown should probably also mark the pixel as not
 		// contributing to the pixels available
 		if !overrides.cooldown {
-			let cooldown_info = self.user_cooldown_info_cache(
+			let cooldown_info = self.user_cooldown_info(
 				user_id,
 				connection,
-				&cache,
 			).await?;
 
 			if cooldown_info.pixels_available == 0 {
@@ -849,55 +760,21 @@ impl Board {
 			}
 		}
 
-		let new_placement = connection.insert_placement(
-			self.id,
+		let new_placement = self.insert_placement(
+			user_id,
 			position,
 			color,
 			timestamp,
-			user_id,
+			sector_offset,
+			sector,
+			connection,
 			users_connection,
 		).await?;
 
-		cache.insert(CachedPlacement {
-			position: new_placement.position,
-			modified: new_placement.modified,
-			user_id: uid,
-		});
-
-		let mut activity_cache = self.activity_cache.lock().await;
-		activity_cache.insert(new_placement.modified, uid);
-
-		let sector = sectors.get_mut(&sector_index).unwrap();
-
-		sector.colors[sector_offset] = color;
-		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
-			.as_mut()
-			.put_u32_le(timestamp);
-
 		statistics_lock.colors.entry(color).or_default().placed += 1;
 
-		let color = socket::Change {
-			position,
-			values: vec![color],
-		};
-
-		let timestamp = socket::Change {
-			position,
-			values: vec![timestamp],
-		};
-
-		let data = socket::BoardData::builder()
-			.colors(vec![color])
-			.timestamps(vec![timestamp]);
-
-		self.connections.queue_board_change(data).await;
-
-		let cooldown_info = self.user_cooldown_info_cache(
-			user_id,
-			connection,
-			&cache,
-		).await?; // TODO: maybe cooldown err instead
-
+		// TODO: maybe cooldown err instead
+		let cooldown_info = self.user_cooldown_info(user_id, connection).await?;
 		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
@@ -948,186 +825,14 @@ impl Board {
 		.unwrap()
 	}
 
-	async fn calculate_cooldowns<const T: usize>(
-		&self,
-		placement: Option<&CachedPlacement>,
-		connection: &BoardsConnection,
-		cache: &PlacementCache<T>,
-	) -> Result<Vec<SystemTime>, BoardsDatabaseError> {
-		let parameters = if let Some(placement) = placement {
-			let timestamp = placement.modified;
-
-			let activity = self.user_count_for_time(
-				timestamp,
-				connection,
-				cache,
-			).await?;
-
-			let density = self.density_for_time(
-				timestamp,
-				placement.position,
-				connection,
-			).await?;
-			
-			CooldownParameters { activity, density, timestamp }
-		} else {
-			CooldownParameters::default()
-		};
-
-		let CooldownParameters { activity, density, timestamp } = parameters;
-
-		let base_time = self.info.created_at + timestamp as u64;
-		let base_time = Duration::from_secs(base_time);
-		let max_pixels = self.info.max_pixels_available;
-		let max_pixels = usize::try_from(max_pixels).unwrap();
-
-		// TODO: proper cooldown
-		Ok(std::iter::repeat(Duration::from_secs(CONFIG.cooldown))
-			.take(max_pixels)
-			.enumerate()
-			.map(|(i, c)| c * (i + 1) as u32)
-			.map(|cooldown| UNIX_EPOCH + base_time + cooldown)
-			.collect())
-	}
-
 	pub async fn user_cooldown_info(
 		&self,
 		user_id: &str,
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, BoardsDatabaseError> {
-		let placement_cache = self.placement_cache.read().await;
-		self.user_cooldown_info_cache(
-			user_id,
-			connection,
-			&placement_cache,
-		).await
-	}
-
-	// TODO: If any code here is a mess, this certainly is.
-	// The explanations don't even make sense: just make it readable.
-	async fn user_cooldown_info_cache<const T: usize>(
-		&self,
-		user_id: &str,
-		connection: &BoardsConnection,
-		placement_cache: &PlacementCache<T>,
-	) -> Result<CooldownInfo, BoardsDatabaseError> {
-		let max_pixels = self.info.max_pixels_available as usize;
 		let uid = connection.get_uid(user_id).await?;
-		let mut placements = placement_cache.iter()
-			.filter(|p| p.user_id == uid)
-			.take(max_pixels)
-			.cloned()
-			.collect::<Vec<_>>();
-		placements.reverse();
-
-		if placements.len() < max_pixels {
-			// if we don't have all the user's placements in the buffer,
-			// we have to query the database as we don't know if we're missing
-			// placements.
-			placements = connection.list_user_placements(
-				self.id,
-				user_id,
-				max_pixels,
-			).await?;
-		};
-
-		let cooldowns = self.calculate_cooldowns(
-			placements.last(),
-			connection,
-			placement_cache,
-		).await?;
-
-		let mut info = CooldownInfo::new(cooldowns, SystemTime::now());
-
-		// If we would already have MAX_STACKED just from waiting, we
-		// don't need to check previous data since we can't possibly
-		// have more.
-		// Similarly, we know we needed to spend a pixel on the most
-		// recent placement so we can't have saved more than
-		// `MAX_STACKED - 1` since then.
-		// TODO: actually, I think this generalizes and we only have to
-		// check the last `Board::MAX_STACKED - current_stacked` pixels.
-		let max_minus_one = self.info.max_pixels_available.saturating_sub(1) as usize;
-		let incomplete_info_is_correct = info.pixels_available >= max_minus_one;
-
-		if !placements.is_empty() && !incomplete_info_is_correct {
-			// In order to place MAX_STACKED pixels, a user must either:
-			// - start with MAX_STACKED already stacked or
-			// - wait between each placement enough to gain the pixels.
-			// By looking at how many pixels a user would have gained
-			// between each placement we can determine a minimum number
-			// of pixels, and by assuming they start with MAX_STACKED we
-			// can  also infer a maximum.
-			// These bounds necessarily converge after looking at
-			// MAX_STACKED placements because of the two conditions
-			// outlined above.
-
-			// NOTE: an important assumption here is that to stack N
-			// pixels it takes the same amount of time from the last
-			// placement __regardless__ of what the current stack is.
-
-			let mut pixels: usize = 0;
-
-			for pair in placements.windows(2) {
-				let info = CooldownInfo::new(
-					self.calculate_cooldowns(
-						Some(&pair[0]),
-						connection,
-						placement_cache,
-					).await?,
-					UNIX_EPOCH
-						+ Duration::from_secs(
-							u64::from(pair[1].modified) + self.info.created_at,
-						),
-				);
-
-				pixels = pixels
-					.max(info.pixels_available)
-					.saturating_sub(1);
-			}
-
-			info.pixels_available = info.pixels_available.max(pixels);
-		}
-
-		Ok(info)
-	}
-
-	async fn user_count_for_time<const T: usize>(
-		&self,
-		timestamp: u32,
-		connection: &BoardsConnection,
-		cache: &PlacementCache<T>,
-	) -> Result<usize, BoardsDatabaseError> {
-		let idle_timeout = self.idle_timeout();
-		let max_time = i32::try_from(timestamp).unwrap();
-		let min_time = i32::try_from(timestamp.saturating_sub(idle_timeout)).unwrap();
-
-		let cache_age = cache.iter().last().unwrap().modified as i32;
-		if min_time > cache_age {
-			let user_count = cache.iter()
-				// TODO: binary search
-				.skip_while(|p| p.modified > max_time as u32)
-				.take_while(|p| p.modified >= min_time as u32)
-				.map(|p| p.user_id)
-				.collect::<HashSet<_>>().len();
-
-			Ok(user_count)
-		} else {
-			connection.user_count_between(self.id, min_time, max_time).await
-		}
-	}
-
-	async fn density_for_time(
-		&self,
-		timestamp: u32,
-		position: u64,
-		connection: &BoardsConnection,
-	) -> Result<u32, BoardsDatabaseError> {
-		connection.density_for_time(
-			self.id,
-			position as i64,
-			timestamp as i32,
-		).await
+		let cache = self.cooldown_cache.read().await;
+		Ok(cache.get(uid, self.current_timestamp()))
 	}
 
 	pub async fn user_count(&self) -> usize {

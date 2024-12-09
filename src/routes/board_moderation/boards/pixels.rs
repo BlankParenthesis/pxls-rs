@@ -13,7 +13,7 @@ use crate::filter::resource::board::{self, PassableBoard};
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
-use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{BoardsConnection, BoardsDatabase, UsersConnection, UsersDatabase};
 
 #[derive(Debug, Default, Deserialize, Clone, Copy)]
 pub struct Overrides {
@@ -74,21 +74,21 @@ pub fn patch(
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::permissions(users_db))
-		.and_then(|board, placement: MassPlacementRequest, permissions: EnumSet<Permission>, user, _| async move {
+		.and_then(|board, placement: MassPlacementRequest, permissions: EnumSet<Permission>, user, users_connection| async move {
 			let authorized = authorization::has_permissions(
 				permissions,
 				EnumSet::from(placement.overrides) | Permission::BoardsPixelsPatch
 			);
 
 			if authorized {
-				Ok((board, placement, user))
+				Ok((board, placement, user, users_connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
 		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, placement: MassPlacementRequest, user: Option<Bearer>, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, placement: MassPlacementRequest, user: Option<Bearer>, mut users_connection: UsersConnection, connection: BoardsConnection| async move {
 			let user = user.expect("Default user shouldn't have place permisisons");
 
 			let changes = placement.changes.into_iter()
@@ -117,6 +117,7 @@ pub fn patch(
 				&changes,
 				placement.overrides,
 				&connection,
+				&mut users_connection,
 			).await;
 
 			match place_attempt {
