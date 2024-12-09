@@ -8,16 +8,16 @@ mod placement;
 mod activity;
 
 use std::{
+	collections::{hash_map::Entry, HashMap, HashSet},
 	convert::TryFrom,
 	io::{Seek, SeekFrom},
 	sync::Arc,
 	time::{SystemTime, UNIX_EPOCH},
-	collections::{HashMap, hash_map::Entry, HashSet},
 };
 
 use bytes::BufMut;
 use serde::Serialize;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc::{self, error::SendError}, Mutex, RwLock};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -26,7 +26,7 @@ use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::routes::board_notices::boards::notices::BoardsNotice;
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::config::CONFIG;
-use crate::database::{UsersConnection, DatabaseError};
+use crate::database::{BoardsDatabase, Database, User, UsersConnection, DatabaseError};
 use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::filter::body::patch::BinaryPatch;
 use crate::database::BoardsDatabaseError;
@@ -55,12 +55,19 @@ pub enum PlaceError {
 	Cooldown,
 	OutOfBounds,
 	DatabaseError(BoardsDatabaseError),
+	SenderError(SendError<PendingPlacement>),
 	Banned,
 }
 
 impl From<BoardsDatabaseError> for PlaceError {
 	fn from(value: BoardsDatabaseError) -> Self {
 		Self::DatabaseError(value)
+	}
+}
+
+impl From<SendError<PendingPlacement>> for PlaceError {
+	fn from(value: SendError<PendingPlacement>) -> Self {
+		Self::SenderError(value)
 	}
 }
 
@@ -78,7 +85,7 @@ impl Reply for PlaceError {
 			Self::NoOp => StatusCode::CONFLICT,
 			Self::Cooldown => StatusCode::TOO_MANY_REQUESTS,
 			Self::OutOfBounds => StatusCode::NOT_FOUND,
-			Self::DatabaseError(_) => {
+			Self::DatabaseError(_) | Self::SenderError(_) => {
 				StatusCode::INTERNAL_SERVER_ERROR
 			},
 			Self::Banned => StatusCode::FORBIDDEN,
@@ -197,6 +204,14 @@ impl<K: Eq + PartialEq + std::hash::Hash> From<HashMap<K, PlacementColorStatisti
 	}
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingPlacement {
+	pub position: u64,
+	pub color: u8,
+	pub timestamp: u32,
+	pub uid: i32,
+}
+
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
@@ -205,6 +220,7 @@ pub struct Board {
 	statistics_cache: StatisticsHashLock<i32>,
 	activity_cache: Mutex<ActivityCache>,
 	cooldown_cache: RwLock<CooldownCache>,
+	placement_sender: mpsc::Sender<PendingPlacement>,
 }
 
 impl From<&Board> for Uri {
@@ -233,6 +249,7 @@ impl Board {
 		statistics_cache: StatisticsHashLock<i32>,
 		activity_cache: Mutex<ActivityCache>,
 		cooldown_cache: RwLock<CooldownCache>,
+		pool: Arc<BoardsDatabase>,
 	) -> Self {
 		let info = BoardInfo {
 			name,
@@ -249,6 +266,10 @@ impl Board {
 		);
 
 		let connections = Connections::default();
+		
+		let (placement_sender, placement_receiver) = mpsc::channel(10000);
+
+		tokio::spawn(Self::buffer_placements(id, placement_receiver, pool));
 
 		Self {
 			id,
@@ -258,6 +279,21 @@ impl Board {
 			statistics_cache,
 			activity_cache,
 			cooldown_cache,
+			placement_sender,
+		}
+	}
+	
+	async fn buffer_placements(
+		board_id: i32,
+		mut receiver: mpsc::Receiver<PendingPlacement>,
+		pool: Arc<BoardsDatabase>,
+	) {
+		let mut buffer = vec![];
+		while receiver.recv_many(&mut buffer, 10000).await > 0 {
+			let connection = pool.connection().await
+				.expect("A board database insert thread failed to connect to the database");
+			connection.insert_placements(board_id, buffer.drain(..).as_slice()).await
+				.expect("A board database insert thread failed to insert placements");
 		}
 	}
 
@@ -453,22 +489,32 @@ impl Board {
 		sector: &mut Sector,
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
-	) -> Result<Placement, BoardsDatabaseError> {
-		let four_byte_range = (sector_offset * 4)..((sector_offset + 1) * 4);
-		
+	) -> Result<Placement, PlaceError> {
 		let uid = connection.get_uid(user_id).await?;
+		
+		let four_byte_range = (sector_offset * 4)..((sector_offset + 1) * 4);
 		
 		let mut cooldown_cache = self.cooldown_cache.write().await;
 		let mut activity_cache = self.activity_cache.lock().await;
 		
-		let new_placement = connection.insert_placement(
-			self.id,
+		let pending_placement = PendingPlacement {
+			uid,
+			timestamp,
 			position,
 			color,
-			timestamp,
-			user_id,
-			users_connection,
-		).await?;
+		};
+		self.placement_sender.send(pending_placement).await?;
+		
+		let user = users_connection.get_user(user_id).await
+			.map_err(BoardsDatabaseError::UsersError)?;
+		
+		let new_placement = Placement {
+			position: position as u64,
+			color: color as u8,
+			modified: timestamp as u32,
+			user: Reference::new(User::uri(user_id), user.clone()),
+		};
+		
 		activity_cache.insert(new_placement.modified, uid);
 		
 		let activity = activity_cache.count(new_placement.modified) as u32;
@@ -503,11 +549,12 @@ impl Board {
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
 	) -> Result<(usize, u32), PlaceError> {
+		let uid = connection.get_uid(user_id).await?;
+		
 		if connection.is_user_banned(user_id).await? {
-			return Err(PlaceError::Banned)
+			return Err(PlaceError::Banned);
 		}
 
-		let uid = connection.get_uid(user_id).await?;
 		// preliminary checks and mapping to sector local values
 		let sector_placements = placements.iter()
 			.copied()
@@ -612,11 +659,11 @@ impl Board {
 		position: u64,
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, UndoError> {
-		if connection.is_user_banned(user_id).await? {
-			return Err(UndoError::Banned)
-		}
-
 		let uid = connection.get_uid(user_id).await?;
+		
+		if connection.is_user_banned(user_id).await? {
+			return Err(UndoError::Banned);
+		}
 		
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)
@@ -708,11 +755,11 @@ impl Board {
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
 	) -> Result<(CooldownInfo, Placement), PlaceError> {
-		if connection.is_user_banned(user_id).await? {
-			return Err(PlaceError::Banned)
-		}
-
 		let uid = connection.get_uid(user_id).await?;
+		
+		if connection.is_user_banned(user_id).await? {
+			return Err(PlaceError::Banned);
+		}
 
 		let (sector_index, sector_offset) = self.info.shape
 			.to_local(position as usize)

@@ -53,7 +53,8 @@ async fn main() {
 	let connection = boards_db.connection().await
 		.expect("Failed to get board connection when loading boards");
 	let boards = connection
-		.list_boards().await.expect("Failed to load boards (at list)")
+		.list_boards(Arc::clone(&boards_db)).await
+		.expect("Failed to load boards (at list)")
 		.into_iter()
 		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))
 		.collect::<HashMap<_, _>>();

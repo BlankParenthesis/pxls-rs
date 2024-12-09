@@ -1,4 +1,4 @@
-use std::{time::{Duration, SystemTime, UNIX_EPOCH}, collections::HashMap};
+use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 use bytes::{BytesMut, BufMut};
 use reqwest::StatusCode;
@@ -28,7 +28,8 @@ use tokio_stream::StreamExt;
 use url::form_urlencoded::byte_serialize;
 use warp::reply::Reply;
 
-use crate::{board::CooldownCache, config::CONFIG};
+use crate::config::CONFIG;
+use crate::board::{CooldownCache, PendingPlacement};
 use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::routes::site_notices::notices::{Notice, NoticeFilter};
 use crate::routes::board_notices::boards::notices::{BoardsNoticePageToken, BoardsNotice, BoardNoticeFilter};
@@ -255,21 +256,27 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		USER_ID_CACHE.get_id(user_id.to_owned(), &self.connection).await
 	}
 
-	pub async fn list_boards(&self) -> DbResult<Vec<Board>> {
-		
+	pub async fn list_boards(
+		&self,
+		pool: Arc<BoardsDatabase>,
+	) -> DbResult<Vec<Board>> {
 		let db_boards = board::Entity::find()
 			.all(&self.connection).await?;
 
 		let mut boards = Vec::with_capacity(db_boards.len());
 
 		for board in db_boards {
-			boards.push(self.board_from_model(board).await?);
+			boards.push(self.board_from_model(board, Arc::clone(&pool)).await?);
 		}
 
 		Ok(boards)
 	}
 
-	async fn board_from_model(&self, board: board::Model) -> DbResult<Board> {
+	async fn board_from_model(
+		&self,
+		board: board::Model,
+		pool: Arc<BoardsDatabase>,
+	) -> DbResult<Board> {
 		let id = board.id;
 
 		let transaction = self.connection.begin().await?;
@@ -379,6 +386,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			statistics_cache,
 			activity_cache,
 			cooldown_cache,
+			pool,
 		))
 	}
 
@@ -388,6 +396,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		shape: Vec<Vec<usize>>,
 		palette: Palette,
 		max_pixels_available: u32,
+		pool: Arc<BoardsDatabase>,
 	) -> DbResult<Board> {
 		let now = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
@@ -408,7 +417,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		transaction.replace_palette(palette, new_board.id).await?;
 		transaction.commit().await?;
 		
-		let board = self.board_from_model(new_board).await?;
+		let board = self.board_from_model(new_board, pool).await?;
 
 		Ok(board)
 	}
@@ -707,58 +716,20 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		Ok(())
 	}
 
-	pub async fn insert_placement(
-		&self,
-		board_id: i32,
-		position: u64,
-		color: u8,
-		timestamp: u32,
-		user_id: &str,
-		users_connection: &mut UsersConnection,
-	) -> DbResult<Placement> {
-		let uid = USER_ID_CACHE.get_id(user_id.to_string(), &self.connection).await?;
-		let user = users_connection.get_user(user_id).await
-			.map_err(BoardsDatabaseError::UsersError)?;
-
-		placement::Entity::insert(
-			placement::ActiveModel {
-				id: NotSet,
-				board: Set(board_id),
-				position: Set(position as i64),
-				color: Set(color as i16),
-				timestamp: Set(timestamp as i32),
-				user_id: Set(uid),
-			}
-		)
-		// TODO: try just returning the known data to skip the return for speed
-		// same goes for others
-		.exec_with_returning(&self.connection).await
-		.map(|placement| Placement {
-			position: placement.position as u64,
-			color: placement.color as u8,
-			modified: placement.timestamp as u32,
-			user: Reference::new(User::uri(user_id), user.clone()),
-		})
-		.map_err(BoardsDatabaseError::from)
-	}
-
 	pub async fn insert_placements(
 		&self,
 		board_id: i32,
-		placements: &[(u64, u8)],
-		timestamp: u32,
-		user_id: &str,
+		placements: &[PendingPlacement],
 	) -> DbResult<()> {
-		let uid = USER_ID_CACHE.get_id(user_id.to_string(), &self.connection).await?;
 		placement::Entity::insert_many(
-			placements.iter().map(|(position, color)| {
+			placements.into_iter().map(|p| {
 				placement::ActiveModel {
 					id: NotSet,
 					board: Set(board_id),
-					position: Set(*position as i64),
-					color: Set(*color as i16),
-					timestamp: Set(timestamp as i32),
-					user_id: Set(uid),
+					position: Set(p.position as i64),
+					color: Set(p.color as i16),
+					timestamp: Set(p.timestamp as i32),
+					user_id: Set(p.uid),
 				}
 			})
 		)

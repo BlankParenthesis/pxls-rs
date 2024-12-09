@@ -39,16 +39,18 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorized(users_db, Permission::BoardsPost.into()))
-		.and(database::connection(boards_db))
+		.and(database::connection(Arc::clone(&boards_db)))
 		.then(move |data: BoardInfoPost, _, _, connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			let events_sockets = Arc::clone(&events_sockets);
+			let boards_db = Arc::clone(&boards_db);
 			async move {
 				let board = connection.create_board(
 					data.name,
 					data.shape,
 					data.palette,
 					data.max_pixels_available,
+					boards_db,
 				).await?;
 
 				let id = board.id as usize;
