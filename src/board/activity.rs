@@ -1,4 +1,5 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CachedActivityPixel {
@@ -7,16 +8,16 @@ struct CachedActivityPixel {
 }
 
 pub struct ActivityCache {
+	count_per_user: HashMap<i32, u32>, 
 	latest_pixels: VecDeque<CachedActivityPixel>,
-	cached_activity: Option<usize>,
 	idle_timeout: u32,
 }
 
 impl ActivityCache {
 	pub fn new(idle_timeout: u32) -> Self {
 		Self {
+			count_per_user: HashMap::new(),
 			latest_pixels: VecDeque::new(),
-			cached_activity: None,
 			idle_timeout,
 		}
 	}
@@ -29,24 +30,25 @@ impl ActivityCache {
 		);
 
 		let idle_start = now.saturating_sub(self.idle_timeout);
-
 		loop {
 			match self.latest_pixels.front() {
 				Some(oldest) if oldest.timestamp < idle_start => {
+					match self.count_per_user.get_mut(&oldest.uid) {
+						Some(v) if *v <= 1 => {
+							self.count_per_user.remove(&oldest.uid);
+						},
+						Some(v) => {
+							*v -= 1;
+						},
+						None => debug_assert!(false),
+					}
 					self.latest_pixels.pop_front();
-					self.cached_activity = None;
 				},
 				_ => break,
 			}
 		}
 
-		*self.cached_activity.get_or_insert_with(|| {
-			let mut users = HashSet::new();
-			for CachedActivityPixel { uid, .. } in self.latest_pixels.iter() {
-				users.insert(uid);
-			}
-			users.len()
-		})
+		self.count_per_user.len()
 	}
 
 	pub fn remove(&mut self, timestamp: u32, uid: i32) {
@@ -64,7 +66,14 @@ impl ActivityCache {
 				.unwrap_or(true)
 		);
 
-		self.cached_activity = None;
+		match self.count_per_user.entry(uid) {
+			Entry::Occupied(mut occupied) => {
+				*(occupied.get_mut()) += 1;
+			},
+			Entry::Vacant(vacant) => {
+				vacant.insert(1);
+			},
+		}
 		self.latest_pixels.push_back(CachedActivityPixel { timestamp, uid });
 	}
 }
