@@ -159,10 +159,10 @@ pub fn post(
 			async move {
 				let user = user.expect("Default user shouldn't have place permisisons");
 
-				let place_attempt = {
+				let (board_id, place_attempt) = {
 					let board = board.read().await;
 					let board = board.as_ref().expect("Board went missing when creating a pixel");
-					board.try_place(
+					let attempt = board.try_place(
 						// TODO: maybe accept option but make sure not to allow
 						// undos etc for anon users
 						&user.id,
@@ -171,7 +171,8 @@ pub fn post(
 						placement.overrides,
 						&boards_connection,
 						&mut users_connection,
-					).await
+					).await;
+					(board.id, attempt)
 				};
 
 				// This is required because read locking a rwlock twice in the
@@ -205,6 +206,12 @@ pub fn post(
 								placement.modified + CONFIG.undo_deadline_seconds,
 							).into_response();
 						}
+						
+						response = warp::reply::with_header(
+							response,
+							"Location",
+							format!("/boards/{}/pixels/{}", board_id, position),
+						).into_response();
 
 						for (key, value) in cooldown.into_headers() {
 							response = warp::reply::with_header(response, key, value)
