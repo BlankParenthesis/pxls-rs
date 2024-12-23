@@ -1,6 +1,5 @@
 use std::{
 	collections::{HashMap, HashSet, hash_map::Entry},
-	convert::TryFrom,
 	sync::{Arc, Weak},
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -183,6 +182,8 @@ impl Connections {
 			for changes in buffer.drain(..) {
 				data.merge(changes);
 			}
+			
+			data.minify();
 
 			let sockets = by_board_update.read().await;
 

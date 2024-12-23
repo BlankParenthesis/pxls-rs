@@ -157,6 +157,89 @@ impl BoardUpdateBuilder {
 			}
 		}
 	}
+	
+	/// condense adjacent changes into a single entry
+	fn compress_changes<T: Copy + Default>(changes: Vec<Change<T>>) -> Vec<Change<T>> {
+		// merged changes, sorted by position
+		let mut merged = vec![] as Vec<Change<T>>;
+		
+		// 1. find the first and last intersections
+		// 2. remove that range from the existing merged changes
+		// 3. take the first and last of that removed section
+		// 4. prepend the first, append the last
+		// 5. insert the new change at the correct index
+		for mut change in changes {
+			let start = change.position;
+			let end = start + change.values.len() as u64;
+			
+			let first_intersection = merged.iter()
+				.position(|change| {
+					let change_end = change.position + change.values.len() as u64;
+					start <= change_end
+				})
+				.unwrap_or(merged.len());
+			
+			let last_intersection = merged.iter()
+				.rev()
+				.position(|change| {
+					let change_start = change.position;
+					change_start <= end
+				})
+				.map(|p| merged.len() - p)
+				.unwrap_or(0);
+			
+			let inserection_range = if first_intersection < last_intersection {
+				first_intersection..last_intersection
+			} else {
+				0..0
+			};
+			let mut replaced_changes = merged.splice(inserection_range, []);
+			
+			if let Some(mut first) = replaced_changes.next() {
+				let count_prepended = start.saturating_sub(first.position) as usize;
+				let new_values_end = change.values.len() + count_prepended; 
+				if first.values.len() < new_values_end {
+					first.values.append(&mut change.values);
+				} else {
+					first.values[count_prepended..new_values_end]
+						.copy_from_slice(&change.values);
+				}
+				change = first;
+			}
+			if let Some(last) = replaced_changes.last() {
+				let offset = (end - last.position) as usize;
+				if offset < last.values.len() {
+					change.values.extend_from_slice(&last.values[offset..]);
+				}
+			}
+			
+			let insert_index = merged.binary_search_by_key(&change.position, |c| c.position)
+				.expect_err("Failed to properly remove overlap when pruning ranges");
+		
+			merged.insert(insert_index, change);
+		}
+		
+		merged
+	}
+	
+	/// condense all fields to a minimal form
+	pub fn minify(&mut self) {
+		if let Some(colors) = self.colors.take() {
+			self.colors = Some(Self::compress_changes(colors));
+		}
+
+		if let Some(timestamps) = self.timestamps.take() {
+			self.timestamps = Some(Self::compress_changes(timestamps));
+		}
+
+		if let Some(initial) = self.initial.take() {
+			self.initial = Some(Self::compress_changes(initial));
+		}
+
+		if let Some(mask) = self.mask.take() {
+			self.mask = Some(Self::compress_changes(mask));
+		}
+	}
 
 	pub fn build_combinations(self) -> HashMap<EnumSet<DataType>, Packet> {
 		let mut combinations = HashMap::new();
