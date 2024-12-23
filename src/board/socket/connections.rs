@@ -9,7 +9,7 @@ use enumset::EnumSet;
 use tokio::{time::Instant, sync::{RwLock, mpsc}};
 use tokio_util::sync::CancellationToken;
 
-use crate::board::cooldown::CooldownInfo;
+use crate::{board::cooldown::CooldownInfo, config::CONFIG};
 use crate::socket::CloseReason;
 
 use super::BoardSubscription;
@@ -176,6 +176,10 @@ impl Connections {
 		mut receiver: mpsc::Receiver<BoardUpdateBuilder>,
 	) {
 		let mut buffer = vec![];
+		let tick_time = Duration::from_millis(
+			CONFIG.network_tickrate.map(|r| (1000.0 / r) as u64).unwrap_or(0)
+		);
+		let mut next_tick = Instant::now() + tick_time;
 		while receiver.recv_many(&mut buffer, 10000).await > 0 {
 			let mut data = BoardUpdateBuilder::default();
 
@@ -194,6 +198,8 @@ impl Connections {
 					}
 				}
 			}
+			tokio::time::sleep_until(next_tick).await;
+			next_tick = Instant::now() + tick_time;
 		}
 	}
 

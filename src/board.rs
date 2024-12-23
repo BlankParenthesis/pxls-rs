@@ -18,6 +18,7 @@ use std::{
 use bytes::BufMut;
 use serde::Serialize;
 use tokio::sync::{mpsc::{self, error::SendError}, Mutex, RwLock};
+use tokio::time::{Duration, Instant};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
@@ -289,11 +290,18 @@ impl Board {
 		pool: Arc<BoardsDatabase>,
 	) {
 		let mut buffer = vec![];
+		let tick_time = Duration::from_millis(
+			CONFIG.database_tickrate.map(|r| (1000.0 / r) as u64).unwrap_or(0)
+		);
+		let mut next_tick = Instant::now() + tick_time;
 		while receiver.recv_many(&mut buffer, 10000).await > 0 {
 			let connection = pool.connection().await
 				.expect("A board database insert thread failed to connect to the database");
 			connection.insert_placements(board_id, buffer.drain(..).as_slice()).await
 				.expect("A board database insert thread failed to insert placements");
+			
+			tokio::time::sleep_until(next_tick).await;
+			next_tick = Instant::now() + tick_time;
 		}
 	}
 

@@ -65,6 +65,16 @@ pub struct Config {
 	// Default board ID
 	#[serde(default = "default_board")]
 	pub default_board: usize,
+	// The maximum number of times per second to send place packets.
+	// Setting a lower value improves network efficiency at the cost of
+	// increased client visual latency.
+	#[serde(default)]
+	pub network_tickrate: Option<f32>,
+	// The maximum number of times per second to sync placements to the database.
+	// Setting a lower value reduces disk writes at the cost of a higher data
+	// loss risk on unexpected shutdown.
+	#[serde(default)]
+	pub database_tickrate: Option<f32>,
 }
 
 impl Config {
@@ -113,5 +123,13 @@ pub fn check() {
 
 	if CONFIG.unauthenticated_role.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
 		eprintln!("Warning: unauthenticated user role is the empty string");
+	}
+
+	if CONFIG.network_tickrate.map(|r| r <= 0.0).unwrap_or(false) {
+		panic!("Network tickrate must be greater than 0");
+	}
+
+	if CONFIG.database_tickrate.map(|r| r <= 0.0).unwrap_or(false) {
+		panic!("database tickrate must be greater than 0");
 	}
 }
