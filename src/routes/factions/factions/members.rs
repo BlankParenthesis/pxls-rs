@@ -239,7 +239,7 @@ pub fn delete(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorization::authorized(users_db, Permission::FactionsDelete.into()))
+		.and(authorization::authorized(users_db, Permission::FactionsMembersDelete.into()))
 		.then(move |fid: String, uid: String, user: Option<Bearer>, mut connection: UsersConnection| {
 			let events = Arc::clone(&events);
 			async move {
