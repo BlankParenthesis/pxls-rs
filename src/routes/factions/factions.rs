@@ -83,20 +83,34 @@ pub fn post(
 				let id = connection.create_faction(&faction.name).await?;
 
 				let mut members = vec![];
-
-				if let Some(owner) = user {
-					connection.add_faction_member(&id, &owner.id, true).await?;
-					members.push(owner.id);
-				}
-
+				
 				let faction = connection.get_faction(&id).await?;
 
-				let packet = EventPacket::FactionCreated {
+				let member_packet = if let Some(owner) = user {
+					let member = connection.add_faction_member(&id, &owner.id, true).await?;
+					members.push(owner.id.clone());
+					Some(EventPacket::FactionMemberUpdated {
+						owners: vec![owner.id.clone()],
+						user: owner.id,
+						faction: faction.clone(),
+						member
+					})
+				} else {
+					None
+				};
+				
+				let events = events.read().await;
+				
+				let faction_packet = EventPacket::FactionCreated {
 					members,
 					faction: faction.clone(),
 				};
-				let events = events.read().await;
-				events.send(&packet).await;
+				
+				events.send(&faction_packet).await;
+
+				if let Some(packet) = member_packet {
+					events.send(&packet).await;
+				}
 
 				Ok::<_, UsersDatabaseError>(faction.created())
 			}
@@ -166,4 +180,3 @@ pub fn delete(
 			}
 		})
 }
-
