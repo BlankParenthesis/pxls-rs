@@ -29,6 +29,14 @@ fn default_board() -> usize {
 	1
 }
 
+fn default_default_page_item_limit() -> usize {
+	25
+}
+
+fn default_max_page_item_limit() -> usize {
+	250
+}
+
 #[derive(Deserialize)]
 pub struct Config {
 	pub host: String,
@@ -75,6 +83,12 @@ pub struct Config {
 	// loss risk on unexpected shutdown.
 	#[serde(default)]
 	pub database_tickrate: Option<f32>,
+	// Default maximum number of items returned by a query.
+	#[serde(default = "default_default_page_item_limit")]
+	pub default_page_item_limit: usize,
+	// Upper limit of the number of items returned by a query.
+	#[serde(default = "default_max_page_item_limit")]
+	pub max_page_item_limit: usize,
 }
 
 impl Config {

@@ -8,12 +8,11 @@ use warp::{
 	Rejection,
 };
 
+use crate::config::CONFIG;
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	PageToken,
-	MAX_PAGE_ITEM_LIMIT,
-	DEFAULT_PAGE_ITEM_LIMIT,
 };
 
 use crate::permissions::Permission;
@@ -56,8 +55,8 @@ pub fn list(
 		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, filter: RoleFilter, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 			
 			connection.list_user_roles(&uid, page, limit, filter).await
 				.map(|page| warp::reply::json(&page))
@@ -109,7 +108,7 @@ pub fn post(
 				let roles = connection.list_user_roles(
 					&uid,
 					PageToken::start(),
-					DEFAULT_PAGE_ITEM_LIMIT,
+					CONFIG.default_page_item_limit,
 					RoleFilter::default(),
 				).await?;
 
@@ -174,7 +173,7 @@ pub fn delete(
 				let roles = connection.list_user_roles(
 					&uid,
 					PageToken::start(),
-					DEFAULT_PAGE_ITEM_LIMIT,
+					CONFIG.default_page_item_limit,
 					RoleFilter::default(),
 				).await?;
 

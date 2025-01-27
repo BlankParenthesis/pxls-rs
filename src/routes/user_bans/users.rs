@@ -1,4 +1,4 @@
-use std::{sync::Arc, collections::HashMap};
+use std::sync::Arc;
 
 use reqwest::StatusCode;
 use serde::{Serialize, Deserialize};
@@ -10,21 +10,19 @@ use warp::{
 };
 use warp::http::Uri;
 
+use crate::config::CONFIG;
 use crate::filter::resource::filter::FilterRange;
 use crate::routes::core::{Connections, EventPacket};
-use crate::routes::users::users::UserFilter;
-use crate::database::{DatabaseError, BoardsDatabaseError};
+use crate::database::BoardsDatabaseError;
 use crate::filter::response::paginated_list::{
-	Page,
 	PaginationOptions,
-	DEFAULT_PAGE_ITEM_LIMIT,
-	MAX_PAGE_ITEM_LIMIT, PageToken
+	PageToken
 };
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
 use crate::filter::response::reference::Reference;
 use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken, User, BoardsDatabase, BoardsConnection};
+use crate::database::{UsersDatabase, UsersConnection, User, BoardsDatabase, BoardsConnection};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Ban {
@@ -90,8 +88,8 @@ pub fn list(
 		.then(move |uid: String, pagination: PaginationOptions<BanPageToken>, filter, mut users_connection, boards_connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 
 			boards_connection.list_user_bans(
 				&uid,

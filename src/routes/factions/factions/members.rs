@@ -5,11 +5,8 @@ use tokio::sync::RwLock;
 use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
-use crate::filter::response::paginated_list::{
-	PaginationOptions,
-	DEFAULT_PAGE_ITEM_LIMIT,
-	MAX_PAGE_ITEM_LIMIT
-};
+use crate::config::CONFIG;
+use crate::filter::response::paginated_list::PaginationOptions;
 use crate::filter::header::authorization::{self, Bearer};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
@@ -37,8 +34,8 @@ pub fn list(
 		.then(move |fid: String, pagination: PaginationOptions<LdapPageToken>, filter: MemberFilter, _, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 
 			connection.list_faction_members(&fid, page, limit, filter).await
 				.map(|page| warp::reply::json(&page))

@@ -27,9 +27,6 @@ pub struct PaginationOptions<T: PageToken> {
 	pub limit: Option<usize>,
 }
 
-pub const DEFAULT_PAGE_ITEM_LIMIT: usize = 10;
-pub const MAX_PAGE_ITEM_LIMIT: usize = 100;
-
 pub trait PageToken: Default {
 	fn start() -> Self { Self::default() }
 }

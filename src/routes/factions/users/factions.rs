@@ -6,12 +6,9 @@ use warp::{
 	Rejection,
 };
 
+use crate::config::CONFIG;
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
-use crate::filter::response::paginated_list::{
-	PaginationOptions,
-	MAX_PAGE_ITEM_LIMIT,
-	DEFAULT_PAGE_ITEM_LIMIT,
-};
+use crate::filter::response::paginated_list::PaginationOptions;
 
 use crate::permissions::Permission;
 use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
@@ -52,8 +49,8 @@ pub fn list(
 		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, filter: FactionFilter, mut connection: UsersConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 			
 			connection.list_user_factions(page, limit, filter, &uid).await
 				.map(|page| warp::reply::json(&page))

@@ -6,12 +6,11 @@ use serde::{Deserialize, Serialize, de, Deserializer};
 use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
+use crate::config::CONFIG;
 use crate::BoardDataMap;
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
-	DEFAULT_PAGE_ITEM_LIMIT,
-	MAX_PAGE_ITEM_LIMIT,
 	PageToken,
 };
 use crate::filter::header::authorization::{self, Bearer};
@@ -129,8 +128,8 @@ pub fn list(
 
 				let page = pagination.page;
 				let limit = pagination.limit
-					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-					.clamp(1, MAX_PAGE_ITEM_LIMIT);
+					.unwrap_or(CONFIG.default_page_item_limit)
+					.clamp(1, CONFIG.max_page_item_limit);
 
 				let page = boards_connection.list_board_notices(
 					board as i32,

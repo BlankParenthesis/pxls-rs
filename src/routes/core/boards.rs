@@ -84,8 +84,8 @@ pub fn list(
 				let page = pagination.page.0;
 				let limit = pagination
 					.limit
-					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-					.clamp(1, MAX_PAGE_ITEM_LIMIT);
+					.unwrap_or(CONFIG.default_page_item_limit)
+					.clamp(1, CONFIG.max_page_item_limit);
 
 				let boards = boards.read().await;
 				let mut filtered_boards = vec![];

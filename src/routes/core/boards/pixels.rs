@@ -13,11 +13,7 @@ use crate::filter::header::authorization::{self, authorized, has_permissions, pe
 use crate::filter::resource::database;
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::filter::resource::filter::FilterRange;
-use crate::filter::response::paginated_list::{
-	PaginationOptions,
-	DEFAULT_PAGE_ITEM_LIMIT,
-	MAX_PAGE_ITEM_LIMIT,
-};
+use crate::filter::response::paginated_list::PaginationOptions;
 use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::calculate_stats;
 use crate::BoardDataMap;
@@ -57,8 +53,8 @@ pub fn list(
 			let page = options.page;
 			let limit = options
 				.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when listing pixels");

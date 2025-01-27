@@ -7,13 +7,12 @@ use warp::{
 	Rejection,
 };
 
+use crate::config::CONFIG;
 use crate::routes::users::users::UserFilter;
 use crate::database::DatabaseError;
 use crate::filter::response::paginated_list::{
 	Page,
 	PaginationOptions,
-	DEFAULT_PAGE_ITEM_LIMIT,
-	MAX_PAGE_ITEM_LIMIT
 };
 use crate::filter::header::authorization::{self, Bearer, PermissionsError};
 use crate::filter::response::reference::Reference;
@@ -97,8 +96,8 @@ pub fn list(
 			async move {
 				let page = pagination.page;
 				let limit = pagination.limit
-					.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-					.clamp(1, MAX_PAGE_ITEM_LIMIT); // TODO: maybe raise upper limit
+					.unwrap_or(CONFIG.default_page_item_limit)
+					.clamp(1, CONFIG.max_page_item_limit);
 				
 				let page = users_connection.list_users(page, limit, filter).await?;
 				let next = page.next.map(|n| {

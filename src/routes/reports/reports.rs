@@ -6,10 +6,9 @@ use tokio::sync::RwLock;
 use warp::http::{StatusCode, Uri};
 use warp::{Filter, Reply, Rejection};
 
+use crate::config::CONFIG;
 use crate::filter::response::paginated_list::{
 	PaginationOptions,
-	DEFAULT_PAGE_ITEM_LIMIT,
-	MAX_PAGE_ITEM_LIMIT,
 	PageToken,
 };
 use crate::filter::header::authorization::{self, Bearer};
@@ -146,8 +145,8 @@ pub fn list(
 		.then(move |pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 
 			let page = boards_connection.list_reports(
 				page,
@@ -176,8 +175,8 @@ pub fn owned(
 		.then(move |pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 
 			let page = boards_connection.list_reports(
 				page,
@@ -385,8 +384,8 @@ pub fn history(
 		.then(move |id: usize, pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
-				.unwrap_or(DEFAULT_PAGE_ITEM_LIMIT)
-				.clamp(1, MAX_PAGE_ITEM_LIMIT);
+				.unwrap_or(CONFIG.default_page_item_limit)
+				.clamp(1, CONFIG.max_page_item_limit);
 
 			let page = boards_connection.list_report_history(
 				id,
