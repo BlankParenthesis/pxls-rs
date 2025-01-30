@@ -19,7 +19,7 @@ use connection::Connection as LdapConnection;
 use connection::LDAPConnectionManager;
 use connection::Pool;
 use reqwest::StatusCode;
-use serde::de::{Deserialize, Visitor};
+use serde::{de::{Deserialize, Visitor}, Serialize};
 use tokio::sync::RwLock;
 use url::{Url, form_urlencoded::byte_serialize};
 use warp::{reject::Reject, reply::Reply};
@@ -31,6 +31,12 @@ use crate::permissions::Permission;
 use crate::filter::response::paginated_list::{Page, PageToken};
 
 use self::entities::LDAPTimestamp;
+
+#[derive(Debug, Serialize)]
+pub struct CurrentFaction {
+	faction: Reference<Faction>,
+	member: Reference<FactionMember>,
+}
 
 #[derive(Debug, Default)]
 pub struct LdapPageToken(Vec<u8>);
@@ -1050,7 +1056,10 @@ impl UsersConnection {
 		limit: usize,
 		filter: FactionFilter,
 		uid: &str,
-	) -> Result<Page<Reference<Faction>>, UsersDatabaseError> {
+	) -> Result<Page<CurrentFaction>, UsersDatabaseError> {
+		let user = self.get_user(uid).await?;
+		let user = Reference::new(User::uri(uid), user);
+		
 		let pager = PagedResults {
 			size: limit as i32,
 			cookie: page.0,
@@ -1086,7 +1095,13 @@ impl UsersConnection {
 				} else {
 					format!("(&{})", filters.join(""))
 				},
-				Faction::search_fields(),
+				[
+					"cn",
+					"pxlsspaceFactionName",
+					"createTimestamp",
+					"member",
+					"pxlsspaceFactionOwner",
+				],
 			).await
 			.map_err(FetchError::LdapError)?
 			.success()
@@ -1100,16 +1115,24 @@ impl UsersConnection {
 			.map(|Control(_, d)| d.parse::<PagedResults>())
 			.ok_or(FetchError::MissingPagerData)?;
 
+		let uid = uid.to_owned();
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
-			.map(|f| {
-				let fid = Faction::id_from(&f)
+			.map(|entry| {
+				let owner = entry.attrs.get("pxlsspaceFactionOwner")
+						.map(|o| o.contains(&uid)).unwrap_or(false);
+				let fid = Faction::id_from(&entry)
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)?;
-				let faction = Faction::try_from(f)
+				let faction = Faction::try_from(entry)
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)?;
-				Ok::<_, FetchError>(Reference::new(Faction::uri(&fid), faction))
+				let faction = Reference::new(Faction::uri(&fid), faction);
+				let join_intent = JoinIntent::default();
+				let user = user.clone();
+				let member = FactionMember { owner, join_intent, user };
+				let member = Reference::new(FactionMember::uri(&fid, &uid), member);
+				Ok::<_, FetchError>(CurrentFaction { faction, member })
 			})
 			.collect::<Result<_, _>>()?;
 		
