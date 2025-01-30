@@ -1057,6 +1057,7 @@ impl UsersConnection {
 		filter: FactionFilter,
 		uid: &str,
 	) -> Result<Page<CurrentFaction>, UsersDatabaseError> {
+		let user_dn = user_dn(uid);
 		let user = self.get_user(uid).await?;
 		let user = Reference::new(User::uri(uid), user);
 		
@@ -1066,7 +1067,7 @@ impl UsersConnection {
 		};
 
 		let mut filters = vec![
-			format!("(member={})", user_dn(uid)),
+			format!("(member={})", &user_dn),
 		];
 
 		if let Some(ref name) = filter.name {
@@ -1115,12 +1116,11 @@ impl UsersConnection {
 			.map(|Control(_, d)| d.parse::<PagedResults>())
 			.ok_or(FetchError::MissingPagerData)?;
 
-		let uid = uid.to_owned();
 		let items = results.into_iter()
 			.map(SearchEntry::construct)
 			.map(|entry| {
 				let owner = entry.attrs.get("pxlsspaceFactionOwner")
-						.map(|o| o.contains(&uid)).unwrap_or(false);
+						.map(|o| o.contains(&user_dn)).unwrap_or(false);
 				let fid = Faction::id_from(&entry)
 					.map_err(ParseError::from)
 					.map_err(FetchError::ParseError)?;
