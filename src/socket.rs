@@ -74,6 +74,7 @@ impl From<AuthFailure> for Option<CloseReason> {
 enum Message {
 	Close,
 	Ping,
+	Pong,
 	Packet(ClientPacket),
 	Invalid,
 }
@@ -88,6 +89,8 @@ impl From<ws::Message> for Message {
 			}
 		} else if message.is_ping() {
 			Self::Ping
+		} else if message.is_pong() {
+			Self::Pong
 		} else if message.is_close() {
 			Self::Close
 		} else {
@@ -334,9 +337,11 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 
 					return Ok(credentials);
 				},
+				Ok(Message::Packet(_)) => return Err(AuthFailure::InvalidMessage),
 				Ok(Message::Invalid) => return Err(AuthFailure::InvalidMessage),
 				Ok(Message::Close) => (),
 				Ok(Message::Ping) => (),
+				Ok(Message::Pong) => (),
 				Err(e) => return Err(e),
 			}
 		}
@@ -423,7 +428,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		} else {
 			Err(AuthFailure::TokenMismatch)
 		}
-	} 
+	}
 
 	async fn run(
 		&self,
@@ -436,10 +441,16 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 						self.close(err.into());
 					}
 				},
+				Message::Packet(ClientPacket::Ping) => {
+					if let Err(_) = self.sender.send(Ok(warp::ws::Message::ping([]))) {
+						self.close(None);
+					}
+				}
 				Message::Invalid => {
 					self.close(Some(CloseReason::InvalidPacket));
 				},
 				Message::Close => (),
+				Message::Pong => (),
 				Message::Ping => (),
 			}
 		}

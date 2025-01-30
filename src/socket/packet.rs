@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum ClientPacket {
 	Authenticate { token: Option<String> },
+	Ping,
 }
 
 pub trait ServerPacket: Serialize {}
