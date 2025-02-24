@@ -288,6 +288,7 @@ async fn main() {
 					"pxls-pixels-available",
 					"pxls-next-available",
 					"location",
+					"date",
 				])
 				.allow_headers([
 					"authorization",
