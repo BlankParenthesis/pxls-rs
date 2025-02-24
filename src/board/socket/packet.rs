@@ -16,7 +16,7 @@ use crate::socket::ServerPacket;
 
 use super::BoardSubscription;
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct Change<T> {
 	pub position: u64,
 	pub values: Vec<T>,
@@ -197,13 +197,11 @@ impl BoardUpdateBuilder {
 			
 			if let Some(mut first) = replaced_changes.next() {
 				let count_prepended = start.saturating_sub(first.position) as usize;
-				let new_values_end = change.values.len() + count_prepended; 
-				if first.values.len() < new_values_end {
-					first.values.append(&mut change.values);
-				} else {
-					first.values[count_prepended..new_values_end]
-						.copy_from_slice(&change.values);
-				}
+				let new_size = change.values.len() + count_prepended;
+				// ensure we can hold the new values
+				first.values.resize(usize::max(new_size, first.values.len()), T::default());
+				first.values[count_prepended..new_size]
+					.copy_from_slice(&change.values);
 				change = first;
 			}
 			if let Some(last) = replaced_changes.last() {
@@ -343,3 +341,20 @@ impl From<&Packet> for BoardSubscription {
 }
 
 impl ServerPacket for Packet {}
+
+#[test]
+fn test_intersection() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 0, values: vec![1, 1, 1] },
+		Change { position: 2, values: vec![2, 2, 2] },
+		Change { position: 3, values: vec![3] },
+		Change { position: 5, values: vec![4] },
+		Change { position: 7, values: vec![5, 5, 5, 5] },
+		Change { position: 6, values: vec![6, 6] },
+	]);
+	let expected = vec![
+		Change { position: 0, values: vec![1, 1, 2, 3, 2, 4, 6, 6, 5, 5, 5] },
+	];
+	
+	assert_eq!(compressed, expected);
+}
