@@ -169,6 +169,10 @@ impl BoardUpdateBuilder {
 		// 4. prepend the first, append the last
 		// 5. insert the new change at the correct index
 		for mut change in changes {
+			if change.values.is_empty() {
+				continue;
+			}
+			
 			let start = change.position;
 			let end = start + change.values.len() as u64;
 			
@@ -193,9 +197,15 @@ impl BoardUpdateBuilder {
 			} else {
 				0..0
 			};
-			let mut replaced_changes = merged.splice(inserection_range, []);
+			let replaced_changes = merged.splice(inserection_range, [])
+				.collect::<Vec<_>>();
 			
-			if let Some(mut first) = replaced_changes.next() {
+			let first = replaced_changes.iter()
+				.find(|c| c.position < start);
+			let last = replaced_changes.iter().rev()
+				.find(|c| c.position + c.values.len() as u64 > end);
+			
+			if let Some(mut first) = first.cloned() {
 				let count_prepended = start.saturating_sub(first.position) as usize;
 				let new_size = change.values.len() + count_prepended;
 				// ensure we can hold the new values
@@ -204,11 +214,11 @@ impl BoardUpdateBuilder {
 					.copy_from_slice(&change.values);
 				change = first;
 			}
-			if let Some(last) = replaced_changes.last() {
+			if let Some(last) = last {
+				// end may have changed: recompute it
+				let end = change.position + change.values.len() as u64;
 				let offset = (end - last.position) as usize;
-				if offset < last.values.len() {
-					change.values.extend_from_slice(&last.values[offset..]);
-				}
+				change.values.extend_from_slice(&last.values[offset..]);
 			}
 			
 			let insert_index = merged.binary_search_by_key(&change.position, |c| c.position)
@@ -343,18 +353,126 @@ impl From<&Packet> for BoardSubscription {
 impl ServerPacket for Packet {}
 
 #[test]
-fn test_intersection() {
+fn test_compress_unrelated_values() {
 	let compressed = BoardUpdateBuilder::compress_changes(vec![
-		Change { position: 0, values: vec![1, 1, 1] },
-		Change { position: 2, values: vec![2, 2, 2] },
-		Change { position: 3, values: vec![3] },
-		Change { position: 5, values: vec![4] },
-		Change { position: 7, values: vec![5, 5, 5, 5] },
-		Change { position: 6, values: vec![6, 6] },
+		Change { position: 0, values: vec![1, 2] },
+		Change { position: 4, values: vec![3, 4] },
 	]);
-	let expected = vec![
-		Change { position: 0, values: vec![1, 1, 2, 3, 2, 4, 6, 6, 5, 5, 5] },
-	];
-	
-	assert_eq!(compressed, expected);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2] },
+		Change { position: 4, values: vec![3, 4] },
+	]);
+}
+
+#[test]
+fn test_compress_end_to_start() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 0, values: vec![1, 2] },
+		Change { position: 2, values: vec![3, 4] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+	]);
+}
+
+#[test]
+fn test_compress_start_to_end() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 2, values: vec![3, 4] },
+		Change { position: 0, values: vec![1, 2] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+	]);
+}
+
+#[test]
+fn test_compress_overlapping_start_values() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 2, values: vec![1, 2, 3] },
+		Change { position: 0, values: vec![1, 2, 3] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2, 3, 2, 3] },
+	]);
+}
+
+#[test]
+fn test_compress_overlapping_end_values() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 2, values: vec![1, 2] },
+		Change { position: 3, values: vec![1, 2, 3] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 2, values: vec![1, 1, 2, 3] },
+	]);
+}
+
+#[test]
+fn test_compress_super_eclipse() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 1, values: vec![1, 2] },
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+	]);
+}
+
+#[test]
+fn test_compress_eclipse_multiple() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 0, values: vec![2, 3] },
+		Change { position: 3, values: vec![1] },
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+	]);
+}
+
+#[test]
+fn test_compress_injected_values() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 0, values: vec![1, 2, 3, 4] },
+		Change { position: 1, values: vec![1, 2] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 1, 2, 4] },
+	]);
+}
+
+#[test]
+fn test_compress_empty_values() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 0, values: vec![] },
+		Change { position: 0, values: vec![1, 2, 3] },
+		Change { position: 0, values: vec![] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 0, values: vec![1, 2, 3] },
+	]);
+}
+
+#[test]
+fn test_compress_consecutive_ranges() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 1, values: vec![1, 2] },
+		Change { position: 3, values: vec![3, 4] },
+		Change { position: 5, values: vec![5, 6] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 1, values: vec![1, 2, 3, 4, 5, 6] },
+	]);
+}
+
+#[test]
+fn test_compress_perfect_eclipse() {
+	let compressed = BoardUpdateBuilder::compress_changes(vec![
+		Change { position: 1, values: vec![1, 2] },
+		Change { position: 1, values: vec![3, 4] },
+	]);
+	assert_eq!(compressed, vec![
+		Change { position: 1, values: vec![3, 4] },
+	]);
 }
