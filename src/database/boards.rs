@@ -72,7 +72,7 @@ impl From<&BoardsDatabaseError> for StatusCode {
 
 impl From<BoardsDatabaseError> for StatusCode {
 	fn from(error: BoardsDatabaseError) -> Self {
-		error.into()
+		StatusCode::from(&error)
 	}
 }
 
