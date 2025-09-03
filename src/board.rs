@@ -721,6 +721,7 @@ impl Board {
 		let mut activity_cache = self.activity_cache.lock().await;
 		activity_cache.remove(timestamp, uid);
 		cooldown_cache.remove(timestamp, uid);
+		drop(cooldown_cache);
 
 		statistics_lock.colors.entry(color).or_default().placed -= 1;
 
