@@ -287,6 +287,7 @@ async fn main() {
 				.expose_headers([
 					"pxls-pixels-available",
 					"pxls-next-available",
+					"pxls-undo-deadline",
 					"location",
 					"date",
 				])
