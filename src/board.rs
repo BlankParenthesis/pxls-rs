@@ -695,7 +695,7 @@ impl Board {
 		let placement_id = match undone_placement {
 			Some(placement) if placement.user_id == uid => {
 				let deadline = placement.modified + CONFIG.undo_deadline_seconds;
-				if deadline > self.current_timestamp() {
+				if deadline < self.current_timestamp() {
 					return Err(UndoError::Expired)
 				}
 				placement.id
