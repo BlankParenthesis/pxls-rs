@@ -37,6 +37,10 @@ fn default_max_page_item_limit() -> usize {
 	250
 }
 
+fn default_place_timeout() -> u64 {
+	5000
+}
+
 #[derive(Deserialize)]
 pub struct Config {
 	pub host: String,
@@ -89,6 +93,9 @@ pub struct Config {
 	// Upper limit of the number of items returned by a query.
 	#[serde(default = "default_max_page_item_limit")]
 	pub max_page_item_limit: usize,
+	// Maximum time in milliseconds a place request can idle before being cancelled
+	#[serde(default = "default_place_timeout")]
+	pub place_timeout_millis: u64,
 }
 
 impl Config {

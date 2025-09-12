@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use enumset::EnumSet;
 use reqwest::StatusCode;
@@ -158,7 +159,8 @@ pub fn post(
 				let (board_id, place_attempt) = {
 					let board = board.read().await;
 					let board = board.as_ref().expect("Board went missing when creating a pixel");
-					let attempt = board.try_place(
+					let timeout = Duration::from_millis(CONFIG.place_timeout_millis);
+					let place = board.try_place(
 						// TODO: maybe accept option but make sure not to allow
 						// undos etc for anon users
 						&user.id,
@@ -167,8 +169,11 @@ pub fn post(
 						placement.overrides,
 						&boards_connection,
 						&mut users_connection,
-					).await;
-					(board.id, attempt)
+					);
+					match tokio::time::timeout(timeout, place).await {
+						Ok(attempt) => (board.id, attempt),
+						Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE.into_response()),
+					}
 				};
 
 				// This is required because read locking a rwlock twice in the
