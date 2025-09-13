@@ -145,12 +145,18 @@ pub fn post(
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(users_db, Permission::FactionsMembersGet | Permission::FactionsMembersPost))
-		.then(move |fid: String, member: FactionMemberPost, user: Option<Bearer>, mut connection: UsersConnection| {
+		.then(move |fid: String, mut member: FactionMemberPost, user: Option<Bearer>, mut connection: UsersConnection| {
 			let events = Arc::clone(&events);
 			async move {
-				// FIXME: validate permissions
-
 				let uid = member.user.0;
+				
+				// FIXME: validate permissions  more
+				member.owner = false;
+				if let Some(id) = user.map(|u| u.id) {
+					if uid != id {
+						return Err(StatusCode::FORBIDDEN.into_response());
+					}
+				}
 				
 				// TODO: event update for size change
 				// NOTE: maybe bundle these as with place events since a lot of them
@@ -160,10 +166,12 @@ pub fn post(
 					&fid,
 					&uid,
 					member.owner,
-				).await?;
+				).await.map_err(|e| e.into_response())?;
 				
-				let faction = connection.get_faction(&fid).await?;
-				let owners = connection.get_faction_owners(&fid).await?;
+				let faction = connection.get_faction(&fid).await
+					.map_err(|e| e.into_response())?;
+				let owners = connection.get_faction_owners(&fid).await
+					.map_err(|e| e.into_response())?;
 
 				let packet = EventPacket::FactionMemberUpdated {
 					owners,
@@ -174,7 +182,7 @@ pub fn post(
 				let events = events.read().await;
 				events.send(&packet).await;
 
-				Ok::<_, UsersDatabaseError>(member.created())
+				Ok(member.created())
 			}
 		})
 }
@@ -240,17 +248,26 @@ pub fn delete(
 		.then(move |fid: String, uid: String, user: Option<Bearer>, mut connection: UsersConnection| {
 			let events = Arc::clone(&events);
 			async move {
-				// FIXME: validate permissions
+				// FIXME: validate permissions more
+				if let Some(id) = user.map(|u| u.id) {
+					if uid != id {
+						return Err(StatusCode::FORBIDDEN.into_response());
+					}
+				}
 				
 				// TODO: event update for size change
 				// NOTE: maybe bundle these as with place events since a lot of them
 				// could happen in a given time frame (to reduce network load)
 
-				connection.remove_faction_member(&fid, &uid).await?;
+				connection.remove_faction_member(&fid, &uid).await
+					.map_err(|e| e.into_response())?;
 
-				let faction = connection.get_faction(&fid).await?;
-				let owners = connection.get_faction_owners(&fid).await?;
-				let user = connection.get_user(&uid).await?;
+				let faction = connection.get_faction(&fid).await
+					.map_err(|e| e.into_response())?;
+				let owners = connection.get_faction_owners(&fid).await
+					.map_err(|e| e.into_response())?;
+				let user = connection.get_user(&uid).await
+					.map_err(|e| e.into_response())?;
 				let member = FactionMember {
 					owner: false,
 					join_intent: JoinIntent {
@@ -269,7 +286,7 @@ pub fn delete(
 				let events = events.read().await;
 				events.send(&packet).await;
 
-				Ok::<_, UsersDatabaseError>(StatusCode::NO_CONTENT)
+				Ok(StatusCode::NO_CONTENT)
 			}
 		})
 }
