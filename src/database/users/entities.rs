@@ -249,22 +249,23 @@ pub enum FactionParseError {
 #[derive(Debug, Clone, Serialize)]
 pub struct Faction {
 	pub name: String,
+	pub icon: Option<Url>,
 	pub created_at: i64,
 	pub size: usize,
 }
 
 lazy_static! {
-	static ref FACTION_FIELDS: [&'static str; 4] = [
+	static ref FACTION_FIELDS: [&'static str; 5] = [
 		"cn",
 		"pxlsspaceFactionName",
-		//"pxlsspaceIcon",
+		"pxlsspaceIcon",
 		"createTimestamp",
 		"member",
 	];
 }
 
 impl Faction {
-	pub fn search_fields() -> [&'static str; 4] {
+	pub fn search_fields() -> [&'static str; 5] {
 		*FACTION_FIELDS
 	}
 
@@ -288,11 +289,11 @@ impl TryFrom<SearchEntry> for Faction {
 			.and_then(|v| v.first())
 			.ok_or(FactionParseError::MissingName)?
 			.to_owned();
-		//let icon = value.attrs.get("pxlsspaceIcon")
-		//	.and_then(|v| v.first())
-		//	.map(|v| v.parse::<Url>())
-		//	.transpose()
-		//	.map_err(FactionParseError::InvalidIcon)?;
+		let icon = value.attrs.get("pxlsspaceIcon")
+			.and_then(|v| v.first())
+			.map(|v| v.parse::<Url>())
+			.transpose()
+			.map_err(FactionParseError::InvalidIcon)?;
 		let created_at = value.attrs.get("createTimestamp")
 			.and_then(|v| v.first())
 			.ok_or(FactionParseError::MissingTimestamp)
@@ -305,7 +306,7 @@ impl TryFrom<SearchEntry> for Faction {
 			.map(|v| v.len())
 			.unwrap_or(0);
 
-		Ok(Faction { name, created_at, size })
+		Ok(Faction { name, created_at, size, icon })
 	}
 }
 

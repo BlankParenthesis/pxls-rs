@@ -116,7 +116,8 @@ pub fn post(
 
 #[derive(Debug, Deserialize)]
 struct FactionPatch {
-	name: String,
+	name: Option<String>,
+	icon: Option<url::Url>,
 }
 
 pub fn patch(
@@ -134,7 +135,7 @@ pub fn patch(
 			async move {
 				// FIXME: validate name
 				// FIXME: check if user is owner, possibly add new related permissions
-				connection.update_faction(&id, &faction.name).await?;
+				connection.update_faction(&id, faction.name, faction.icon).await?;
 
 				let faction = connection.get_faction(&id).await?;
 				let members = connection.get_all_faction_members(&id).await?;

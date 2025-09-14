@@ -1242,10 +1242,9 @@ impl UsersConnection {
 	pub async fn update_faction(
 		&mut self,
 		name: &str,
-		new_name: &str,
+		new_name: Option<String>,
+		new_icon: Option<Url>,
 	) -> Result<(), UsersDatabaseError> {
-		let new_name = ldap_escape(new_name).to_string();
-
 		let faction_dn = format!(
 			"cn={},ou={},{}",
 			ldap_escape(name),
@@ -1255,7 +1254,15 @@ impl UsersConnection {
 
 		let mut modifications = vec![];
 		
-		modifications.push(Mod::Replace("pxlsspaceFactionName", HashSet::from([new_name.as_str()])));
+		let new_name = new_name.map(|name| ldap_escape(name).to_string());
+		if let Some(new_name) = new_name.as_ref().map(|o| o.as_str()) {
+			modifications.push(Mod::Replace("pxlsspaceFactionName", HashSet::from([new_name])));
+		}
+		
+		let new_icon = new_icon.map(|icon| ldap_escape(icon.to_string()).to_string());
+		if let Some(new_icon) = new_icon.as_ref().map(|o| o.as_str()) {
+			modifications.push(Mod::Replace("pxlsspaceIcon", HashSet::from([new_icon])));
+		}
 
 		let result = self.connection
 			.modify(&faction_dn, modifications).await
