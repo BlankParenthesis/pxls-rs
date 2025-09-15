@@ -15,7 +15,6 @@ use std::{
 	time::{SystemTime, UNIX_EPOCH},
 };
 
-use bytes::BufMut;
 use serde::Serialize;
 use tokio::sync::{mpsc::{self, error::SendError}, Mutex, RwLock};
 use tokio::time::{Duration, Instant};
@@ -28,7 +27,8 @@ use crate::routes::board_notices::boards::notices::BoardsNotice;
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::config::CONFIG;
 use crate::database::{BoardsDatabase, Database, User, UsersConnection, DatabaseError};
-use crate::filter::response::{paginated_list::Page, reference::Reference};
+use crate::filter::response::paginated_list::Page;
+use crate::filter::response::reference::Reference;
 use crate::filter::body::patch::BinaryPatch;
 use crate::filter::header::range::Range;
 use crate::database::BoardsDatabaseError;

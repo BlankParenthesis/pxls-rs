@@ -9,8 +9,9 @@ use enumset::EnumSet;
 use tokio::{time::Instant, sync::{RwLock, mpsc}};
 use tokio_util::sync::CancellationToken;
 
-use crate::{board::cooldown::CooldownInfo, config::CONFIG};
-use crate::socket::CloseReason;
+use crate::config::CONFIG;
+use crate::board::cooldown::CooldownInfo;
+use crate::socket::{CloseReason, ServerPacket};
 
 use super::BoardSubscription;
 use super::packet::{Packet, DataType, BoardUpdateBuilder};
@@ -95,12 +96,13 @@ impl UserConnections {
 
 	async fn send(
 		&self,
-		packet: &Packet,
+		packet: Packet,
 	) {
-		let subscription = BoardSubscription::from(packet);
+		let subscription = BoardSubscription::from(&packet);
+		let serialized = packet.serialize_packet();
 		for connection in &self.connections {
 			if connection.subscriptions.contains(subscription) {
-				connection.send(packet).await;
+				connection.send(&serialized).await;
 			}
 		}
 	}
@@ -119,7 +121,7 @@ impl UserConnections {
 			match connections.upgrade() {
 				Some(connections) => {
 					let connections = connections.write().await;
-					connections.send(&packet).await;
+					connections.send(packet).await;
 				},
 				None => {
 					return;
@@ -135,7 +137,7 @@ impl UserConnections {
 		match connections.upgrade() {
 			Some(connections) => {
 				let connections = connections.write().await;
-				connections.send(&packet).await;
+				connections.send(packet).await;
 			},
 			None => {
 				return;
@@ -192,9 +194,11 @@ impl Connections {
 			let sockets = by_board_update.read().await;
 
 			for (combination, packet) in data.build_combinations() {
+				let serialized = packet.serialize_packet();
+				
 				if let Some(sockets) = sockets.get(&combination) {
 					for connection in sockets {
-						connection.send(&packet).await;
+						connection.send(&serialized).await;
 					}
 				}
 			}
@@ -274,8 +278,11 @@ impl Connections {
 		packet: Packet,
 	) {
 		let subscription = BoardSubscription::from(&packet);
-		for connection in self.by_subscription[subscription].iter() {
-			connection.send(&packet).await;
+		if !self.by_subscription[subscription].is_empty() {
+			let serialized = packet.serialize_packet();
+			for connection in self.by_subscription[subscription].iter() {
+				connection.send(&serialized).await;
+			}
 		}
 	}
 

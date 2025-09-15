@@ -22,7 +22,7 @@ use crate::{
 };
 
 use packet::ClientPacket;
-pub use packet::ServerPacket;
+pub use packet::{ServerPacket, SerializedServerPacket};
 
 pub enum CloseReason {
 	ServerClosing,
@@ -351,15 +351,12 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		self.credentials.read().await.user_id()
 	}
 
-	pub async fn send<P: ServerPacket>(
+	pub async fn send<P: SerializedServerPacket>(
 		&self,
-		message: &P,
+		packet: &P,
 	) {
-		let content = serde_json::to_string(message).unwrap();
-		let message = ws::Message::text(content);
-
 		if self.auth_valid().await {
-			let _ = self.sender.send(Ok(message));
+			let _ = self.sender.send(Ok(packet.message()));
 		} else {
 			self.close(Some(CloseReason::InvalidToken));
 		}

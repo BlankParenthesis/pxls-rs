@@ -65,100 +65,112 @@ impl Connections {
 			EventPacket::AccessUpdate { user_id, .. } => {
 				let sockets = self.by_uid.get(user_id)
 					.unwrap_or(&empty_set);
+				
+				let serialized = packet.serialize_packet();
+				
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::Access) {
-						socket.send(packet).await;
+						socket.send(&serialized).await;
 					}
 				}
 			},
 			EventPacket::BoardCreated { .. } |
 			EventPacket::BoardDeleted { .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Boards].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 			},
 			EventPacket::RoleCreated { .. } |
 			EventPacket::RoleUpdated { .. } |
 			EventPacket::RoleDeleted { .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Roles].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 			},
 			EventPacket::UserRolesUpdated { user_id, .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::UsersRoles].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 
 				let sockets = self.by_uid.get(user_id)
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrentRoles) {
-						socket.send(packet).await;
+						socket.send(&serialized).await;
 					}
 				}
 			},
 			EventPacket::UserUpdated { user_id, ..  } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Users].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 
 				let sockets = self.by_uid.get(&Some(user_id.clone()))
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrent) {
-						socket.send(packet).await;
+						socket.send(&serialized).await;
 					}
 				}
 			},
 			EventPacket::SiteNoticeCreated { .. } |
 			EventPacket::SiteNoticeUpdated { .. } |
 			EventPacket::SiteNoticeDeleted { .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Notices].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 			},
 			EventPacket::ReportCreated { reporter, .. } |
 			EventPacket::ReportUpdated { reporter, .. } |
 			EventPacket::ReportDeleted { reporter, .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Reports].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 				
 				let sockets = self.by_uid.get(reporter).unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::ReportsOwned) {
-						socket.send(packet).await;
+						socket.send(&serialized).await;
 					}
 				}
 			},
 			EventPacket::StatsUpdated { user, .. } => {
+				let serialized = packet.serialize_packet();
 				let sockets = self.by_uid.get(user).unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::Statistics) {
-						socket.send(packet).await;
+						socket.send(&serialized).await;
 					}
 				}
 			},
 			EventPacket::UserBanCreated { user, .. } |
 			EventPacket::UserBanUpdated { user, .. } |
 			EventPacket::UserBanDeleted { user, .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::UsersBans].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 				
 				let user = Some(user.clone());
 				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
-						socket.send(packet).await;
+						socket.send(&serialized).await;
 					}
 				}
 			},
 			EventPacket::FactionCreated { members, .. } |
 			EventPacket::FactionUpdated { members, .. } |
 			EventPacket::FactionDeleted { members, .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Factions].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 
 				for member in members {
@@ -166,14 +178,15 @@ impl Connections {
 					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 					for socket in sockets {
 						if socket.subscriptions.contains(Subscription::FactionsCurrent) {
-							socket.send(packet).await
+							socket.send(&serialized).await
 						}
 					}
 				}
 			},
 			EventPacket::FactionMemberUpdated { owners, user, .. } => {
+				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::FactionsMembers].iter() {
-					socket.send(packet).await
+					socket.send(&serialized).await
 				}
 
 				for owner in owners {
@@ -181,7 +194,7 @@ impl Connections {
 					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 					for socket in sockets {
 						if socket.subscriptions.contains(Subscription::FactionsCurrentMembers) {
-							socket.send(packet).await
+							socket.send(&serialized).await
 						}
 					}
 				}
@@ -191,7 +204,7 @@ impl Connections {
 					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 					for socket in sockets {
 						if socket.subscriptions.contains(Subscription::FactionsCurrentMembers) {
-							socket.send(packet).await
+							socket.send(&serialized).await
 						}
 					}
 				}
