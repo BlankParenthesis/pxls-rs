@@ -776,12 +776,10 @@ impl Board {
 
 		self.check_placement_palette(color, overrides.color)?;
 		
-		let sector = self.sectors
+		let mut sector = self.sectors
 			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
 
-		let mut sectors = HashMap::from([(sector_index, sector)]);
-		let sector = sectors.get_mut(&sector_index).unwrap();
 		if !overrides.mask {
 			match MaskValue::try_from(sector.mask[sector_offset]).ok() {
 				Some(MaskValue::Place) => Ok(()),
@@ -822,10 +820,11 @@ impl Board {
 			color,
 			timestamp,
 			sector_offset,
-			sector,
+			&mut sector,
 			connection,
 			users_connection,
 		).await?;
+		drop(sector);
 
 		statistics_lock.colors.entry(color).or_default().placed += 1;
 
