@@ -34,7 +34,7 @@ impl TryFrom<&str> for BoardSubscription {
 			"info" => Ok(BoardSubscription::Info),
 			"cooldown" => Ok(BoardSubscription::Cooldown),
 			"notices" => Ok(BoardSubscription::Notices),
-			"statistics" => Ok(BoardSubscription::Notices),
+			"statistics" => Ok(BoardSubscription::Statistics),
 			_ => Err(()),
 		}
 	}
