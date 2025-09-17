@@ -653,12 +653,12 @@ impl Board {
 			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
 
-		let connections = self.connections.read().await;
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
 		).await?; // TODO: maybe cooldown err instead
 
+		let connections = self.connections.read().await;
 		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
@@ -745,14 +745,13 @@ impl Board {
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
-		let connections = self.connections.read().await;
-		connections.queue_board_change(data).await;
-
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
 		).await?;
-
+		
+		let connections = self.connections.read().await;
+		connections.queue_board_change(data).await;
 		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
@@ -914,15 +913,14 @@ impl Board {
 		connection: &BoardsConnection,
 	) -> Result<(), BoardsDatabaseError> {
 		let id = socket.user_id().await;
-
-		let mut connections = self.connections.write().await;
 		// TODO: is this needed?
 		let cooldown_info = if let Some(user_id) = id {
 			Some(self.user_cooldown_info(&user_id, connection).await?)
 		} else {
 			None
 		};
-
+		
+		let mut connections = self.connections.write().await;
 		connections.insert(socket, cooldown_info).await;
 
 		Ok(())
