@@ -216,7 +216,7 @@ pub struct PendingPlacement {
 pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
-	connections: Connections,
+	connections: RwLock<Connections>,
 	sectors: SectorCache,
 	statistics_cache: StatisticsHashLock<i32>,
 	activity_cache: Mutex<ActivityCache>,
@@ -266,7 +266,7 @@ impl Board {
 			info.shape.sector_size(),
 		);
 
-		let connections = Connections::default();
+		let connections = RwLock::new(Connections::default());
 		
 		let (placement_sender, placement_receiver) = mpsc::channel(10000);
 
@@ -353,7 +353,8 @@ impl Board {
 			_ => panic!("cannot patch colors/timestamps")
 		}
 		
-		self.connections.queue_board_change(packet).await;
+		let connections = self.connections.read().await;
+		connections.queue_board_change(packet).await;
 
 		Ok(())
 	}
@@ -432,8 +433,10 @@ impl Board {
 			data: None,
 		};
 		
+		let connections = self.connections.read().await;
+		
 		let users = if max_pixels_available.is_some() {
-			self.connections.users()
+			connections.users()
 		} else {
 			vec![]
 		};
@@ -444,20 +447,21 @@ impl Board {
 			cooldowns.push((user, cooldown));
 		}
 
-		self.connections.send(packet).await;
+		connections.send(packet).await;
 
 		for (user, cooldown) in cooldowns {
-			self.connections.set_user_cooldown(user, cooldown).await;
+			connections.set_user_cooldown(user, cooldown).await;
 		}
 
 		Ok(())
 	}
 
 	pub async fn delete(
-		mut self,
+		self,
 		connection: &BoardsConnection,
 	) -> Result<(), BoardsDatabaseError> {
-		self.connections.close();
+		let mut connections = self.connections.write().await;
+		connections.close();
 		connection.delete_board(self.id).await
 	}
 
@@ -541,7 +545,8 @@ impl Board {
 			.colors(vec![socket::Change { position, values: vec![color] }])
 			.timestamps(vec![socket::Change { position, values: vec![timestamp] }]);
 
-		self.connections.queue_board_change(data).await;
+		let connections = self.connections.read().await;
+		connections.queue_board_change(data).await;
 		
 		Ok(new_placement)
 	}
@@ -648,15 +653,16 @@ impl Board {
 			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
 
+		let connections = self.connections.read().await;
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
 		).await?; // TODO: maybe cooldown err instead
 
-		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
-		self.connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
+		connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
 
 		Ok((changes, timestamp))
 	}
@@ -739,17 +745,18 @@ impl Board {
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
-		self.connections.queue_board_change(data).await;
+		let connections = self.connections.read().await;
+		connections.queue_board_change(data).await;
 
 		let cooldown_info = self.user_cooldown_info(
 			user_id,
 			connection,
 		).await?;
 
-		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
-		self.connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
+		connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
 		
 		Ok(cooldown_info)
 	}
@@ -830,10 +837,11 @@ impl Board {
 
 		// TODO: maybe cooldown err instead
 		let cooldown_info = self.user_cooldown_info(user_id, connection).await?;
-		self.connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+		let connections = self.connections.read().await;
+		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
-		self.connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
+		connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
 
 		Ok((cooldown_info, new_placement))
 	}
@@ -901,12 +909,13 @@ impl Board {
 	}
 
 	pub async fn insert_socket(
-		&mut self,
+		&self,
 		socket: &Arc<Socket>,
 		connection: &BoardsConnection,
 	) -> Result<(), BoardsDatabaseError> {
 		let id = socket.user_id().await;
 
+		let mut connections = self.connections.write().await;
 		// TODO: is this needed?
 		let cooldown_info = if let Some(user_id) = id {
 			Some(self.user_cooldown_info(&user_id, connection).await?)
@@ -914,16 +923,17 @@ impl Board {
 			None
 		};
 
-		self.connections.insert(socket, cooldown_info).await;
+		connections.insert(socket, cooldown_info).await;
 
 		Ok(())
 	}
 
 	pub async fn remove_socket(
-		&mut self,
+		&self,
 		socket: &Arc<Socket>,
 	) {
-		self.connections.remove(socket).await
+		let mut connections = self.connections.write().await;
+		connections.remove(socket).await;
 	}
 
 	pub async fn create_notice(
@@ -946,7 +956,8 @@ impl Board {
 			notice: notice.clone(),
 		};
 
-		self.connections.send(packet).await;
+		let connections = self.connections.read().await;
+		connections.send(packet).await;
 
 		Ok(notice)
 	}
@@ -973,7 +984,8 @@ impl Board {
 			notice: notice.clone(),
 		};
 
-		self.connections.send(packet).await;
+		let connections = self.connections.read().await;
+		connections.send(packet).await;
 
 		Ok(notice)
 	}
@@ -989,7 +1001,8 @@ impl Board {
 			notice: BoardsNotice::uri(self.id, id as _),
 		};
 
-		self.connections.send(packet).await;
+		let connections = self.connections.read().await;
+		connections.send(packet).await;
 
 		Ok(notice)
 	}

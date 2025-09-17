@@ -306,9 +306,9 @@ pub fn events(
 					socket.init(|socket| async move {
 						// add socket to board
 						if let Some(board) = init_board.upgrade() {
-							let mut board = board.write().await;
+							let board = board.read().await;
 							let board = match *board {
-								Some(ref mut board) => board,
+								Some(ref board) => board,
 								None => {
 									let reason = Some(CloseReason::ServerClosing);
 									socket.close(reason);
@@ -329,8 +329,8 @@ pub fn events(
 					}).await.shutdown(|socket| async move {
 						// remove socket from board
 						if let Some(board) = shutdown_board.upgrade() {
-							let mut board = board.write().await;
-							if let Some(ref mut board) = *board {
+							let board = board.read().await;
+							if let Some(ref board) = *board {
 								board.remove_socket(&socket).await;
 							}
 						}
