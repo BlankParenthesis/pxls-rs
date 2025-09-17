@@ -5,6 +5,7 @@ edition = "2021"
 
 [profile.release]
 lto = true
+strip = true
 
 [dependencies]
 bytes = "1.5.0"
