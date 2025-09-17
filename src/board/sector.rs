@@ -7,7 +7,7 @@ mod access;
 
 use crate::database::{BoardsConnectionGeneric, BoardsDatabaseError};
 
-pub use cache::SectorCache;
+pub use cache::{BufferedSectorCache, SectorCache};
 pub use access::{SectorAccessor, IoError};
 
 #[derive(TryFromPrimitive)]
@@ -39,6 +39,7 @@ impl SectorBuffer {
 	}
 }
 
+#[derive(Clone)]
 pub struct Sector {
 	pub board: i32,
 	pub index: i32,

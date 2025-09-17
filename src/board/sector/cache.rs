@@ -1,10 +1,74 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 use tokio::sync::*;
-use crate::{
-	database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabaseError},
-	board::sector::{Sector, SectorBuffer},
-};
+
+use crate::board::sector::{Sector, SectorBuffer};
+use crate::board::Shape;
+use crate::database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabase, BoardsDatabaseError, Database};
+
 use super::SectorAccessor;
+
+pub struct SectorRequest {
+	sector_index: usize,
+	responder: oneshot::Sender<Arc<Result<Option<Sector>, BoardsDatabaseError>>>,
+}
+
+pub struct BufferedSectorCache {
+	pub cache: Arc<SectorCache>,
+	readback_sender: mpsc::Sender<SectorRequest>,
+}
+
+impl BufferedSectorCache {
+	pub fn new(
+		board_id: i32,
+		sector_count: usize,
+		sector_size: usize,
+		pool: Arc<BoardsDatabase>,
+	) -> Self {
+		let cache = Arc::new(SectorCache::new(board_id, sector_count, sector_size));
+		
+		let (readback_sender, readback_reciever) = mpsc::channel(1000);
+		tokio::spawn(Self::readback_thread(cache.clone(), pool, readback_reciever));
+		
+		Self { cache, readback_sender }
+	}
+	
+	pub async fn get_sector(
+		&self,
+		sector_index: usize,
+	) -> Arc<Result<Option<Sector>, BoardsDatabaseError>> {
+		let (responder, reciever) = oneshot::channel();
+		let request = SectorRequest { sector_index, responder };
+		self.readback_sender.send(request).await.unwrap();
+		reciever.await.unwrap()
+	}
+	
+	async fn readback_thread(
+		cache: Arc<SectorCache>,
+		pool: Arc<BoardsDatabase>,
+		mut request_receiver: mpsc::Receiver<SectorRequest>,
+	) {
+		let mut buffer = vec![];
+		while request_receiver.recv_many(&mut buffer, 1000).await > 0 {
+			let requests = buffer.drain(..);
+			let mut sectors = HashMap::new();
+			let connection = pool.connection().await.unwrap();
+			
+			for SectorRequest { sector_index, responder } in requests {
+				if !sectors.contains_key(&sector_index) {
+					let sector = cache.get_sector(sector_index, &connection).await
+						.map(|option| option.map(|s| Sector::clone(&*s)));
+					sectors.insert(sector_index, Arc::new(sector));
+				}
+				
+				let sector = sectors.get(&sector_index).unwrap();
+				let _ = responder.send(sector.clone());
+			}
+		}
+	}
+}
 
 pub struct SectorCache {
 	// TODO: evict based on size
@@ -14,7 +78,7 @@ pub struct SectorCache {
 }
 
 impl SectorCache {
-	pub fn new(
+	fn new(
 		board_id: i32,
 		sector_count: usize,
 		sector_size: usize,

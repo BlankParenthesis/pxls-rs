@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use reqwest::header;
 use warp::{
 	http::StatusCode,
 	reject::Rejection,
@@ -40,11 +41,30 @@ pub fn get_initial(
 		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
-			let mut initial_data = board.as_ref()
-				.expect("Board went missing when getting initial data")
-				.read(SectorBuffer::Initial, &connection).await;
+			let board = board.as_ref()
+				.expect("Board went missing when getting initial data");
 
-			range.respond_with(&mut initial_data).await
+			if let Some((buffered, range)) = board.try_read_exact_sector(range.clone(), false).await {
+				match buffered.as_ref() {
+					Ok(Some(sector)) => {
+						let range = format!("bytes {}-{}/{}", range.start, range.end, sector.colors.len());
+
+						warp::hyper::Response::builder()
+							.status(StatusCode::PARTIAL_CONTENT)
+							.header(header::CONTENT_TYPE, "application/octet-stream")
+							.header(header::CONTENT_RANGE, range)
+							.body(sector.colors.to_vec())
+							.unwrap()
+							.into_response()
+					},
+					Ok(None) => StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+					Err(e) => StatusCode::from(e).into_response(),
+				}
+			} else {
+				let mut colors_data = board.read(SectorBuffer::Initial, &connection).await;
+	
+				range.respond_with(&mut colors_data).await.into_response()
+			}
 		})
 }
 

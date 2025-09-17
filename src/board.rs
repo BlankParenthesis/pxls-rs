@@ -30,12 +30,13 @@ use crate::config::CONFIG;
 use crate::database::{BoardsDatabase, Database, User, UsersConnection, DatabaseError};
 use crate::filter::response::{paginated_list::Page, reference::Reference};
 use crate::filter::body::patch::BinaryPatch;
+use crate::filter::header::range::Range;
 use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
 use crate::database::{BoardsConnection, Order};
 
 use socket::{Connections, Packet, Socket};
-use sector::{SectorAccessor, SectorCache, MaskValue, IoError};
+use sector::{SectorAccessor, BufferedSectorCache, MaskValue, IoError};
 use cooldown::CooldownInfo;
 use info::BoardInfo;
 
@@ -217,11 +218,12 @@ pub struct Board {
 	pub id: i32,
 	pub info: BoardInfo,
 	connections: RwLock<Connections>,
-	sectors: SectorCache,
+	sectors: BufferedSectorCache,
 	statistics_cache: StatisticsHashLock<i32>,
 	activity_cache: Mutex<ActivityCache>,
 	cooldown_cache: RwLock<CooldownCache>,
 	placement_sender: mpsc::Sender<PendingPlacement>,
+	pool: Arc<BoardsDatabase>,
 }
 
 impl From<&Board> for Uri {
@@ -260,17 +262,18 @@ impl Board {
 			max_pixels_available,
 		};
 
-		let sectors = SectorCache::new(
+		let sectors = BufferedSectorCache::new(
 			id,
 			info.shape.sector_count(),
 			info.shape.sector_size(),
+			pool.clone(),
 		);
 
 		let connections = RwLock::new(Connections::default());
 		
 		let (placement_sender, placement_receiver) = mpsc::channel(10000);
 
-		tokio::spawn(Self::buffer_placements(id, placement_receiver, pool));
+		tokio::spawn(Self::buffer_placements(id, placement_receiver, pool.clone()));
 
 		Self {
 			id,
@@ -281,6 +284,7 @@ impl Board {
 			activity_cache,
 			cooldown_cache,
 			placement_sender,
+			pool,
 		}
 	}
 	
@@ -310,7 +314,34 @@ impl Board {
 		buffer: SectorBuffer,
 		connection: &'l BoardsConnection,
 	) -> SectorAccessor<'l> {
-		self.sectors.access(buffer, connection)
+		self.sectors.cache.access(buffer, connection)
+	}
+	
+	pub async fn try_read_exact_sector(
+		&self,
+		range: Range,
+		timestamps: bool,
+	) -> Option<(Arc<Result<Option<Sector>, BoardsDatabaseError>>, std::ops::Range<usize>)> {
+		let multiplier = if timestamps { 4 } else { 1 };
+		
+		let range = match range {
+			Range::Single { unit, range } if unit.to_lowercase() == "bytes" => {
+				range.with_length(self.info.shape.total_size() * multiplier).ok()
+			},
+			_ => None,
+		}?;
+		
+		let sector_size = self.info.shape.sector_size() * multiplier;
+		
+		let sector_aligned = range.start % sector_size == 0;
+		let sector_sized = range.len() == sector_size;
+		
+		if sector_aligned && sector_sized {
+			let sector_index = range.start / sector_size;
+			Some((self.sectors.get_sector(sector_index).await, range))
+		} else {
+			None
+		}
 	}
 	
 	async fn try_patch(
@@ -322,14 +353,12 @@ impl Board {
 	) -> Result<(), PatchError> {
 
 		let end = patch.start + patch.data.len();
-		let total_pixels = self.sectors.total_size();
+		let total_pixels = self.sectors.cache.total_size();
 		if end > total_pixels {
 			return Err(PatchError::WriteOutOfBounds);
 		}
 
-		let mut sector_data = self
-			.sectors
-			.access(buffer, connection);
+		let mut sector_data = self.sectors.cache.access(buffer, connection);
 
 		sector_data
 			.seek(SeekFrom::Start(u64::try_from(patch.start).unwrap()))
@@ -412,10 +441,11 @@ impl Board {
 		if let Some(ref shape) = shape {
 			self.info.shape = shape.clone();
 
-			self.sectors = SectorCache::new(
+			self.sectors = BufferedSectorCache::new(
 				self.id,
 				self.info.shape.sector_count(),
 				self.info.shape.sector_size(),
+				self.pool.clone(),
 			)
 		}
 
@@ -589,7 +619,7 @@ impl Board {
 		let mut sectors = HashMap::new();
 		for sector_index in used_sectors {
 			if let Entry::Vacant(vacant) = sectors.entry(sector_index) {
-				let sector =  self.sectors
+				let sector =  self.sectors.cache
 					.get_sector_mut(sector_index, connection).await?
 					.expect("Missing sector");
 
@@ -683,7 +713,7 @@ impl Board {
 			.to_local(position as usize)
 			.ok_or(UndoError::OutOfBounds)?;
 
-		let mut sector = self.sectors
+		let mut sector = self.sectors.cache
 			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
 
@@ -782,7 +812,7 @@ impl Board {
 
 		self.check_placement_palette(color, overrides.color)?;
 		
-		let mut sector = self.sectors
+		let mut sector = self.sectors.cache
 			.get_sector_mut(sector_index, connection).await?
 			.expect("Missing sector");
 

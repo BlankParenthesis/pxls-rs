@@ -56,6 +56,7 @@ impl Reply for RangeIndexError {
 }
 
 #[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone)]
 pub enum HttpRange {
 	FromStartToEnd(OpsRange<usize>),
 	FromStartToLast(OpsRangeFrom<usize>),
@@ -63,7 +64,7 @@ pub enum HttpRange {
 }
 
 impl HttpRange {
-	fn with_length(
+	pub fn with_length(
 		&self,
 		length: usize,
 	) -> Result<OpsRange<usize>, RangeIndexError> {
@@ -237,6 +238,7 @@ fn merge_ranges(
 }
 
 /// rfc9110 section 14
+#[derive(Debug, Clone)]
 pub enum Range {
 	Multi {
 		unit: String,
