@@ -8,7 +8,7 @@ use warp::{
 	Filter,
 };
 
-
+use crate::filter::header::accept_encoding;
 use crate::filter::header::authorization::authorized;
 use crate::filter::header::range::{self, Range};
 use crate::filter::resource::{board, database};
@@ -24,6 +24,7 @@ pub fn get_timestamps(
 	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
+		.and(accept_encoding::gzip_opt())
 		.and(board::path::read(&boards))
 		.and(warp::path("data"))
 		.and(warp::path("timestamps"))
@@ -37,24 +38,34 @@ pub fn get_timestamps(
 		)
 		.and(authorized(users_db, Permission::BoardsDataGet.into()))
 		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
+		.then(|gzip: bool, board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let board = board.as_ref()
 				.expect("Board went missing when getting timestamp data");
-			
-			if let Some((buffered, range)) = board.try_read_exact_sector(range.clone(), true).await {
+				
+			let exact = board.try_read_exact_sector(range.clone(), SectorBuffer::Timestamps, true).await;
+			if let Some((buffered, range)) = exact {
 				match buffered.as_ref() {
 					Ok(Some(sector)) => {
-						let range = format!("bytes {}-{}/{}", range.start, range.end, sector.colors.len());
-
-						warp::hyper::Response::builder()
+						let data = sector.timestamps.as_ref().unwrap();
+						let range = format!("bytes {}-{}/{}", range.start, range.end, data.raw.len());
+						
+						let response = warp::hyper::Response::builder()
 							.status(StatusCode::PARTIAL_CONTENT)
 							.header(header::CONTENT_TYPE, "application/octet-stream")
-							.header(header::CONTENT_RANGE, range)
-							.body(sector.timestamps.to_vec())
-							.unwrap()
-							.into_response()
+							.header(header::CONTENT_RANGE, range);
+						
+						if gzip {
+							response.header(header::CONTENT_ENCODING, "gzip")
+								.body(data.compressed.clone())
+								.unwrap()
+								.into_response()
+						} else {
+							response.body(data.raw.clone())
+								.unwrap()
+								.into_response()
+						}
 					},
 					Ok(None) => StatusCode::UNPROCESSABLE_ENTITY.into_response(),
 					Err(e) => StatusCode::from(e).into_response(),

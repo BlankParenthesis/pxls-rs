@@ -1,4 +1,5 @@
 use bytes::BytesMut;
+use enumset::EnumSetType;
 use num_enum::TryFromPrimitive;
 use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 
@@ -7,7 +8,7 @@ mod access;
 
 use crate::database::{BoardsConnectionGeneric, BoardsDatabaseError};
 
-pub use cache::{BufferedSectorCache, SectorCache};
+pub use cache::{BufferedSectorCache, SectorCache, BufferedSector};
 pub use access::{SectorAccessor, IoError};
 
 #[derive(TryFromPrimitive)]
@@ -18,7 +19,7 @@ pub enum MaskValue {
 	Adjacent = 2,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(EnumSetType)]
 pub enum SectorBuffer {
 	Colors,
 	Timestamps,

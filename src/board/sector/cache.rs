@@ -1,23 +1,49 @@
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
+use std::io::Write;
 use std::sync::Arc;
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use enumset::EnumSet;
 use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 use tokio::sync::*;
 
 use crate::board::sector::{Sector, SectorBuffer};
-use crate::board::Shape;
 use crate::database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabase, BoardsDatabaseError, Database};
 
 use super::SectorAccessor;
 
 pub struct SectorRequest {
 	sector_index: usize,
-	responder: oneshot::Sender<Arc<Result<Option<Sector>, BoardsDatabaseError>>>,
+	sector_type: SectorBuffer,
+	responder: oneshot::Sender<Arc<Result<Option<BufferedSector>, BoardsDatabaseError>>>,
 }
 
 pub struct BufferedSectorCache {
 	pub cache: Arc<SectorCache>,
 	readback_sender: mpsc::Sender<SectorRequest>,
+}
+
+pub struct CompressedSector {
+	pub raw: Vec<u8>,
+	pub compressed: Vec<u8>,
+}
+
+impl CompressedSector {
+	fn new(data: bytes::BytesMut) -> Self {
+		let raw = data.to_vec();
+		let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+		encoder.write_all(&raw).unwrap();
+		let compressed = encoder.finish().unwrap();
+		Self { raw, compressed }
+	}
+}
+
+pub struct BufferedSector {
+	pub colors: Option<CompressedSector>,
+	pub timestamps: Option<CompressedSector>,
+	pub initial: Option<CompressedSector>,
+	pub mask: Option<CompressedSector>,
 }
 
 impl BufferedSectorCache {
@@ -38,9 +64,10 @@ impl BufferedSectorCache {
 	pub async fn get_sector(
 		&self,
 		sector_index: usize,
-	) -> Arc<Result<Option<Sector>, BoardsDatabaseError>> {
+		sector_type: SectorBuffer,
+	) -> Arc<Result<Option<BufferedSector>, BoardsDatabaseError>> {
 		let (responder, reciever) = oneshot::channel();
-		let request = SectorRequest { sector_index, responder };
+		let request = SectorRequest { sector_index, responder, sector_type };
 		self.readback_sender.send(request).await.unwrap();
 		reciever.await.unwrap()
 	}
@@ -52,14 +79,44 @@ impl BufferedSectorCache {
 	) {
 		let mut buffer = vec![];
 		while request_receiver.recv_many(&mut buffer, 1000).await > 0 {
-			let requests = buffer.drain(..);
-			let mut sectors = HashMap::new();
+			let requests = buffer.drain(..).collect::<Vec<_>>();
 			let connection = pool.connection().await.unwrap();
+			let mut requested_sectors = HashMap::<usize, EnumSet<SectorBuffer>>::new();
 			
-			for SectorRequest { sector_index, responder } in requests {
+			for SectorRequest { sector_index, sector_type, .. } in requests.iter() {
+				match requested_sectors.entry(*sector_index) {
+					hash_map::Entry::Occupied(mut e) => {
+						e.get_mut().insert(*sector_type);
+					},
+					hash_map::Entry::Vacant(e) => {
+						e.insert(EnumSet::from(*sector_type));
+					},
+				}
+			};
+			
+			let mut sectors = HashMap::new();
+			for SectorRequest { sector_index, responder, .. } in requests {
 				if !sectors.contains_key(&sector_index) {
 					let sector = cache.get_sector(sector_index, &connection).await
-						.map(|option| option.map(|s| Sector::clone(&*s)));
+						.map(|option| {
+							option.map(|s| {
+								let sector = Sector::clone(&*s);
+								drop(s); // unlock asap
+								
+								let buffers = requested_sectors.get(&sector_index).unwrap();
+								BufferedSector {
+									colors: buffers.contains(SectorBuffer::Colors)
+										.then(|| CompressedSector::new(sector.colors)),
+									timestamps: buffers.contains(SectorBuffer::Timestamps)
+										.then(|| CompressedSector::new(sector.timestamps)),
+									mask: buffers.contains(SectorBuffer::Mask)
+										.then(|| CompressedSector::new(sector.mask)),
+									initial: buffers.contains(SectorBuffer::Initial)
+										.then(|| CompressedSector::new(sector.initial)),
+								}
+							})
+						});
+					
 					sectors.insert(sector_index, Arc::new(sector));
 				}
 				

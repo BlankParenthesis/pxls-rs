@@ -81,11 +81,6 @@ async fn main() {
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
 		)).boxed()
-		.or(routes::core::boards::data::get_colors(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-			Arc::clone(&users_db),
-		)).boxed()
 		.or(routes::core::boards::pixels::list(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
@@ -123,28 +118,18 @@ async fn main() {
 		)).boxed();
 
 	let routes_data_initial =
-		routes::board_data_initial::boards::data::get_initial(
+		routes::board_data_initial::boards::data::patch_initial(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
-		).boxed()
-		.or(routes::board_data_initial::boards::data::patch_initial(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-			Arc::clone(&users_db),
-		)).boxed();
+		).boxed();
 
 	let routes_data_mask =
-		routes::board_data_mask::boards::data::get_mask(
+		routes::board_data_mask::boards::data::patch_mask(
 			Arc::clone(&boards),
 			Arc::clone(&boards_db),
 			Arc::clone(&users_db),
-		).boxed()
-		.or(routes::board_data_mask::boards::data::patch_mask(
-			Arc::clone(&boards),
-			Arc::clone(&boards_db),
-			Arc::clone(&users_db),
-		)).boxed();
+		).boxed();
 
 	let routes_data_timestamps =
 		routes::board_data_timestamps::boards::data::get_timestamps(
@@ -246,7 +231,7 @@ async fn main() {
 		.or(routes_lifecycle)
 		.or(routes_data_initial)
 		.or(routes_data_mask)
-		.or(routes_data_timestamps)
+		// .or(routes_data_timestamps)
 		.or(routes_authentication)
 		// NOTE: needs to go before users because /users/stats overlaps with /users/{id}
 		.or(routes_placement_statistics)
@@ -259,7 +244,33 @@ async fn main() {
 		.or(routes_site_notices)
 		.or(routes_board_notices)
 		.or(routes_reports)
-		.or(routes_user_bans)
+		.or(routes_user_bans);
+
+	// Temporary fix for gzip until https://github.com/seanmonstar/warp/pull/513
+	// is merged
+	// Update: still waiting… progress doesn't look good
+	let gzip_routes = filter::header::accept_encoding::gzip()
+		.and(routes.clone())
+		.with(warp::compression::gzip());
+	
+	let final_routes = gzip_routes.or(routes)
+		// these are manually gzipped
+		.or(routes::core::boards::data::get_colors(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
+		))
+		.or(routes::board_data_mask::boards::data::get_mask(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
+		))
+		.or(routes::board_data_initial::boards::data::get_initial(
+			Arc::clone(&boards),
+			Arc::clone(&boards_db),
+			Arc::clone(&users_db),
+		))
+		.or(routes_data_timestamps)
 		.recover(|rejection: Rejection| {
 			if let Some(err) = rejection.find::<BearerError>() {
 				future::ok(StatusCode::UNAUTHORIZED.into_response())
@@ -297,19 +308,12 @@ async fn main() {
 				]),
 		);
 
-	// Temporary fix for gzip until https://github.com/seanmonstar/warp/pull/513
-	// is merged
-	// Update: still waiting… progress doesn't look good
-	let gzip_routes = filter::header::accept_encoding::gzip()
-		.and(routes.clone())
-		.with(warp::compression::gzip());
-
 	let binding = ([0, 0, 0, 0], CONFIG.port);
 	let exit_signal = async {
 		tokio::signal::ctrl_c().await.expect("ctrl+c interrupt error");
 	};
 
-	let (_, server) = warp::serve(gzip_routes.or(routes))
+	let (_, server) = warp::serve(final_routes)
 		.bind_with_graceful_shutdown(binding, exit_signal);
 
 	server.await

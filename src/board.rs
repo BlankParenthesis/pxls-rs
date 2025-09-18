@@ -36,7 +36,7 @@ use crate::AsyncWrite;
 use crate::database::{BoardsConnection, Order};
 
 use socket::{Connections, Packet, Socket};
-use sector::{SectorAccessor, BufferedSectorCache, MaskValue, IoError};
+use sector::{SectorAccessor, BufferedSectorCache, MaskValue, IoError, BufferedSector};
 use cooldown::CooldownInfo;
 use info::BoardInfo;
 
@@ -320,8 +320,9 @@ impl Board {
 	pub async fn try_read_exact_sector(
 		&self,
 		range: Range,
+		sector_type: SectorBuffer,
 		timestamps: bool,
-	) -> Option<(Arc<Result<Option<Sector>, BoardsDatabaseError>>, std::ops::Range<usize>)> {
+	) -> Option<(Arc<Result<Option<BufferedSector>, BoardsDatabaseError>>, std::ops::Range<usize>)> {
 		let multiplier = if timestamps { 4 } else { 1 };
 		
 		let range = match range {
@@ -338,7 +339,7 @@ impl Board {
 		
 		if sector_aligned && sector_sized {
 			let sector_index = range.start / sector_size;
-			Some((self.sectors.get_sector(sector_index).await, range))
+			Some((self.sectors.get_sector(sector_index, sector_type).await, range))
 		} else {
 			None
 		}
