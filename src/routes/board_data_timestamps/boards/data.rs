@@ -60,9 +60,9 @@ pub fn get_timestamps(
 					Err(e) => StatusCode::from(e).into_response(),
 				}
 			} else {
-				let mut colors_data = board.read(SectorBuffer::Timestamps, &connection).await;
+				let mut timestamps_data = board.read(SectorBuffer::Timestamps, &connection).await;
 	
-				range.respond_with(&mut colors_data).await.into_response()
+				range.respond_with(&mut timestamps_data).await.into_response()
 			}
 		})
 }

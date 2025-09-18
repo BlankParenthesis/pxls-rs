@@ -44,18 +44,17 @@ pub fn get_mask(
 			let board = board.read().await;
 			let board = board.as_ref()
 				.expect("Board went missing when getting mask data");
-
 			
 			if let Some((buffered, range)) = board.try_read_exact_sector(range.clone(), false).await {
 				match buffered.as_ref() {
 					Ok(Some(sector)) => {
-						let range = format!("bytes {}-{}/{}", range.start, range.end, sector.colors.len());
+						let range = format!("bytes {}-{}/{}", range.start, range.end, sector.mask.len());
 
 						warp::hyper::Response::builder()
 							.status(StatusCode::PARTIAL_CONTENT)
 							.header(header::CONTENT_TYPE, "application/octet-stream")
 							.header(header::CONTENT_RANGE, range)
-							.body(sector.colors.to_vec())
+							.body(sector.mask.to_vec())
 							.unwrap()
 							.into_response()
 					},
@@ -63,9 +62,9 @@ pub fn get_mask(
 					Err(e) => StatusCode::from(e).into_response(),
 				}
 			} else {
-				let mut colors_data = board.read(SectorBuffer::Mask, &connection).await;
+				let mut mask_data = board.read(SectorBuffer::Mask, &connection).await;
 	
-				range.respond_with(&mut colors_data).await.into_response()
+				range.respond_with(&mut mask_data).await.into_response()
 			}
 		})
 }

@@ -47,13 +47,13 @@ pub fn get_initial(
 			if let Some((buffered, range)) = board.try_read_exact_sector(range.clone(), false).await {
 				match buffered.as_ref() {
 					Ok(Some(sector)) => {
-						let range = format!("bytes {}-{}/{}", range.start, range.end, sector.colors.len());
-
+						let range = format!("bytes {}-{}/{}", range.start, range.end, sector.initial.len());
+						
 						warp::hyper::Response::builder()
 							.status(StatusCode::PARTIAL_CONTENT)
 							.header(header::CONTENT_TYPE, "application/octet-stream")
 							.header(header::CONTENT_RANGE, range)
-							.body(sector.colors.to_vec())
+							.body(sector.initial.to_vec())
 							.unwrap()
 							.into_response()
 					},
@@ -61,9 +61,9 @@ pub fn get_initial(
 					Err(e) => StatusCode::from(e).into_response(),
 				}
 			} else {
-				let mut colors_data = board.read(SectorBuffer::Initial, &connection).await;
+				let mut initial_data = board.read(SectorBuffer::Initial, &connection).await;
 	
-				range.respond_with(&mut colors_data).await.into_response()
+				range.respond_with(&mut initial_data).await.into_response()
 			}
 		})
 }
