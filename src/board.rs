@@ -224,6 +224,7 @@ pub struct Board {
 	cooldown_cache: RwLock<CooldownCache>,
 	placement_sender: mpsc::Sender<PendingPlacement>,
 	pool: Arc<BoardsDatabase>,
+	lookup_cache: Mutex<HashMap<u64, Option<Placement>>>,
 }
 
 impl From<&Board> for Uri {
@@ -274,6 +275,8 @@ impl Board {
 		let (placement_sender, placement_receiver) = mpsc::channel(10000);
 
 		tokio::spawn(Self::buffer_placements(id, placement_receiver, pool.clone()));
+		
+		let lookup_cache = Mutex::new(HashMap::new());
 
 		Self {
 			id,
@@ -285,6 +288,7 @@ impl Board {
 			cooldown_cache,
 			placement_sender,
 			pool,
+			lookup_cache,
 		}
 	}
 	
@@ -548,6 +552,18 @@ impl Board {
 		};
 		self.placement_sender.send(pending_placement).await?;
 		
+		if let Ok(user) = users_connection.get_user(user_id).await {
+			let placement = Placement {
+				position,
+				color,
+				modified: timestamp,
+				user: Reference::new(User::uri(&user_id), user.clone()),
+			};
+			let mut lookup_cache = self.lookup_cache.lock().await;
+			lookup_cache.insert(position, Some(placement));
+			drop(lookup_cache);
+		}
+		
 		let user = users_connection.get_user(user_id).await
 			.map_err(BoardsDatabaseError::UsersError)?;
 		
@@ -741,6 +757,9 @@ impl Board {
 		};
 
 		transaction.delete_placement(placement_id).await?;
+		let mut lookup_cache = self.lookup_cache.lock().await;
+		lookup_cache.remove(&position);
+		drop(lookup_cache);
 
 		let (color, timestamp) = match last_placement {
 			Some(placement) => (placement.color, placement.modified),
@@ -901,7 +920,13 @@ impl Board {
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
 	) -> Result<Option<Placement>, BoardsDatabaseError> {
-		connection.get_placement(self.id, position, users_connection).await
+		let mut cache = self.lookup_cache.lock().await;
+		if !cache.contains_key(&position) {
+			let placement = connection.get_placement(self.id, position, users_connection).await?;
+			cache.insert(position, placement);
+		}
+		
+		Ok(cache.get(&position).unwrap().clone())
 	}
 
 	fn current_timestamp(&self) -> u32 {
