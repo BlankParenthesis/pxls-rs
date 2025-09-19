@@ -5,10 +5,11 @@ use std::sync::Arc;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use enumset::EnumSet;
+use reqwest::StatusCode;
 use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 use tokio::sync::*;
 
-use crate::board::sector::{Sector, SectorBuffer};
+use crate::board::sector::{BufferRead, Change, Sector, SectorBuffer};
 use crate::database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabase, BoardsDatabaseError, Database};
 
 use super::SectorAccessor;
@@ -16,7 +17,8 @@ use super::SectorAccessor;
 pub struct SectorRequest {
 	sector_index: usize,
 	sector_type: SectorBuffer,
-	responder: oneshot::Sender<Arc<Result<Option<BufferedSector>, BoardsDatabaseError>>>,
+	// TODO: terrible error type but we can't clone BoardsDatabaseError
+	responder: oneshot::Sender<Result<Option<CompressedSector>, StatusCode>>,
 }
 
 pub struct BufferedSectorCache {
@@ -24,26 +26,54 @@ pub struct BufferedSectorCache {
 	readback_sender: mpsc::Sender<SectorRequest>,
 }
 
+#[derive(Clone)]
 pub struct CompressedSector {
 	pub raw: Vec<u8>,
 	pub compressed: Vec<u8>,
 }
 
 impl CompressedSector {
+	fn compress(data: &[u8]) -> Vec<u8> {
+		let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+		encoder.write_all(data).unwrap();
+		encoder.finish().unwrap()
+	}
+	
 	fn new(data: bytes::BytesMut) -> Self {
 		let raw = data.to_vec();
-		let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-		encoder.write_all(&raw).unwrap();
-		let compressed = encoder.finish().unwrap();
+		let compressed = Self::compress(&raw);
 		Self { raw, compressed }
+	}
+	
+	fn update(&mut self, delta: Vec<Change>) {
+		if !delta.is_empty() {
+			for Change { position, data } in delta {
+				self.raw[position] = data;
+			}
+			
+			self.compressed = Self::compress(&self.raw);
+		}
 	}
 }
 
+#[derive(Default)]
 pub struct BufferedSector {
 	pub colors: Option<CompressedSector>,
 	pub timestamps: Option<CompressedSector>,
 	pub initial: Option<CompressedSector>,
 	pub mask: Option<CompressedSector>,
+}
+
+impl BufferedSector {
+	fn get(&self, buffer: SectorBuffer) -> &Option<CompressedSector> {
+		match buffer {
+			SectorBuffer::Colors => &self.colors,
+			SectorBuffer::Timestamps => &self.timestamps,
+			SectorBuffer::Initial => &self.initial,
+			SectorBuffer::Mask => &self.mask,
+			SectorBuffer::Density => &None,
+		}
+	}
 }
 
 impl BufferedSectorCache {
@@ -65,7 +95,7 @@ impl BufferedSectorCache {
 		&self,
 		sector_index: usize,
 		sector_type: SectorBuffer,
-	) -> Arc<Result<Option<BufferedSector>, BoardsDatabaseError>> {
+	) -> Result<Option<CompressedSector>, StatusCode> {
 		let (responder, reciever) = oneshot::channel();
 		let request = SectorRequest { sector_index, responder, sector_type };
 		self.readback_sender.send(request).await.unwrap();
@@ -77,9 +107,12 @@ impl BufferedSectorCache {
 		pool: Arc<BoardsDatabase>,
 		mut request_receiver: mpsc::Receiver<SectorRequest>,
 	) {
+		let mut readback_buffers = vec![];
+		readback_buffers.resize_with(cache.total_sectors(), BufferedSector::default);
+		
 		let mut buffer = vec![];
 		while request_receiver.recv_many(&mut buffer, 1000).await > 0 {
-			let requests = buffer.drain(..).collect::<Vec<_>>();
+			let requests = std::mem::take(&mut buffer);
 			let connection = pool.connection().await.unwrap();
 			let mut requested_sectors = HashMap::<usize, EnumSet<SectorBuffer>>::new();
 			
@@ -95,33 +128,67 @@ impl BufferedSectorCache {
 			};
 			
 			let mut sectors = HashMap::new();
-			for SectorRequest { sector_index, responder, .. } in requests {
-				if !sectors.contains_key(&sector_index) {
-					let sector = cache.get_sector(sector_index, &connection).await
+			for SectorRequest { sector_index, sector_type, responder } in requests {
+				if let hash_map::Entry::Vacant(e) = sectors.entry(sector_index) {
+					let sector = cache.get_sector_mut(sector_index, &connection).await
 						.map(|option| {
-							option.map(|s| {
-								let sector = Sector::clone(&*s);
-								drop(s); // unlock asap
+							option.map(|mut s| {
+								let colors = s.colors.readback();
+								let timestamps = s.timestamps.readback();
+								let mask = s.mask.readback();
+								let initial = s.initial.readback();
+								drop(s);
 								
-								let buffers = requested_sectors.get(&sector_index).unwrap();
-								BufferedSector {
-									colors: buffers.contains(SectorBuffer::Colors)
-										.then(|| CompressedSector::new(sector.colors)),
-									timestamps: buffers.contains(SectorBuffer::Timestamps)
-										.then(|| CompressedSector::new(sector.timestamps)),
-									mask: buffers.contains(SectorBuffer::Mask)
-										.then(|| CompressedSector::new(sector.mask)),
-									initial: buffers.contains(SectorBuffer::Initial)
-										.then(|| CompressedSector::new(sector.initial)),
+								let buffer = readback_buffers.get_mut(sector_index).unwrap();
+								
+								match colors {
+									BufferRead::Delta(delta) => {
+										buffer.colors.as_mut().unwrap().update(delta);
+									},
+									BufferRead::Full(data) => {
+										buffer.colors = Some(CompressedSector::new(data));
+									},
+								}
+								match timestamps {
+									BufferRead::Delta(delta) => {
+										buffer.timestamps.as_mut().unwrap().update(delta);
+									},
+									BufferRead::Full(data) => {
+										buffer.timestamps = Some(CompressedSector::new(data));
+									},
+								}
+								match mask {
+									BufferRead::Delta(delta) => {
+										buffer.mask.as_mut().unwrap().update(delta);
+									},
+									BufferRead::Full(data) => {
+										buffer.mask = Some(CompressedSector::new(data));
+									},
+								}
+								match initial {
+									BufferRead::Delta(delta) => {
+										buffer.initial.as_mut().unwrap().update(delta);
+									},
+									BufferRead::Full(data) => {
+										buffer.initial = Some(CompressedSector::new(data));
+									},
 								}
 							})
 						});
 					
-					sectors.insert(sector_index, Arc::new(sector));
+					e.insert(sector);
 				}
 				
 				let sector = sectors.get(&sector_index).unwrap();
-				let _ = responder.send(sector.clone());
+				let buffer = match sector {
+					Ok(Some(())) => {
+						let buffer = readback_buffers.get(sector_index).unwrap();
+						Ok(buffer.get(sector_type).clone())
+					},
+					Ok(None) => Ok(None),
+					Err(e) => Err(StatusCode::from(e)),
+				};
+				let _ = responder.send(buffer);
 			}
 		}
 	}

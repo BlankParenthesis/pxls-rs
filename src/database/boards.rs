@@ -37,7 +37,7 @@ use crate::routes::reports::reports::{ReportPageToken, ReportFilter, Report, Rep
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::routes::user_bans::users::{Ban, BanPageToken, BanFilter};
-use crate::board::{ActivityCache, Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, CachedPlacement};
+use crate::board::{ActivityCache, Palette, Color, Board, Placement, PlacementPageToken, Sector, LastPlacement, CachedPlacement, WriteBuffer};
 use crate::routes::site_notices::notices::NoticePageToken;
 
 mod entities;
@@ -894,6 +894,12 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 			let mut density_slice = &mut density[index4];
 			density_slice.put_u32_le(current_density + 1);
 		}
+		
+		let initial = WriteBuffer::new(initial);
+		let mask = WriteBuffer::new(mask);
+		let colors = WriteBuffer::new(colors);
+		let timestamps = WriteBuffer::new(timestamps);
+		let density = WriteBuffer::new(density);
 
 		Ok(Sector {
 			board,

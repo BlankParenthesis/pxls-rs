@@ -36,14 +36,14 @@ use crate::AsyncWrite;
 use crate::database::{BoardsConnection, Order};
 
 use socket::{Connections, Packet, Socket};
-use sector::{SectorAccessor, BufferedSectorCache, MaskValue, IoError, BufferedSector};
+use sector::{SectorAccessor, BufferedSectorCache, MaskValue, IoError, CompressedSector};
 use cooldown::CooldownInfo;
 use info::BoardInfo;
 
 pub use activity::ActivityCache;
 pub use cooldown::CooldownCache;
 pub use color::{Color, Palette};
-pub use sector::{SectorBuffer, Sector};
+pub use sector::{SectorBuffer, Sector, WriteBuffer};
 pub use shape::Shape;
 pub use placement::{Placement, LastPlacement, PlacementPageToken, CachedPlacement};
 pub use socket::BoardSubscription;
@@ -326,7 +326,7 @@ impl Board {
 		range: Range,
 		sector_type: SectorBuffer,
 		timestamps: bool,
-	) -> Option<(Arc<Result<Option<BufferedSector>, BoardsDatabaseError>>, std::ops::Range<usize>)> {
+	) -> Option<(Result<Option<CompressedSector>, StatusCode>, std::ops::Range<usize>)> {
 		let multiplier = if timestamps { 4 } else { 1 };
 		
 		let range = match range {
@@ -539,8 +539,6 @@ impl Board {
 	) -> Result<Placement, PlaceError> {
 		let uid = connection.get_uid(user_id).await?;
 		
-		let four_byte_range = (sector_offset * 4)..((sector_offset + 1) * 4);
-		
 		let mut cooldown_cache = self.cooldown_cache.write().await;
 		let mut activity_cache = self.activity_cache.lock().await;
 		
@@ -577,16 +575,13 @@ impl Board {
 		activity_cache.insert(new_placement.modified, uid);
 		
 		let activity = activity_cache.count(new_placement.modified) as u32;
-		let density = u32::from_le_bytes(
-			sector.density[four_byte_range.clone()].try_into().unwrap()
-		);
+		let density = sector.density.read_u32(sector_offset);
+		// FIXME: set density?
 		
 		cooldown_cache.insert(new_placement.modified, uid, activity, density);
 		
-		sector.colors[sector_offset] = color;
-		sector.timestamps[four_byte_range]
-			.as_mut()
-			.put_u32_le(timestamp);
+		sector.colors.write(sector_offset, color);
+		sector.timestamps.write_u32(sector_offset, timestamp);
 		
 		let data = socket::BoardData::builder()
 			.colors(vec![socket::Change { position, values: vec![color] }])
@@ -650,7 +645,7 @@ impl Board {
 			let sector = sectors.get(sector_index).unwrap();
 
 			if !overrides.mask {
-				match MaskValue::try_from(sector.mask[*sector_offset]).ok() {
+				match MaskValue::try_from(sector.mask.read(*sector_offset)).ok() {
 					Some(MaskValue::Place) => Ok(()),
 					Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
 					Some(MaskValue::Adjacent) => unimplemented!(),
@@ -658,7 +653,7 @@ impl Board {
 				}?;
 			}
 
-			if sector.colors[*sector_offset] != *color {
+			if sector.colors.read(*sector_offset) != *color {
 				changes += 1;
 			}
 		}
@@ -763,13 +758,11 @@ impl Board {
 
 		let (color, timestamp) = match last_placement {
 			Some(placement) => (placement.color, placement.modified),
-			None => (sector.initial[sector_offset], 0),
+			None => (sector.initial.read(sector_offset), 0),
 		};
 
-		sector.colors[sector_offset] = color;
-		sector.timestamps[(sector_offset * 4)..((sector_offset + 1) * 4)]
-			.as_mut()
-			.put_u32_le(timestamp);
+		sector.colors.write(sector_offset, color);
+		sector.timestamps.read_u32(sector_offset);
 
 		transaction.commit().await?;
 
@@ -837,7 +830,7 @@ impl Board {
 			.expect("Missing sector");
 
 		if !overrides.mask {
-			match MaskValue::try_from(sector.mask[sector_offset]).ok() {
+			match MaskValue::try_from(sector.mask.read(sector_offset)).ok() {
 				Some(MaskValue::Place) => Ok(()),
 				Some(MaskValue::NoPlace) => Err(PlaceError::Unplacable),
 				// NOTE: there exists an old implementation in the version
@@ -848,7 +841,7 @@ impl Board {
 			}?;
 		}
 
-		if sector.colors[sector_offset] == color {
+		if sector.colors.read(sector_offset) == color {
 			return Err(PlaceError::NoOp);
 		}
 

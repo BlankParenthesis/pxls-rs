@@ -41,6 +41,10 @@ fn default_place_timeout() -> u64 {
 	5000
 }
 
+fn default_buffered_readback_limit() -> usize {
+	10_000
+}
+
 #[derive(Deserialize)]
 pub struct Config {
 	pub host: String,
@@ -96,6 +100,11 @@ pub struct Config {
 	// Maximum time in milliseconds a place request can idle before being cancelled
 	#[serde(default = "default_place_timeout")]
 	pub place_timeout_millis: u64,
+	// Maximum number of placements that can be recorded before a read occurs.
+	// If this number of placements is reached before a data request is made,
+	// the data will be copied directly instead of computed from a buffer.
+	#[serde(default = "default_buffered_readback_limit")]
+	pub buffered_readback_limit: usize,
 }
 
 impl Config {

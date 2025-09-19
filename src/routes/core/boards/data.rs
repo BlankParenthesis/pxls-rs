@@ -43,8 +43,7 @@ pub fn get_colors(
 			let exact = board.try_read_exact_sector(range.clone(), SectorBuffer::Colors, false).await;
 			if let Some((buffered, range)) = exact {
 				match buffered.as_ref() {
-					Ok(Some(sector)) => {
-						let data = sector.colors.as_ref().unwrap();
+					Ok(Some(data)) => {
 						let range = format!("bytes {}-{}/{}", range.start, range.end, data.raw.len());
 						
 						let response = warp::hyper::Response::builder()

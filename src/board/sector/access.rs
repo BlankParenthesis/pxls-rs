@@ -121,11 +121,11 @@ impl<'l> AsyncRead for SectorAccessor<'l> {
 				.unwrap();
 
 			let mut buf = &match self.buffer {
-				SectorBuffer::Colors => &sector.colors,
-				SectorBuffer::Timestamps => &sector.timestamps,
-				SectorBuffer::Initial => &sector.initial,
-				SectorBuffer::Mask => &sector.mask,
-				SectorBuffer::Density => &sector.mask,
+				SectorBuffer::Colors => &sector.colors.data,
+				SectorBuffer::Timestamps => &sector.timestamps.data,
+				SectorBuffer::Initial => &sector.initial.data,
+				SectorBuffer::Mask => &sector.mask.data,
+				SectorBuffer::Density => &sector.density.data,
 			}[offset..];
 
 			let write_len = buf.read(output)?;
@@ -169,11 +169,11 @@ impl<'l> AsyncWrite for SectorAccessor<'l> {
 				.expect("Missing sector");
 
 			let buf = &mut match self.buffer {
-				SectorBuffer::Colors => &mut sector.colors,
-				SectorBuffer::Timestamps => &mut sector.timestamps,
-				SectorBuffer::Initial => &mut sector.initial,
-				SectorBuffer::Mask => &mut sector.mask,
-				SectorBuffer::Density => &mut sector.density,
+				SectorBuffer::Colors => &mut sector.colors.data,
+				SectorBuffer::Timestamps => &mut sector.timestamps.data,
+				SectorBuffer::Initial => &mut sector.initial.data,
+				SectorBuffer::Mask => &mut sector.mask.data,
+				SectorBuffer::Density => &mut sector.density.data,
 			}[offset..];
 
 			let write_len: usize = input.read(buf)?;
