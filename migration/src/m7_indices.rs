@@ -6,6 +6,7 @@ enum Placement {
 	#[iden = "user_id"]
 	UserId,
 	Timestamp,
+	Position,
 }
 
 const PLACEMENT_BY_USER: &str = "placement_by_user";
@@ -37,7 +38,7 @@ impl MigrationTrait for Migration {
 		let create_placement_by_position = Index::create()
 			.name(PLACEMENT_BY_POSITION)
 			.table(Placement::Table)
-			.col(Placement::Timestamp)
+			.col(Placement::Position)
 			.to_owned();
 
 		manager.create_index(create_placement_by_position).await?;
