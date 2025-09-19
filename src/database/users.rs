@@ -220,6 +220,9 @@ lazy_static! {
 	static ref PERMISSIONS_CACHE: RwLock<HashMap<Option<String>, EnumSet<Permission>>> = {
 		RwLock::new(HashMap::new())
 	};
+	static ref FACTION_MEMBER_CACHE: RwLock<HashMap<(String, String), Reference<FactionMember>>> = {
+		RwLock::new(HashMap::new())
+	};
 }
 
 pub struct UsersConnection {
@@ -1458,6 +1461,13 @@ impl UsersConnection {
 		fid: &str,
 		uid: &str,
 	) -> Result<Reference<FactionMember>, UsersDatabaseError> {
+		let cache = FACTION_MEMBER_CACHE.read().await;
+		let entry = (fid.to_string(), uid.to_string());
+		if let Some(cached) = cache.get(&entry) {
+			return Ok(cached.clone());
+		}
+		drop(cache);
+		
 		let user_dn = user_dn(uid);
 		let user = self.get_user(uid).await?;
 		let user = Reference::new(User::uri(uid), user);
@@ -1473,7 +1483,7 @@ impl UsersConnection {
 			.success()
 			.map_err(FetchError::LdapError)?;
 
-		entries.into_iter()
+		let result = entries.into_iter()
 			.next()
 			.ok_or(FetchError::NoItems)
 			.map(SearchEntry::construct)
@@ -1497,7 +1507,14 @@ impl UsersConnection {
 				let uri = FactionMember::uri(fid, uid);
 				Ok(Reference::new(uri, member))
 			})
-			.map_err(UsersDatabaseError::from)
+			.map_err(UsersDatabaseError::from);
+		
+		if let Ok(ref reference) = result {
+			let mut cache = FACTION_MEMBER_CACHE.write().await;
+			cache.insert(entry, reference.clone());
+		}
+		
+		result
 	}
 
 	pub async fn add_faction_member(
@@ -1533,6 +1550,10 @@ impl UsersConnection {
 		let join_intent = JoinIntent::default();
 		let member = FactionMember { owner, join_intent, user };
 		let reference = Reference::new(uri, member);
+		
+		let mut cache = FACTION_MEMBER_CACHE.write().await;
+		let entry = (fid.to_string(), uid.to_string());
+		cache.insert(entry, reference.clone());
 
 		match result.rc {
 			0 => Ok(reference),
@@ -1580,7 +1601,7 @@ impl UsersConnection {
 		let member = FactionMember { owner, join_intent, user };
 		let reference = Reference::new(uri, member);
 
-		match result.rc {
+		let final_result = match result.rc {
 			0 => Ok(reference),
 			20 => Ok(reference), // TODO: this might not be correct (20 = already exists)
 			32 => Err(UpdateError::NoItem.into()),
@@ -1588,7 +1609,15 @@ impl UsersConnection {
 				.map(|_| reference)
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+		
+		if let Ok(ref reference) = final_result {
+			let mut cache = FACTION_MEMBER_CACHE.write().await;
+			let entry = (fid.to_string(), uid.to_string());
+			cache.insert(entry, reference.clone());
 		}
+		
+		final_result
 	}
 
 	pub async fn remove_faction_member(
@@ -1631,13 +1660,21 @@ impl UsersConnection {
 			.modify(faction_dn.as_str(), member_attribute).await
 			.map_err(UpdateError::LdapError)?;
 
-		match result.rc {
+		let final_result = match result.rc {
 			0 => Ok(()),
 			16 | 32 => Err(UpdateError::NoItem.into()),
 			_ => result.success()
 				.map(|_| ())
 				.map_err(UpdateError::LdapError)
 				.map_err(UsersDatabaseError::from),
+		};
+		
+		if final_result.is_ok() {
+			let mut cache = FACTION_MEMBER_CACHE.write().await;
+			let entry = (fid.to_string(), uid.to_string());
+			cache.remove(&entry);
 		}
+		
+		final_result
 	}
 }
