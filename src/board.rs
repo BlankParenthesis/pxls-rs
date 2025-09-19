@@ -814,6 +814,9 @@ impl Board {
 		users_connection: &mut UsersConnection,
 	) -> Result<(CooldownInfo, Placement), PlaceError> {
 		let uid = connection.get_uid(user_id).await?;
+		// make sure the user is cached before we lock things
+		let _ = users_connection.get_user(user_id).await
+			.map_err(BoardsDatabaseError::UsersError)?;
 		
 		if connection.is_user_banned(user_id).await? {
 			return Err(PlaceError::Banned);
