@@ -224,7 +224,7 @@ pub struct Board {
 	cooldown_cache: RwLock<CooldownCache>,
 	placement_sender: mpsc::Sender<PendingPlacement>,
 	pool: Arc<BoardsDatabase>,
-	lookup_cache: Mutex<HashMap<u64, Option<Placement>>>,
+	lookup_cache: RwLock<HashMap<u64, Option<Placement>>>,
 }
 
 impl From<&Board> for Uri {
@@ -276,7 +276,7 @@ impl Board {
 
 		tokio::spawn(Self::buffer_placements(id, placement_receiver, pool.clone()));
 		
-		let lookup_cache = Mutex::new(HashMap::new());
+		let lookup_cache = RwLock::new(HashMap::new());
 
 		Self {
 			id,
@@ -550,18 +550,6 @@ impl Board {
 		};
 		self.placement_sender.send(pending_placement).await?;
 		
-		if let Ok(user) = users_connection.get_user(user_id).await {
-			let placement = Placement {
-				position,
-				color,
-				modified: timestamp,
-				user: Reference::new(User::uri(&user_id), user.clone()),
-			};
-			let mut lookup_cache = self.lookup_cache.lock().await;
-			lookup_cache.insert(position, Some(placement));
-			drop(lookup_cache);
-		}
-		
 		let user = users_connection.get_user(user_id).await
 			.map_err(BoardsDatabaseError::UsersError)?;
 		
@@ -571,6 +559,9 @@ impl Board {
 			modified: timestamp as u32,
 			user: Reference::new(User::uri(user_id), user.clone()),
 		};
+		let mut lookup_cache = self.lookup_cache.write().await;
+		lookup_cache.insert(position, Some(new_placement.clone()));
+		drop(lookup_cache);
 		
 		activity_cache.insert(new_placement.modified, uid);
 		
@@ -752,7 +743,7 @@ impl Board {
 		};
 
 		transaction.delete_placement(placement_id).await?;
-		let mut lookup_cache = self.lookup_cache.lock().await;
+		let mut lookup_cache = self.lookup_cache.write().await;
 		lookup_cache.remove(&position);
 		drop(lookup_cache);
 
@@ -916,13 +907,35 @@ impl Board {
 		connection: &BoardsConnection,
 		users_connection: &mut UsersConnection,
 	) -> Result<Option<Placement>, BoardsDatabaseError> {
-		let mut cache = self.lookup_cache.lock().await;
-		if !cache.contains_key(&position) {
+		let cache = self.lookup_cache.read().await;
+		if cache.contains_key(&position) {
+			Ok(cache.get(&position).unwrap().clone())
+		} else {
+			// Avoid keeping this locked while we do the lookup since it can block placing
+			drop(cache);
+			
 			let placement = connection.get_placement(self.id, position, users_connection).await?;
-			cache.insert(position, placement);
+			let mut cache = self.lookup_cache.write().await;
+			
+			// Because we dropped the lock, there's a chance this function was
+			// called elsewhere and obtained a different result. To avoid populating
+			// the cache with wrong information, the cache should only be updated
+			// if the entry doesn't exist or is older than the new information.
+			// TODO: consider undos
+			match cache.entry(position) {
+				Entry::Occupied(e) => {
+					if let (Some(cached), Some(lookup)) = (e.get(), &placement) {
+						if cached.modified < lookup.modified {
+							cache.insert(position, placement.clone());
+						}
+					}
+				},
+				Entry::Vacant(e) => {
+					e.insert(placement.clone());
+				},
+			}
+			Ok(placement)
 		}
-		
-		Ok(cache.get(&position).unwrap().clone())
 	}
 
 	fn current_timestamp(&self) -> u32 {
