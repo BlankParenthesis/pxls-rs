@@ -71,8 +71,7 @@ impl CooldownCache {
 		activity: u32,
 		density: u32,
 	) {
-		let mut last = SystemTime::now();
-		let previous_stack = self.get(uid, timestamp).pixels_available - 1;
+		let previous_stack = self.get(uid, timestamp).pixels_available.saturating_sub(1);
 		
 		let entry = CacheEntry {
 			activity,
@@ -81,20 +80,11 @@ impl CooldownCache {
 			previous_stack,
 		};
 		
-		last = {
-			let now = SystemTime::now();
-			now
-		};
-		
 		match self.cache.entry(uid) {
 		    Entry::Occupied(mut occupied) => {
 				let cache = occupied.get_mut();
 				let min_timestamp = timestamp.saturating_sub(CONFIG.undo_deadline_seconds);
 				
-				last = {
-					let now = SystemTime::now();
-					now
-				};
 				loop {
 					match cache.front() {
 						Some(CacheEntry { timestamp, .. })
@@ -104,10 +94,6 @@ impl CooldownCache {
 						_ => break,
 					}
 				}
-				last = {
-					let now = SystemTime::now();
-					now
-				};
 				cache.push_back(entry);
 				
 			},
@@ -115,11 +101,6 @@ impl CooldownCache {
 				vacant.insert(VecDeque::from(vec![entry]));
 			}
 		}
-		
-		last = {
-			let now = SystemTime::now();
-			now
-		};
 	}
 	
 	pub fn get(&self, uid: i32, now: u32) -> CooldownInfo {
