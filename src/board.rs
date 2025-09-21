@@ -596,6 +596,9 @@ impl Board {
 		users_connection: &mut UsersConnection,
 	) -> Result<(usize, u32), PlaceError> {
 		let uid = connection.get_uid(user_id).await?;
+		// make sure the user is cached before we lock things
+		let _ = users_connection.get_user(user_id).await
+			.map_err(BoardsDatabaseError::UsersError)?;
 		
 		if connection.is_user_banned(user_id).await? {
 			return Err(PlaceError::Banned);
@@ -721,15 +724,12 @@ impl Board {
 			.expect("Missing sector");
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
-		// NOTE: no longer needed as placement_cache eclipses it and is a global lock
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		let transaction = connection.begin().await?;
 		
 		let (undone_placement, last_placement) = transaction
 			.get_two_placements(self.id, position).await?;
-
-		let uid = connection.get_uid(user_id).await?;
 
 		let placement_id = match undone_placement {
 			Some(placement) if placement.user_id == uid => {
@@ -762,6 +762,7 @@ impl Board {
 		activity_cache.remove(timestamp, uid);
 		cooldown_cache.remove(timestamp, uid);
 		drop(cooldown_cache);
+		drop(activity_cache);
 
 		statistics_lock.colors.entry(color).or_default().placed -= 1;
 
@@ -840,7 +841,6 @@ impl Board {
 		}
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
-		// NOTE: no longer needed as placement_cache eclipses it and is a global lock
 		let mut statistics_lock = self.statistics_cache.lock(uid).await;
 
 		let timestamp = self.current_timestamp();
