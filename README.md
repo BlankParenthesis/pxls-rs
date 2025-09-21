@@ -1,15 +1,11 @@
-pxls-server
+pxls-rs (name pending)
 ===========
 
-An unfinished server implementation of [PxlsNetworking](https://github.com/BlankParenthesis/PxlsNetworking).
+A big thank you to [CDawg](https://www.twitch.tv/cdawg) for funding this project and using it in the 2025 Connor canvas.
+
+An in-progress reference server implementation of [PxlsNetworking](https://github.com/BlankParenthesis/PxlsNetworking).
 *Note: that specification is evolving as this is worked on, so both are likely to change significantly.*
 
-Important missing features:
-- ~~Websocket authorization isn't compatible with the browser API specification.~~
-- ~~No cooldown notifications.~~
-- ~~No permissions management.~~
-- ~~Several important extensions are not yet implemented.~~
-  
   A full list of which extensions are implemented:
 	- [X] [authentication](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/authentication.md)
 	- [X] [board_data_initial](https://github.com/BlankParenthesis/PxlsNetworking/blob/master/extensions/board_data_initial.md)
@@ -46,6 +42,4 @@ It's not all bad, here are some of the things that are currently better than the
 
 And from a more development perspective:
 - Database migrations and a leaner database structure.
-- ~~Smaller server scope (no need to worry about serving client files).~~
-  *Pxls now shares this benefit.*
 - A more sane and consistent API.
