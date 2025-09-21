@@ -566,13 +566,13 @@ impl Board {
 		activity_cache.insert(new_placement.modified, uid);
 		
 		let activity = activity_cache.count(new_placement.modified) as u32;
-		let density = sector.density.read_u32(sector_offset);
-		// FIXME: set density?
+		let density = sector.density.read_u32(sector_offset) + 1;
 		
 		cooldown_cache.insert(new_placement.modified, uid, activity, density);
 		
 		sector.colors.write(sector_offset, color);
 		sector.timestamps.write_u32(sector_offset, timestamp);
+		sector.density.write_u32(sector_offset, density);
 		
 		let data = socket::BoardData::builder()
 			.colors(vec![socket::Change { position, values: vec![color] }])
@@ -751,9 +751,11 @@ impl Board {
 			Some(placement) => (placement.color, placement.modified),
 			None => (sector.initial.read(sector_offset), 0),
 		};
+		let density = sector.density.read_u32(sector_offset).checked_sub(1).unwrap();
 
 		sector.colors.write(sector_offset, color);
-		sector.timestamps.read_u32(sector_offset);
+		sector.timestamps.write_u32(sector_offset, timestamp);
+		sector.density.write_u32(sector_offset, density);
 
 		transaction.commit().await?;
 
