@@ -152,9 +152,7 @@ where
 	for range in efficient_ranges {
 		let length = range.start - range.end;
 
-		let mut subdata: Vec<u8> = std::iter::repeat(0)
-			.take(length)
-			.collect();
+		let mut subdata: Vec<u8> = std::iter::repeat_n(0, length).collect();
 
 		data.seek(std::io::SeekFrom::Start(
 			u64::try_from(range.start).unwrap(),
@@ -182,8 +180,7 @@ fn choose_boundary(datas: &[DataRange]) -> String {
 			.as_millis();
 		let mut rand = Wyrand::seed(seed as u64);
 
-		let random_string = std::iter::repeat(())
-			.take(8)
+		let random_string = std::iter::repeat_n((), 8)
 			.map(move |_| {
 				const ASCII_START: u16 = b'a' as u16;
 				const ASCII_END: u16 = b'z' as u16 + 1;

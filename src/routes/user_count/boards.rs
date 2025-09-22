@@ -6,7 +6,7 @@ use warp::Filter;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, UsersDatabase};
+use crate::database::UsersDatabase;
 use crate::BoardDataMap;
 
 use serde::Serialize;

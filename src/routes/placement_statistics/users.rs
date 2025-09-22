@@ -110,7 +110,7 @@ pub fn list(
 
 				let mut stats = Vec::with_capacity(users.len());
 				for user in users {
-					let uid = user.uri.path().split('/').last().unwrap().to_owned();
+					let uid = user.uri.path().split('/').next_back().unwrap().to_owned();
 					let stat = calculate_stats(
 						uid,
 						&boards,

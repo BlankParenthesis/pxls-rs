@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use enumset::{EnumSet, EnumSetType};
-use futures_util::{stream::SplitStream, FutureExt, StreamExt};
+use futures_util::{stream::SplitStream, StreamExt};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -439,7 +439,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 					}
 				},
 				Message::Packet(ClientPacket::Ping) => {
-					if let Err(_) = self.sender.send(Ok(warp::ws::Message::ping([]))) {
+					if self.sender.send(Ok(warp::ws::Message::ping([]))).is_err() {
 						self.close(None);
 					}
 				}

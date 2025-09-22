@@ -95,7 +95,7 @@ impl<'l> Seek for SectorAccessor<'l> {
 			.and_then(usize::try_from)
 			.map(|new_cursor| self.cursor = new_cursor)
 			.and_then(|_| u64::try_from(self.cursor))
-			.map_err(|e| std::io::Error::new(ErrorKind::Other, e))
+			.map_err(std::io::Error::other)
 	}
 }
 

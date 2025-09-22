@@ -1134,7 +1134,7 @@ impl UsersConnection {
 				let join_intent = JoinIntent::default();
 				let user = user.clone();
 				let member = FactionMember { owner, join_intent, user };
-				let member = Reference::new(FactionMember::uri(&fid, &uid), member);
+				let member = Reference::new(FactionMember::uri(&fid, uid), member);
 				Ok::<_, FetchError>(CurrentFaction { faction, member })
 			})
 			.collect::<Result<_, _>>()?;
@@ -1258,12 +1258,12 @@ impl UsersConnection {
 		let mut modifications = vec![];
 		
 		let new_name = new_name.map(|name| ldap_escape(name).to_string());
-		if let Some(new_name) = new_name.as_ref().map(|o| o.as_str()) {
+		if let Some(new_name) = new_name.as_deref() {
 			modifications.push(Mod::Replace("pxlsspaceFactionName", HashSet::from([new_name])));
 		}
 		
 		let new_icon = new_icon.map(|icon| ldap_escape(icon.to_string()).to_string());
-		if let Some(new_icon) = new_icon.as_ref().map(|o| o.as_str()) {
+		if let Some(new_icon) = new_icon.as_deref() {
 			modifications.push(Mod::Replace("pxlsspaceIcon", HashSet::from([new_icon])));
 		}
 

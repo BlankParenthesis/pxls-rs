@@ -722,7 +722,7 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 		placements: &[PendingPlacement],
 	) -> DbResult<()> {
 		placement::Entity::insert_many(
-			placements.into_iter().map(|p| {
+			placements.iter().map(|p| {
 				placement::ActiveModel {
 					id: NotSet,
 					board: Set(board_id),
@@ -863,9 +863,6 @@ impl<C: TransactionTrait + ConnectionTrait + StreamTrait> BoardsConnection<C> {
 
 		let start_position = sector_size as i64 * sector.sector as i64;
 		let end_position = start_position + sector_size as i64 - 1;
-
-		#[derive(Iden)]
-		struct Inner;
 
 		let column_timestamp_id_pair = Expr::tuple([
 			Expr::col(placement::Column::Timestamp).into(),

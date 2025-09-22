@@ -229,11 +229,11 @@ impl SectorCache {
 		self.sector_size() * self.total_sectors()
 	}
 
-	async fn cache_sector<C: ConnectionTrait + TransactionTrait + StreamTrait>(
-		&self,
+	async fn cache_sector<'l, C: ConnectionTrait + TransactionTrait + StreamTrait>(
+		&'l self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<RwLockWriteGuard<Option<Sector>>, BoardsDatabaseError> {
+	) -> Result<RwLockWriteGuard<'l, Option<Sector>>, BoardsDatabaseError> {
 		let mut option = self
 			.sectors
 			.get(sector_index).unwrap()
@@ -274,11 +274,11 @@ impl SectorCache {
 		option.take()
 	}
 
-	pub async fn get_sector(
-		&self,
+	pub async fn get_sector<'l>(
+		&'l self,
 		sector_index: usize,
 		connection: &BoardsConnection,
-	) -> Result<Option<RwLockReadGuard<Sector>>, BoardsDatabaseError> {
+	) -> Result<Option<RwLockReadGuard<'l, Sector>>, BoardsDatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.read().await;
 			if option.is_some() {
@@ -298,11 +298,11 @@ impl SectorCache {
 		}
 	}
 
-	pub async fn get_sector_mut<C: ConnectionTrait + TransactionTrait + StreamTrait>(
-		&self,
+	pub async fn get_sector_mut<'l, C: ConnectionTrait + TransactionTrait + StreamTrait>(
+		&'l self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<Option<RwLockMappedWriteGuard<Sector>>, BoardsDatabaseError> {
+	) -> Result<Option<RwLockMappedWriteGuard<'l, Sector>>, BoardsDatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.write().await;
 			if option.is_some() {

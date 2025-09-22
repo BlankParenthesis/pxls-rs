@@ -111,7 +111,7 @@ impl UserConnections {
 		connections: Weak<RwLock<Self>>,
 		mut cooldown_info: CooldownInfo,
 	) {
-		while let Some((time, count)) = cooldown_info.next() {
+		for (time, count) in cooldown_info.by_ref() {
 			let cooldown = time.duration_since(SystemTime::now())
 				.unwrap_or(Duration::ZERO);
 
@@ -134,14 +134,9 @@ impl UserConnections {
 		let count = cooldown_info.pixels_available;
 		let packet = Packet::PixelsAvailable { count, next: None };
 		
-		match connections.upgrade() {
-			Some(connections) => {
-				let connections = connections.write().await;
-				connections.send(packet).await;
-			},
-			None => {
-				return;
-			},
+		if let Some(connections) = connections.upgrade() {
+			let connections = connections.write().await;
+			connections.send(packet).await;
 		}
 	}
 }

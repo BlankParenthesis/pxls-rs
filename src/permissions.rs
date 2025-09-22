@@ -1,6 +1,6 @@
 use std::fmt;
 
-use enumset::{EnumSet, EnumSetType};
+use enumset::EnumSetType;
 use serde::{Serialize, Serializer, Deserialize, de::Visitor};
 
 #[derive(Debug, EnumSetType)]
