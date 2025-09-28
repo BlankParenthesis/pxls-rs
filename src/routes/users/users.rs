@@ -11,13 +11,12 @@ use warp::{
 
 use crate::config::CONFIG;
 use crate::routes::core::{EventPacket, Connections};
-use crate::database::{User, UsersDatabaseError};
+use crate::database::{BoardsConnection, BoardsDatabase, User, UserSpecifier};
 use crate::filter::response::paginated_list::PaginationOptions;
-use crate::filter::header::authorization::{self, Bearer, PermissionsError};
+use crate::filter::header::authorization::{self, PermissionsError};
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
 
 #[derive(Deserialize, Debug)]
 pub struct UserFilter {
@@ -27,15 +26,15 @@ pub struct UserFilter {
 }
 
 pub fn list(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::authorized(users_db, Permission::UsersList.into()))
-		.then(move |pagination: PaginationOptions<LdapPageToken>, filter: UserFilter, _, mut connection: UsersConnection| async move {
+		.and(authorization::authorized(db, Permission::UsersList.into()))
+		.then(move |pagination: PaginationOptions<_>, filter: UserFilter, _, connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
@@ -47,7 +46,7 @@ pub fn list(
 }
 
 pub fn get(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet.into();
 
@@ -55,10 +54,10 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -68,31 +67,29 @@ pub fn get(
 			};
 
 			if check(user_permissions, permissions) {
-				Ok((uid, connection))
+				Ok((user, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, mut connection: UsersConnection| async move {
-			connection.get_user(&uid).await
+		.then(move |user: UserSpecifier, connection: BoardsConnection| async move {
+			connection.get_user(&user).await
 				.map(|user| warp::reply::json(&user))
 		})
 }
 
 pub fn current(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path("current"))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::authorized(users_db, Permission::UsersCurrentGet.into()))
-		.then(|user: Option<Bearer>, mut connection: UsersConnection| async move {
-			if let Some(uid) = user.map(|b| b.id) {
-				connection.get_user(&uid).await
-					.map(|user| Reference::new(User::uri(&uid), &user).reply())
-					.map_err(StatusCode::from)
+		.and(authorization::authorized(db, Permission::UsersCurrentGet.into()))
+		.then(|user: Option<User>, _| async move {
+			if let Some(user) = user {
+				Ok(Reference::from(user).reply())
 			} else {
 				Err(StatusCode::UNAUTHORIZED)
 			}
@@ -105,7 +102,7 @@ struct UserUpdate {
 }
 
 pub fn patch(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 	events: Arc<RwLock<Connections>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersPatch;
@@ -115,10 +112,10 @@ pub fn patch(
 		.and(warp::path::end())
 		.and(warp::patch())
 		.and(warp::body::json())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, update, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, update, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -128,33 +125,32 @@ pub fn patch(
 			};
 
 			if check(user_permissions, permissions) {
-				Ok((uid, update, connection))
+				Ok((user, update, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, update: UserUpdate, mut connection: UsersConnection| {
+		.then(move |user: UserSpecifier, update: UserUpdate, connection: BoardsConnection| {
 			let events = events.clone();
 			async move {
 				// FIXME: validate username
 
-				connection.update_user(&uid, &update.name).await?;
-				let user = connection.get_user(&uid).await?;
-				let reference = Reference::new(User::uri(&uid), user);
+				let user = connection.update_user(&user, &update.name).await?
+					.ok_or(StatusCode::NOT_FOUND)?;
 
+				let reference = Reference::from(user);
 				let packet = EventPacket::UserUpdated {
-					user_id: uid,
 					user: reference.clone(),
 				};
 				events.read().await.send(&packet).await;
-				Ok::<_, UsersDatabaseError>(reference.created()) // TODO: is created correct?
+				Ok::<_, StatusCode>(reference.created()) // TODO: is created correct?
 			}
 		})
 }
 
 pub fn delete(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersDelete;
 
@@ -162,10 +158,10 @@ pub fn delete(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -175,14 +171,14 @@ pub fn delete(
 			};
 
 			if check(user_permissions, permissions) {
-				Ok((uid, connection))
+				Ok((user, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, mut connection: UsersConnection| async move {
-			connection.delete_user(&uid).await
+		.then(move |user: UserSpecifier, connection: BoardsConnection| async move {
+			connection.delete_user(&user).await
 				.map(|_| StatusCode::NO_CONTENT)
 		})
 }

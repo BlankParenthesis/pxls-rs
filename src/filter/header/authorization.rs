@@ -10,7 +10,7 @@ use warp::{reject::Reject, Filter, Rejection, Reply};
 use crate::openid::Identity;
 use crate::openid::{self, ValidationError};
 use crate::permissions::Permission;
-use crate::database::{UsersConnection, UsersDatabase};
+use crate::database::{BoardsConnection, BoardsDatabase, DatabaseError, User, UserSpecifier};
 use crate::filter::resource::database;
 
 #[derive(Debug)]
@@ -86,38 +86,81 @@ impl Reject for PermissionsError {}
 #[derive(Debug)]
 pub struct Bearer {
 	valid_until: SystemTime,
-	pub id: String,
+	subject: String,
+	username: String,
+}
+
+impl Bearer {
+	pub async fn user(
+		&self,
+		connection: &BoardsConnection,
+	) -> Result<User, DatabaseError> {
+		connection.create_user(
+			self.subject.clone(),
+			self.username.clone(),
+			SystemTime::now(),
+		).await
+	}
 }
 
 impl From<TokenData<Identity>> for Bearer {
 	fn from(token_data: TokenData<Identity>) -> Self {
 		Self {
 			valid_until: UNIX_EPOCH + Duration::from_secs(token_data.claims.exp),
-			id: token_data.claims.sub,
+			subject: token_data.claims.sub,
+			username: token_data.claims.preferred_username,
 		}
 	}
 }
 
 impl Bearer {
-	pub fn is_valid(&self) -> bool {
-		SystemTime::now() < self.valid_until 
+	pub fn into_user(self, user: &User) -> AuthenticatedUser {
+		debug_assert!(user.subject == self.subject);
+		AuthenticatedUser {
+			user: user.specifier(),
+			valid_until: self.valid_until,
+		}
 	}
 }
 
+#[derive(Debug)]
+pub struct AuthenticatedUser {
+	user: UserSpecifier,
+	valid_until: SystemTime,
+}
+
+impl AuthenticatedUser {
+	pub fn is_valid(&self) -> bool {
+		SystemTime::now() < self.valid_until 
+	}
+	
+	pub fn specifier(&self) -> &UserSpecifier {
+		&self.user
+	}
+}
+
+
 pub fn permissions(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<
-	Extract = (EnumSet<Permission>, Option<Bearer>, UsersConnection),
+	Extract = (EnumSet<Permission>, Option<User>, BoardsConnection),
 	Error = Rejection,
 > + Clone {
 	warp::any()
 		.and(bearer())
-		.and(database::connection(users_db))
-		.and_then(|bearer: Option<Bearer>, mut connection: UsersConnection| async {
-			let user = bearer.as_ref().map(|b| b.id.clone());
-			let user_permissions = connection.user_permissions(user).await?;
-
-			Ok::<_, Rejection>((user_permissions, bearer, connection))
+		.and(database::connection(db))
+		.and_then(|bearer: Option<Bearer>, connection: BoardsConnection| async {
+			match bearer {
+				Some(bearer) => {
+					let user = bearer.user(&connection).await?;
+					let permissions = connection.user_permissions(&user.specifier()).await?;
+					Ok((permissions, Some(user), connection))
+				},
+				None => {
+					let permissions = connection.anonymous_permissions().await?;
+					Ok::<_, Rejection>((permissions, None, connection))
+				},
+			}
 		})
 		.untuple_one()
 }
@@ -145,20 +188,21 @@ pub fn has_permissions_current(
 }
 
 pub fn authorized(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 	permissions: EnumSet<Permission>,
 ) -> impl Filter<
-	Extract = (Option<Bearer>, UsersConnection),
+	Extract = (Option<User>, BoardsConnection),
 	Error = Rejection,
 > + Clone {
 	warp::any()
-		.and(self::permissions(users_db))
-		.and_then(move |user_permissions: EnumSet<Permission>, bearer: Option<Bearer>, connection| async move {
+		.and(self::permissions(db))
+		.and_then(move |user_permissions: EnumSet<Permission>, user: Option<User>, connection| async move {
+			
 			if !has_permissions(user_permissions, permissions) {
 				let error = PermissionsError::MissingPermission;
 				return Err(Rejection::from(error));
 			}
-			Ok((bearer, connection))
+			Ok((user, connection))
 		})
 		.untuple_one()
 }

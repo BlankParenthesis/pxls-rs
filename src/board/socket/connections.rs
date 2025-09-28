@@ -1,8 +1,6 @@
-use std::{
-	collections::{HashMap, HashSet, hash_map::Entry},
-	sync::{Arc, Weak},
-	time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use enum_map::EnumMap;
 use enumset::EnumSet;
@@ -10,6 +8,7 @@ use tokio::{time::Instant, sync::{RwLock, mpsc}};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::CONFIG;
+use crate::database::UserSpecifier;
 use crate::board::cooldown::CooldownInfo;
 use crate::socket::{CloseReason, ServerPacket};
 
@@ -144,7 +143,7 @@ impl UserConnections {
 type SocketList = HashSet<Arc<Socket>>;
 
 pub struct Connections {
-	by_uid: HashMap<Option<String>, Arc<RwLock<UserConnections>>>,
+	by_user: HashMap<Option<UserSpecifier>, Arc<RwLock<UserConnections>>>,
 	by_subscription: EnumMap<BoardSubscription, SocketList>,
 	by_board_update: Arc<RwLock<HashMap<EnumSet<DataType>, SocketList>>>,
 	update_sender: mpsc::Sender<BoardUpdateBuilder>,
@@ -159,7 +158,7 @@ impl Default for Connections {
 		tokio::spawn(Self::thread(Arc::clone(&by_board_update), update_receiver));
 
 		Self {
-			by_uid: HashMap::new(),
+			by_user: HashMap::new(),
 			by_subscription: EnumMap::default(),
 			by_board_update,
 			update_sender,
@@ -207,8 +206,8 @@ impl Connections {
 		socket: &Arc<Socket>,
 		cooldown_info: Option<CooldownInfo>,
 	) {
-		let id = socket.user_id().await;
-		let entry = self.by_uid.entry(id.clone());
+		let id = socket.user().await;
+		let entry = self.by_user.entry(id);
 		let connections = match entry {
 			Entry::Vacant(entry) => {
 				let new_connections = UserConnections::new(
@@ -242,15 +241,15 @@ impl Connections {
 		socket: &Arc<Socket>,
 	) {
 		{
-			let id = socket.user_id().await;
-			let connections = self.by_uid.get(&id).unwrap();
+			let id = socket.user().await;
+			let connections = self.by_user.get(&id).unwrap();
 			let mut connections = connections.write().await;
 
 			connections.remove(Arc::clone(socket));
 			if connections.is_empty() {
 				connections.cleanup();
 				drop(connections);
-				self.by_uid.remove(&id);
+				self.by_user.remove(&id);
 			}
 		}
 
@@ -287,10 +286,10 @@ impl Connections {
 
 	pub async fn set_user_cooldown(
 		&self,
-		user_id: &str,
+		user: &UserSpecifier,
 		cooldown_info: CooldownInfo,
 	) {
-		if let Some(connections) = self.by_uid.get(&Some(user_id.to_owned())) {
+		if let Some(connections) = self.by_user.get(&Some(*user)) {
 			UserConnections::set_cooldown_info(
 				Arc::clone(connections),
 				cooldown_info,
@@ -306,9 +305,9 @@ impl Connections {
 		}
 	}
 
-	pub fn users(&self) -> Vec<&str> {
-		self.by_uid.keys()
-			.filter_map(|u| u.as_ref().map(|s| s.as_str()))
+	pub fn users(&self) -> Vec<&UserSpecifier> {
+		self.by_user.keys()
+			.filter_map(|u| u.as_ref())
 			.collect()
 	}
 }

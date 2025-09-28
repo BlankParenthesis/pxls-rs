@@ -10,7 +10,24 @@ path = "src/lib.rs"
 
 [dependencies]
 async-std = { version = "1", features = ["attributes", "tokio1"] }
+url = { version = "2.5.7", features = ["serde"] }
+chrono = { version = "0.4.42", optional = true }
+envy = { version = "0.4.2", optional = true }
+lazy_static = { version = "1.5.0", optional = true }
+ldap3 = { version = "0.12.1", optional = true }
+serde = { version = "1.0.226", optional = true }
+sea-query = { version = "0.32.7", optional = true }
 
 [dependencies.sea-orm-migration]
 version = "1.0"
 features = ["runtime-tokio-rustls", "sqlx-postgres"]
+
+[features]
+default = []
+migrate-ldap = [
+	"dep:chrono",
+	"dep:envy",
+	"dep:lazy_static",
+	"dep:ldap3",
+	"dep:serde",
+]

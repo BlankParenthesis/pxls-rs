@@ -90,9 +90,10 @@ impl Discovery {
 	}
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Identity {
 	pub sub: String,
+	pub preferred_username: String,
 	pub exp: u64,
 }
 
@@ -184,7 +185,7 @@ pub async fn validate_token(
 	let token_string = token.to_string();
 	let cache = CACHED_TOKENS.read().await;
 	if let Some(cached) = cache.get(&token_string) {
-		return Ok(clone_token(cached));
+		return Ok(cached.clone());
 	}
 	drop(cache);
 
@@ -217,18 +218,6 @@ pub async fn validate_token(
 		&Validation::new(algorithm.into()),
 	).map_err(ValidationError::from)?;
 	let mut cache = CACHED_TOKENS.write().await;
-	cache.insert(token_string, clone_token(&token));
+	cache.insert(token_string, token.clone());
 	Ok(token)
-}
-
-// since token doesn't implement clone in the current version of jwt
-fn clone_token(token: &TokenData<Identity>) -> TokenData<Identity> {
-	let identity = Identity {
-		sub: token.claims.sub.clone(),
-		exp: token.claims.exp,
-	};
-	TokenData {
-		header: token.header.clone(),
-		claims: identity,
-	}
 }

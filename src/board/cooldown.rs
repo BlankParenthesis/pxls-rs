@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use warp::http::header::{HeaderName, HeaderValue};
 
 use crate::config::CONFIG;
+use crate::database::UserSpecifier;
 
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -16,7 +17,7 @@ struct CacheEntry {
 
 #[derive(Debug)]
 pub struct CooldownCache {
-	cache: HashMap<i32, VecDeque<CacheEntry>>,
+	cache: HashMap<UserSpecifier, VecDeque<CacheEntry>>,
 	max_pixels: u32,
 	epoch: SystemTime,
 }
@@ -39,8 +40,8 @@ impl CooldownCache {
 		CONFIG.cooldown * (stack + 1)
 	}
 	
-	pub fn remove(&mut self, timestamp: u32, uid: i32) {
-		if let Some(cooldown) = self.cache.get_mut(&uid) {
+	pub fn remove(&mut self, timestamp: u32, user: UserSpecifier) {
+		if let Some(cooldown) = self.cache.get_mut(&user) {
 			let mut popped_entries = vec![];
 			
 			// store all caches above the entry
@@ -59,7 +60,7 @@ impl CooldownCache {
 			
 			// re-insert our popped entries, correctly calculating the new cooldown
 			for CacheEntry { timestamp, activity, density, .. } in popped_entries {
-				self.insert(timestamp, uid, activity, density);
+				self.insert(timestamp, user, activity, density);
 			}
 		}
 	}
@@ -67,11 +68,11 @@ impl CooldownCache {
 	pub fn insert(
 		&mut self,
 		timestamp: u32,
-		uid: i32,
+		user: UserSpecifier,
 		activity: u32,
 		density: u32,
 	) {
-		let previous_stack = self.get(uid, timestamp).pixels_available.saturating_sub(1);
+		let previous_stack = self.get(user, timestamp).pixels_available.saturating_sub(1);
 		
 		let entry = CacheEntry {
 			activity,
@@ -80,7 +81,7 @@ impl CooldownCache {
 			previous_stack,
 		};
 		
-		match self.cache.entry(uid) {
+		match self.cache.entry(user) {
 		    Entry::Occupied(mut occupied) => {
 				let cache = occupied.get_mut();
 				let min_timestamp = timestamp.saturating_sub(CONFIG.undo_deadline_seconds);
@@ -103,13 +104,13 @@ impl CooldownCache {
 		}
 	}
 	
-	pub fn get(&self, uid: i32, now: u32) -> CooldownInfo {
+	pub fn get(&self, user: UserSpecifier, now: u32) -> CooldownInfo {
 		let CacheEntry {
 			activity,
 			density,
 			timestamp,
 			previous_stack,
-		} = self.cache.get(&uid).and_then(|v| v.back()).copied()
+		} = self.cache.get(&user).and_then(|v| v.back()).copied()
 			.unwrap_or_else(CacheEntry::default);
 
 		let mut cooldowns = (previous_stack..self.max_pixels)

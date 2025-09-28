@@ -3,31 +3,30 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "board_notice")]
+#[sea_orm(table_name = "faction_member")]
 pub struct Model {
-	#[sea_orm(primary_key)]
-	pub id: i32,
-	pub board: i32,
-	pub title: String,
-	pub content: String,
-	pub created_at: i64,
-	pub expires_at: Option<i64>,
-	pub author: Option<i32>,
+	#[sea_orm(primary_key, auto_increment = false)]
+	pub faction: i32,
+	#[sea_orm(primary_key, auto_increment = false)]
+	pub member: i32,
+	pub owner: bool,
+	pub imposed: bool,
+	pub invited: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
 	#[sea_orm(
-		belongs_to = "super::board::Entity",
-		from = "Column::Board",
-		to = "super::board::Column::Id",
+		belongs_to = "super::faction::Entity",
+		from = "Column::Faction",
+		to = "super::faction::Column::Id",
 		on_update = "NoAction",
 		on_delete = "NoAction"
 	)]
-	Board,
+	Faction,
 	#[sea_orm(
 		belongs_to = "super::user::Entity",
-		from = "Column::Author",
+		from = "Column::Member",
 		to = "super::user::Column::Id",
 		on_update = "NoAction",
 		on_delete = "NoAction"
@@ -35,9 +34,9 @@ pub enum Relation {
 	User,
 }
 
-impl Related<super::board::Entity> for Entity {
+impl Related<super::faction::Entity> for Entity {
 	fn to() -> RelationDef {
-		Relation::Board.def()
+		Relation::Faction.def()
 	}
 }
 

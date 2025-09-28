@@ -13,11 +13,10 @@ use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	PageToken,
 };
-use crate::filter::header::authorization::{self, Bearer};
+use crate::filter::header::authorization;
 use crate::filter::response::reference::Reference;
-use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError, User};
+use crate::database::{BoardsDatabase, BoardsConnection, User};
 use crate::routes::core::{EventPacket, Connections};
 
 
@@ -106,50 +105,39 @@ pub struct NoticeFilter {
 }
 
 pub fn list(
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::authorized(users_db, Permission::NoticesList.into()))
-		.and(database::connection(boards_db))
-		.then(move |pagination: PaginationOptions<NoticePageToken>, filter: NoticeFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+		.and(authorization::authorized(db, Permission::NoticesList.into()))
+		.then(move |pagination: PaginationOptions<NoticePageToken>, filter: NoticeFilter, _, connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
 				.clamp(1, CONFIG.max_page_item_limit);
 
-			let page = boards_connection.list_notices(
-				page,
-				limit,
-				filter,
-				&mut users_connection,
-			).await.map_err(Reply::into_response)?;
+			let page = connection.list_notices(page, limit, filter).await?;
 			
-			Ok::<_, warp::reply::Response>(warp::reply::json(&page))
+			Ok::<_, StatusCode>(warp::reply::json(&page))
 		})
 }
 
 pub fn get(
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::authorized(users_db, Permission::NoticesGet.into()))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, _: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
-			let notice = boards_connection.get_notice(id, &mut users_connection).await
-				.map_err(Reply::into_response)?
-				.ok_or(StatusCode::NOT_FOUND)
-				.map_err(Reply::into_response)?;
+		.and(authorization::authorized(db, Permission::NoticesGet.into()))
+		.then(move |id: usize, _, connectioon: BoardsConnection| async move {
+			let notice = connectioon.get_notice(id).await?
+				.ok_or(StatusCode::NOT_FOUND)?;
 			
-			Ok::<_, warp::reply::Response>(warp::reply::json(&notice))
+			Ok::<_, StatusCode>(warp::reply::json(&notice))
 		})
 }
 
@@ -163,16 +151,14 @@ struct NoticePost {
 
 pub fn post(
 	events: Arc<RwLock<Connections>>,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPost))
-		.and(database::connection(boards_db))
-		.then(move |notice: NoticePost, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
+		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesPost))
+		.then(move |notice: NoticePost, user: Option<User>, boards_connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {
 				// TODO: author (requires spec decision)
@@ -181,8 +167,7 @@ pub fn post(
 					notice.title,
 					notice.content,
 					notice.expires_at,
-					&mut users_connection,
-				).await.map_err(Reply::into_response)?;
+				).await?;
 
 				let packet = EventPacket::SiteNoticeCreated {
 					notice: notice.clone(),
@@ -190,7 +175,7 @@ pub fn post(
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, warp::reply::Response>(notice.created())
+				Ok::<_, StatusCode>(notice.created())
 			}
 		})
 }
@@ -205,28 +190,25 @@ struct NoticePatch {
 
 pub fn patch(
 	events: Arc<RwLock<Connections>>,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::patch())
 		.and(warp::body::json())
-		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesPatch))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, notice: NoticePatch, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
+		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesPatch))
+		.then(move |id: usize, notice: NoticePatch, user: Option<User>, connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {
 				// TODO: author
 
-				let notice = boards_connection.edit_notice(
+				let notice = connection.edit_notice(
 					id,
 					notice.title,
 					notice.content,
 					notice.expires_at,
-					&mut users_connection,
-				).await.map_err(Reply::into_response)?;
+				).await?;
 
 				let packet = EventPacket::SiteNoticeUpdated {
 					notice: notice.clone(),
@@ -234,7 +216,7 @@ pub fn patch(
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, warp::reply::Response>(warp::reply::json(&notice))
+				Ok::<_, StatusCode>(warp::reply::json(&notice))
 			}
 		})
 }
@@ -242,18 +224,16 @@ pub fn patch(
 pub fn delete(
 	events: Arc<RwLock<Connections>>,
 	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorization::authorized(users_db, Permission::NoticesGet | Permission::NoticesDelete))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, _: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+		.and(authorization::authorized(boards_db, Permission::NoticesGet | Permission::NoticesDelete))
+		.then(move |id: usize, _, connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {
-				let was_deleted = boards_connection.delete_notice(id).await?;
+				let was_deleted = connection.delete_notice(id).await?;
 
 				if was_deleted {
 					let packet = EventPacket::SiteNoticeDeleted {
@@ -263,9 +243,9 @@ pub fn delete(
 					let events = events.write().await;
 					events.send(&packet).await;
 
-					Ok::<_, BoardsDatabaseError>(StatusCode::NO_CONTENT)
+					Ok::<_, StatusCode>(StatusCode::NO_CONTENT)
 				} else {
-					Ok::<_, BoardsDatabaseError>(StatusCode::NOT_FOUND)
+					Ok::<_, StatusCode>(StatusCode::NOT_FOUND)
 				}
 			}
 		})

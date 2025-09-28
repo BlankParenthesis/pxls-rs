@@ -15,13 +15,12 @@ use warp::Filter;
 use warp::http::Uri;
 
 use crate::board::Board;
-use crate::database::{Faction, FactionMember, Role, User, UsersDatabase, UsersDatabaseError, Database};
+use crate::database::{Ban, BoardsDatabase, Database, DatabaseError, Faction, FactionMember, Role, User, UserSpecifier};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::UserStats;
 use crate::routes::reports::reports::Report;
 use crate::routes::site_notices::notices::Notice;
-use crate::routes::user_bans::users::Ban;
 use crate::socket::ServerPacket;
 
 type Socket = crate::socket::Socket<Subscription>;
@@ -29,15 +28,15 @@ type Socket = crate::socket::Socket<Subscription>;
 // TODO: move this elsewhere
 #[derive(Default)]
 pub struct Connections {
-	by_uid: HashMap<Option<String>, HashSet<Arc<Socket>>>,
+	by_uid: HashMap<Option<UserSpecifier>, HashSet<Arc<Socket>>>,
 	by_subscription: EnumMap<Subscription, HashSet<Arc<Socket>>>,
 }
 
 #[allow(clippy::mutable_key_type)]
 impl Connections {
 	async fn insert_socket(&mut self, socket: Arc<Socket>) {
-		let user_id = socket.user_id().await;
-		let sockets = self.by_uid.entry(user_id).or_default();
+		let user = socket.user().await;
+		let sockets = self.by_uid.entry(user).or_default();
 		sockets.insert(socket.clone());
 
 		for subscription in socket.subscriptions {
@@ -46,11 +45,11 @@ impl Connections {
 	}
 
 	async fn remove_socket(&mut self, socket: &Arc<Socket>) {
-		let user_id = socket.user_id().await;
-		let sockets = self.by_uid.entry(user_id.clone()).or_default();
+		let user = socket.user().await;
+		let sockets = self.by_uid.entry(user).or_default();
 		sockets.remove(socket);
 		if sockets.is_empty() {
-			self.by_uid.remove(&user_id);
+			self.by_uid.remove(&user);
 		}
 
 		for subscription in socket.subscriptions {
@@ -62,8 +61,8 @@ impl Connections {
 		let empty_set = HashSet::default();
 
 		match packet {
-			EventPacket::AccessUpdate { user_id, .. } => {
-				let sockets = self.by_uid.get(user_id)
+			EventPacket::AccessUpdate { user, .. } => {
+				let sockets = self.by_uid.get(user)
 					.unwrap_or(&empty_set);
 				
 				let serialized = packet.serialize_packet();
@@ -89,13 +88,13 @@ impl Connections {
 					socket.send(&serialized).await
 				}
 			},
-			EventPacket::UserRolesUpdated { user_id, .. } => {
+			EventPacket::UserRolesUpdated { specifier, .. } => {
 				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::UsersRoles].iter() {
 					socket.send(&serialized).await
 				}
 
-				let sockets = self.by_uid.get(user_id)
+				let sockets = self.by_uid.get(specifier)
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrentRoles) {
@@ -103,13 +102,13 @@ impl Connections {
 					}
 				}
 			},
-			EventPacket::UserUpdated { user_id, ..  } => {
+			EventPacket::UserUpdated { user } => {
 				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::Users].iter() {
 					socket.send(&serialized).await
 				}
 
-				let sockets = self.by_uid.get(&Some(user_id.clone()))
+				let sockets = self.by_uid.get(&Some(user.view.specifier()))
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrent) {
@@ -157,8 +156,7 @@ impl Connections {
 					socket.send(&serialized).await
 				}
 				
-				let user = Some(user.clone());
-				let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
+				let sockets = self.by_uid.get(&Some(*user)).unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrentBans) {
 						socket.send(&serialized).await;
@@ -174,7 +172,7 @@ impl Connections {
 				}
 
 				for member in members {
-					let user = Some(member.clone());
+					let user = Some(*member);
 					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 					for socket in sockets {
 						if socket.subscriptions.contains(Subscription::FactionsCurrent) {
@@ -190,7 +188,7 @@ impl Connections {
 				}
 
 				for owner in owners {
-					let user = Some(owner.clone());
+					let user = Some(*owner);
 					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 					for socket in sockets {
 						if socket.subscriptions.contains(Subscription::FactionsCurrentMembers) {
@@ -200,7 +198,7 @@ impl Connections {
 				}
 
 				if !owners.contains(user) {
-					let user = Some(user.clone());
+					let user = Some(*user);
 					let sockets = self.by_uid.get(&user).unwrap_or(&empty_set);
 					for socket in sockets {
 						if socket.subscriptions.contains(Subscription::FactionsCurrentMembers) {
@@ -220,7 +218,7 @@ impl Connections {
 pub enum EventPacket<'l> {
 	AccessUpdate {
 		#[serde(skip_serializing)]
-		user_id: Option<String>,
+		user: Option<UserSpecifier>,
 		permissions: EnumSet<Permission>,
 	},
 	BoardCreated {
@@ -242,13 +240,11 @@ pub enum EventPacket<'l> {
 	},
 	UserRolesUpdated {
 		#[serde(skip_serializing)]
-		user_id: Option<String>,
+		specifier: Option<UserSpecifier>,
 		#[serde(with = "http_serde::uri")]
 		user: Uri,
 	},
 	UserUpdated {
-		#[serde(skip_serializing)]
-		user_id: String,
 		user: Reference<User>,
 	},
 	SiteNoticeCreated {
@@ -263,62 +259,62 @@ pub enum EventPacket<'l> {
 	},
 	ReportCreated {
 		#[serde(skip_serializing)]
-		reporter: Option<String>,
+		reporter: Option<UserSpecifier>,
 		report: Reference<Report>,
 	},
 	ReportUpdated {
 		#[serde(skip_serializing)]
-		reporter: Option<String>,
+		reporter: Option<UserSpecifier>,
 		report: Reference<Report>,
 	},
 	ReportDeleted {
 		#[serde(skip_serializing)]
-		reporter: Option<String>,
+		reporter: Option<UserSpecifier>,
 		#[serde(with = "http_serde::uri")]
 		report: Uri,
 	},
 	StatsUpdated {
 		#[serde(skip_serializing)]
-		user: Option<String>,
+		user: Option<UserSpecifier>,
 		stats: UserStats,
 	},
 	UserBanCreated {
 		#[serde(skip_serializing)]
-		user: String,
+		user: UserSpecifier,
 		ban: Reference<Ban>,
 	},
 	UserBanUpdated {
 		#[serde(skip_serializing)]
-		user: String,
+		user: UserSpecifier,
 		ban: Reference<Ban>,
 	},
 	UserBanDeleted {
 		#[serde(skip_serializing)]
-		user: String,
+		user: UserSpecifier,
 		#[serde(with = "http_serde::uri")]
 		ban: Uri,
 	},
 	FactionCreated {
 		#[serde(skip_serializing)]
-		members: Vec<String>,
+		members: Vec<UserSpecifier>,
 		faction: Reference<Faction>,
 	},
 	FactionUpdated {
 		#[serde(skip_serializing)]
-		members: Vec<String>,
+		members: Vec<UserSpecifier>,
 		faction: Reference<Faction>,
 	},
 	FactionDeleted {
 		#[serde(skip_serializing)]
-		members: Vec<String>,
+		members: Vec<UserSpecifier>,
 		#[serde(with = "http_serde::uri")]
 		faction: Uri,
 	},
 	FactionMemberUpdated {
 		#[serde(skip_serializing)]
-		owners: Vec<String>,
+		owners: Vec<UserSpecifier>,
 		#[serde(skip_serializing)]
-		user: String,
+		user: UserSpecifier,
 		faction: Reference<Faction>,
 		member: Reference<FactionMember>,
 	},
@@ -450,8 +446,8 @@ pub enum SocketError {
 	MissingSubscriptions,
 	ConflictingPermissions,
 	MissingPermissions,
-	DatabaseConnectionError(deadpool::managed::PoolError<ldap3::LdapError>),
-	DatabaseError(UsersDatabaseError),
+	DatabaseConnectionError(sea_orm::DbErr),
+	DatabaseError(DatabaseError),
 }
 
 impl Reject for SocketError {}
@@ -476,7 +472,7 @@ impl Reply for SocketError {
 
 pub fn events(
 	connections: Arc<RwLock<Connections>>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("events")
 		.and(warp::path::end())
@@ -484,7 +480,7 @@ pub fn events(
 		.and(serde_qs::warp::query(Default::default()))
 		.and_then(move |ws: Ws, options: SocketOptions| {
 			let connections = Arc::clone(&connections);
-			let users_db = Arc::clone(&users_db);
+			let db = Arc::clone(&db);
 			async move {
 				let subscriptions = options.subscribe
 					.ok_or(SocketError::MissingSubscriptions)
@@ -505,11 +501,11 @@ pub fn events(
 				let anonymous = !options.authenticate.unwrap_or(false);
 
 				if anonymous {
-					let mut connection = users_db.connection().await
+					let connection = db.connection().await
 						.map_err(SocketError::DatabaseConnectionError)
 						.map_err(Rejection::from)?;
 
-					let permissions = connection.user_permissions(None).await
+					let permissions = connection.anonymous_permissions().await
 						.map_err(SocketError::DatabaseError)
 						.map_err(Rejection::from)?;
 
@@ -522,7 +518,7 @@ pub fn events(
 					}
 				}
 			
-				let users_db = Arc::clone(&users_db);
+				let users_db = Arc::clone(&db);
 				let connections_init = Arc::clone(&connections);
 				let connections_shutdown = Arc::clone(&connections);
 

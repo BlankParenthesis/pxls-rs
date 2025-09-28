@@ -10,7 +10,7 @@ use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 use tokio::sync::*;
 
 use crate::board::sector::{BufferRead, Change, Sector, SectorBuffer};
-use crate::database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabase, BoardsDatabaseError, Database};
+use crate::database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabase, DatabaseError, Database};
 
 use super::SectorAccessor;
 
@@ -233,7 +233,7 @@ impl SectorCache {
 		&'l self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<RwLockWriteGuard<'l, Option<Sector>>, BoardsDatabaseError> {
+	) -> Result<RwLockWriteGuard<'l, Option<Sector>>, DatabaseError> {
 		let mut option = self
 			.sectors
 			.get(sector_index).unwrap()
@@ -278,7 +278,7 @@ impl SectorCache {
 		&'l self,
 		sector_index: usize,
 		connection: &BoardsConnection,
-	) -> Result<Option<RwLockReadGuard<'l, Sector>>, BoardsDatabaseError> {
+	) -> Result<Option<RwLockReadGuard<'l, Sector>>, DatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.read().await;
 			if option.is_some() {
@@ -302,7 +302,7 @@ impl SectorCache {
 		&'l self,
 		sector_index: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<Option<RwLockMappedWriteGuard<'l, Sector>>, BoardsDatabaseError> {
+	) -> Result<Option<RwLockMappedWriteGuard<'l, Sector>>, DatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.write().await;
 			if option.is_some() {

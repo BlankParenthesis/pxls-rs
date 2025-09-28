@@ -10,8 +10,7 @@ use serde::Deserialize;
 
 use crate::board::PlacementPageToken;
 use crate::config::CONFIG;
-use crate::filter::header::authorization::{self, authorized, has_permissions, permissions, Bearer, PermissionsError};
-use crate::filter::resource::database;
+use crate::filter::header::authorization::{authorized, has_permissions, permissions, PermissionsError};
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::paginated_list::PaginationOptions;
@@ -19,7 +18,7 @@ use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::calculate_stats;
 use crate::BoardDataMap;
 
-use crate::database::{BoardsConnection, BoardsDatabase, Order, User, UsersDatabase};
+use crate::database::{BoardsConnection, BoardsDatabase, Order, User};
 use crate::routes::board_moderation::boards::pixels::Overrides;
 use crate::routes::core::{Connections, EventPacket};
 
@@ -38,8 +37,7 @@ pub struct PlacementFilter {
 
 pub fn list(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -48,9 +46,8 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorized(users_db, Permission::BoardsPixelsList.into()))
-		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, mut users_connection, connection: BoardsConnection| async move {
+		.and(authorized(db, Permission::BoardsPixelsList.into()))
+		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, connection: BoardsConnection| async move {
 			let page = options.page;
 			let limit = options
 				.limit
@@ -66,15 +63,13 @@ pub fn list(
 				Order::Forward,
 				filter,
 				&connection,
-				&mut users_connection,
 			).await.map(|page| warp::reply::json(&page))
 		})
 }
 
 pub fn get(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -82,7 +77,7 @@ pub fn get(
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(permissions(users_db))
+		.and(permissions(db))
 		.and_then(move |board, position, user_permissions: EnumSet<_>, _, connection| async move {
 			if !has_permissions(user_permissions, Permission::BoardsPixelsGet.into()) {
 				let error = PermissionsError::MissingPermission;
@@ -91,11 +86,10 @@ pub fn get(
 			Ok((board, position, user_permissions, connection))
 		})
 		.untuple_one()
-		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, position, user_permissions: EnumSet<_>, mut users_connection, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, position, user_permissions: EnumSet<_>, connection: BoardsConnection| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting a pixel");
-			board.lookup(position, &connection, &mut users_connection).await?
+			board.lookup(position, &connection).await?
 				.map(|placement| {
 					if user_permissions.contains(Permission::UsersGet) {
 						warp::reply::json(&placement)
@@ -125,8 +119,7 @@ struct PlacementRequest {
 pub fn post(
 	events: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -135,27 +128,26 @@ pub fn post(
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorization::permissions(users_db))
-		.and_then(|board, position, placement: PlacementRequest, permissions: EnumSet<Permission>, user, users_connection| async move {
-			let authorized = authorization::has_permissions(
+		.and(permissions(db))
+		.and_then(|board, position, placement: PlacementRequest, permissions: EnumSet<Permission>, user, connection| async move {
+			let authorized = has_permissions(
 				permissions,
 				EnumSet::from(placement.overrides) | Permission::BoardsPixelsPost,
 			);
 
 			if authorized {
-				Ok((board, position, placement, user, users_connection))
+				Ok((board, position, placement, user, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.and(database::connection(Arc::clone(&boards_db)))
-		.then(move |board: PassableBoard, position, placement: PlacementRequest, user: Option<Bearer>, mut users_connection, boards_connection| {
+		.then(move |board: PassableBoard, position, placement: PlacementRequest, user: Option<User>, boards_connection| {
 			let events = events.clone();
 			let boards = boards.clone();
 			async move {
 				let user = user.expect("Default user shouldn't have place permisisons");
-
+				
 				let (board_id, place_attempt) = {
 					let board = board.read().await;
 					let board = board.as_ref().expect("Board went missing when creating a pixel");
@@ -163,12 +155,11 @@ pub fn post(
 					let place = board.try_place(
 						// TODO: maybe accept option but make sure not to allow
 						// undos etc for anon users
-						&user.id,
+						&user,
 						position,
 						placement.color,
 						placement.overrides,
 						&boards_connection,
-						&mut users_connection,
 					);
 					match tokio::time::timeout(timeout, place).await {
 						Ok(attempt) => (board.id, attempt),
@@ -183,13 +174,9 @@ pub fn post(
 
 				match place_attempt {
 					Ok((cooldown, placement)) => {
-						let stats = calculate_stats(
-							user.id.clone(),
-							&boards,
-							&boards_connection,
-							&mut users_connection,
-						).await.map_err(|e| e.into_response())?;
-						let user = Some(user.id);
+						let stats = calculate_stats(&user, &boards).await
+							.map_err(|e| e.into_response())?;
+						let user = Some(user.specifier());
 						let packet = EventPacket::StatsUpdated { user, stats };
 
 						let events = events.read().await;

@@ -7,15 +7,15 @@ use warp::{
 };
 
 use crate::config::CONFIG;
-use crate::filter::header::authorization::{self, Bearer, PermissionsError};
+use crate::filter::header::authorization::{self, PermissionsError};
 use crate::filter::response::paginated_list::PaginationOptions;
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken};
+use crate::database::{BoardsConnection, BoardsDatabase, User, UserSpecifier};
 use super::super::factions::FactionFilter;
 
 pub fn list(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersFactionsList;
 
@@ -26,10 +26,10 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, pagination, filter, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, pagination, filter, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -38,21 +38,20 @@ pub fn list(
 				authorization::has_permissions
 			};
 
-
 			if check(user_permissions, permissions) {
-				Ok((uid, pagination, filter, connection))
+				Ok((user, pagination, filter, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, filter: FactionFilter, mut connection: UsersConnection| async move {
+		.then(move |user: UserSpecifier, pagination: PaginationOptions<_>, filter: FactionFilter, connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
 				.clamp(1, CONFIG.max_page_item_limit);
 			
-			connection.list_user_factions(page, limit, filter, &uid).await
+			connection.list_user_factions(&user, page, limit, filter).await
 				.map(|page| warp::reply::json(&page))
 		})
 }

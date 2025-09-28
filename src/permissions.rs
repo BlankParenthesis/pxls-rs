@@ -275,7 +275,7 @@ impl TryFrom<&str> for Permission {
 			"users.current.roles.get" => Ok(Permission::UsersCurrentRolesGet),
 			"users.current.roles.post" => Ok(Permission::UsersCurrentRolesPost),
 			"users.current.roles.delete" => Ok(Permission::UsersCurrentRolesDelete),
-			"roles.list" => Ok(Permission::UsersList),
+			"roles.list" => Ok(Permission::RolesList),
 			"roles.get" => Ok(Permission::RolesGet),
 			"roles.post" => Ok(Permission::RolesPost),
 			"roles.patch" => Ok(Permission::RolesPatch),

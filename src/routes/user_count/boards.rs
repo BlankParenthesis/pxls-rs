@@ -3,10 +3,10 @@ use std::sync::Arc;
 use warp::{Reply, Rejection};
 use warp::Filter;
 
+use crate::database::BoardsDatabase;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::permissions::Permission;
-use crate::database::UsersDatabase;
 use crate::BoardDataMap;
 
 use serde::Serialize;
@@ -19,14 +19,14 @@ pub struct UserCount {
 
 pub fn users(
 	boards: BoardDataMap,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path("users"))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, Permission::BoardsUsers.into()))
+		.and(authorized(db, Permission::BoardsUsers.into()))
 		.then(|board: PassableBoard, _, _| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting user count");

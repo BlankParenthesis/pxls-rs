@@ -1,27 +1,22 @@
 use std::sync::Arc;
 
+use reqwest::StatusCode;
+use sea_orm::TryInsertResult;
 use serde::Deserialize;
 use tokio::sync::RwLock;
-use warp::{
-	Filter,
-	Reply,
-	Rejection,
-};
+use warp::{Filter, Reply, Rejection};
 
 use crate::config::CONFIG;
-use crate::filter::header::authorization::{self, Bearer, PermissionsError};
-use crate::filter::response::paginated_list::{
-	PaginationOptions,
-	PageToken,
-};
+use crate::filter::header::authorization::{self, PermissionsError};
+use crate::filter::response::paginated_list::{PaginationOptions, PageToken};
 
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, LdapPageToken, UsersDatabaseError};
+use crate::database::{BoardsConnection, BoardsDatabase, RoleSpecifier, User, UserSpecifier};
 use crate::routes::core::{Connections, EventPacket};
 use crate::routes::roles::roles::RoleFilter;
 
 pub fn list(
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersRolesGet;
 
@@ -32,10 +27,10 @@ pub fn list(
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, pagination, filter, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, pagination, filter, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -46,31 +41,31 @@ pub fn list(
 
 
 			if check(user_permissions, permissions) {
-				Ok((uid, pagination, filter, connection))
+				Ok((user, pagination, filter, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, pagination: PaginationOptions<LdapPageToken>, filter: RoleFilter, mut connection: UsersConnection| async move {
+		.then(move |user: UserSpecifier, pagination: PaginationOptions<_>, filter: RoleFilter, connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
 				.clamp(1, CONFIG.max_page_item_limit);
 			
-			connection.list_user_roles(&uid, page, limit, filter).await
+			connection.list_user_roles(&user, page, limit, filter).await
 				.map(|page| warp::reply::json(&page))
 		})
 }
 
 #[derive(Deserialize)]
-struct RoleSpecifier {
-	role: String,
+struct NewRoleMember {
+	role: RoleSpecifier,
 }
 
 pub fn post(
 	event_sockets: Arc<RwLock<Connections>>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersRolesPost;
 
@@ -80,10 +75,10 @@ pub fn post(
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, role, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, role, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -93,20 +88,24 @@ pub fn post(
 			};
 
 			if check(user_permissions, permissions) {
-				Ok((uid, role, connection))
+				Ok((user, role, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection|{
+		.then(move |user: UserSpecifier, role: NewRoleMember, connection: BoardsConnection|{
 			let event_sockets = event_sockets.clone();
 			async move {
-				let prior = connection.user_permissions(Some(uid.clone())).await?;
-				connection.add_user_role(&uid, &role.role).await?;
-				let after = connection.user_permissions(Some(uid.clone())).await?;
+				let prior = connection.user_permissions(&user).await?;
+				match connection.create_role_member(&user, &role.role).await? {
+					TryInsertResult::Inserted(_) => (),
+					TryInsertResult::Conflicted => return Err(StatusCode::CONFLICT),
+					TryInsertResult::Empty => return Err(StatusCode::NOT_FOUND),
+				}
+				let after = connection.user_permissions(&user).await?;
 				let roles = connection.list_user_roles(
-					&uid,
+					&user,
 					PageToken::start(),
 					CONFIG.default_page_item_limit,
 					RoleFilter::default(),
@@ -115,26 +114,26 @@ pub fn post(
 				let connections = event_sockets.read().await;
 				if prior != after {
 					let packet = EventPacket::AccessUpdate {
-						user_id: Some(uid.clone()),
+						user: Some(user),
 						permissions: after,
 					};
 					connections.send(&packet).await;
 				}
 				
 				let packet = EventPacket::UserRolesUpdated {
-					user: format!("/users/{}", uid).parse().unwrap(),
-					user_id: Some(uid),
+					user: format!("/users/{}", user).parse().unwrap(),
+					specifier: Some(user),
 				};
 				connections.send(&packet).await;
 
-				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles))
+				Ok::<_, StatusCode>(warp::reply::json(&roles))
 			}
 		})
 }
 
 pub fn delete(
 	event_sockets: Arc<RwLock<Connections>>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersRolesDelete;
 
@@ -144,10 +143,10 @@ pub fn delete(
 		.and(warp::path::end())
 		.and(warp::delete())
 		.and(warp::body::json())
-		.and(authorization::permissions(users_db))
-		.and_then(move |uid: String, role, user_permissions, bearer: Option<Bearer>, connection| async move {
-			let is_current_user = bearer.as_ref()
-				.map(|bearer| bearer.id == uid)
+		.and(authorization::permissions(db))
+		.and_then(move |user: UserSpecifier, role, user_permissions, requester: Option<User>, connection| async move {
+			let is_current_user = requester.as_ref()
+				.map(|u| u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -158,20 +157,22 @@ pub fn delete(
 
 
 			if check(user_permissions, permissions) {
-				Ok((uid, role, connection))
+				Ok((user, role, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |uid: String, role: RoleSpecifier, mut connection: UsersConnection| {
+		.then(move |user: UserSpecifier, role: NewRoleMember, connection: BoardsConnection| {
 			let event_sockets = event_sockets.clone();
 			async move {
-				let prior = connection.user_permissions(Some(uid.clone())).await?;
-				connection.remove_user_role(&uid, &role.role).await?;
-				let after = connection.user_permissions(Some(uid.clone())).await?;
+				let prior = connection.user_permissions(&user).await?;
+				connection.delete_role_member(&user, &role.role).await?
+					.ok_or(StatusCode::NOT_FOUND)?;
+				
+				let after = connection.user_permissions(&user).await?;
 				let roles = connection.list_user_roles(
-					&uid,
+					&user,
 					PageToken::start(),
 					CONFIG.default_page_item_limit,
 					RoleFilter::default(),
@@ -181,18 +182,18 @@ pub fn delete(
 				if prior != after {
 					let packet = EventPacket::AccessUpdate {
 						permissions: after,
-						user_id: Some(uid.clone()),
+						user: Some(user),
 					};
 					connections.send(&packet).await;
 				}
 
 				let packet = EventPacket::UserRolesUpdated {
-					user: format!("/users/{}", uid).parse().unwrap(),
-					user_id: Some(uid),
+					user: format!("/users/{}", user).parse().unwrap(),
+					specifier: Some(user),
 				};
 				connections.send(&packet).await;
 				
-				Ok::<_, UsersDatabaseError>(warp::reply::json(&roles))
+				Ok::<_, StatusCode>(warp::reply::json(&roles))
 			}
 		})
 }

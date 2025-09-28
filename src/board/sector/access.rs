@@ -5,14 +5,14 @@ use async_trait::async_trait;
 use reqwest::StatusCode;
 use warp::reply::Reply;
 
-use crate::database::{BoardsConnection, BoardsDatabaseError};
+use crate::database::{BoardsConnection, DatabaseError};
 use crate::{AsyncRead, AsyncWrite, Len};
 use super::{SectorBuffer, SectorCache};
 
 #[derive(Debug)]
 pub enum IoError {
 	Io(std::io::Error),
-	Sql(BoardsDatabaseError),
+	Sql(DatabaseError),
 }
 
 impl Reply for IoError {
@@ -27,8 +27,8 @@ impl From<std::io::Error> for IoError {
 	}
 }
 
-impl From<BoardsDatabaseError> for IoError {
-	fn from(value: BoardsDatabaseError) -> Self {
+impl From<DatabaseError> for IoError {
+	fn from(value: DatabaseError) -> Self {
 		Self::Sql(value)
 	}
 }

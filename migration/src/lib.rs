@@ -12,6 +12,7 @@ mod m8_small_uid;
 mod m9_reports;
 mod m10_bans;
 mod m11_deferred_palette;
+mod m12_remove_ldap;
 
 pub struct Migrator;
 
@@ -45,6 +46,9 @@ impl MigratorTrait for Migrator {
 			Box::new(m9_reports::Migration),
 			Box::new(m10_bans::Migration),
 			Box::new(m11_deferred_palette::Migration),
+			Box::new(m12_remove_ldap::MigrateLdapUsers),
+			Box::new(m12_remove_ldap::MigrateLdapRoles),
+			Box::new(m12_remove_ldap::MigrateLdapFactions),
 		]
 	}
 }

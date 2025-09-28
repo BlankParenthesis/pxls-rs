@@ -11,11 +11,10 @@ use crate::filter::response::paginated_list::{
 	PaginationOptions,
 	PageToken,
 };
-use crate::filter::header::authorization::{self, Bearer};
+use crate::filter::header::authorization;
 use crate::filter::response::reference::Reference;
-use crate::filter::resource::database;
 use crate::permissions::Permission;
-use crate::database::{UsersDatabase, UsersConnection, BoardsDatabase, BoardsConnection, BoardsDatabaseError, User};
+use crate::database::{BoardsDatabase, BoardsConnection, User};
 use crate::routes::core::{EventPacket, Connections};
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
@@ -132,17 +131,15 @@ pub struct ReportFilter {
 }
 
 pub fn list(
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::authorized(users_db, Permission::ReportsList.into()))
-		.and(database::connection(boards_db))
-		.then(move |pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+		.and(authorization::authorized(db, Permission::ReportsList.into()))
+		.then(move |pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, _, boards_connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
@@ -153,16 +150,14 @@ pub fn list(
 				limit,
 				filter,
 				None,
-				&mut users_connection,
-			).await.map_err(Reply::into_response)?;
+			).await?;
 			
-			Ok::<_, warp::reply::Response>(warp::reply::json(&page))
+			Ok::<_, StatusCode>(warp::reply::json(&page))
 		})
 }
 
 pub fn owned(
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path("owned"))
@@ -170,44 +165,38 @@ pub fn owned(
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::authorized(users_db, Permission::ReportsOwnedList.into()))
-		.and(database::connection(boards_db))
-		.then(move |pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+		.and(authorization::authorized(db, Permission::ReportsOwnedList.into()))
+		.then(move |pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, user: Option<User>, connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
 				.clamp(1, CONFIG.max_page_item_limit);
 
-			let page = boards_connection.list_reports(
+			let page = connection.list_reports(
 				page,
 				limit,
 				filter,
-				Some(user.map(|u| u.id)),
-				&mut users_connection,
-			).await.map_err(Reply::into_response)?;
+				Some(user.as_ref()),
+			).await?;
 			
-			Ok::<_, warp::reply::Response>(warp::reply::json(&page))
+			Ok::<_, StatusCode>(warp::reply::json(&page))
 		})
 }
 
 pub fn get(
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorization::permissions(users_db))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, user_permissions, bearer: Option<Bearer>, mut users_connection, boards_connection: BoardsConnection| async move {
-			let report = boards_connection.get_report(id, &mut users_connection).await
-				.map_err(Reply::into_response)?
-				.ok_or(StatusCode::NOT_FOUND)
-				.map_err(Reply::into_response)?;
+		.and(authorization::permissions(db))
+		.then(move |id: usize, user_permissions, user: Option<User>, connection: BoardsConnection| async move {
+			let report = connection.get_report(id).await?
+				.ok_or(StatusCode::NOT_FOUND)?;
 
-			let report_owner = report.reporter.clone().map(|r| r.uri);
-			let user = bearer.map(|b| User::uri(&b.id));
+			let report_owner = report.reporter.as_ref().map(|r| r.view.specifier());
+			let user = user.map(|u| u.specifier());
 			let is_current_user = user == report_owner;
 
 			let check = if is_current_user {
@@ -217,9 +206,9 @@ pub fn get(
 			};
 
 			if check(user_permissions, Permission::ReportsGet.into()) {
-				Ok::<_, warp::reply::Response>(warp::reply::json(&report))
+				Ok(warp::reply::json(&report))
 			} else {
-				Err(StatusCode::FORBIDDEN.into_response())
+				Err(StatusCode::FORBIDDEN)
 			}
 		})
 }
@@ -238,32 +227,29 @@ struct ReportPost {
 
 pub fn post(
 	events: Arc<RwLock<Connections>>,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorization::authorized(users_db, Permission::ReportsPost.into()))
-		.and(database::connection(boards_db))
-		.then(move |report: ReportPost, user: Option<Bearer>, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
+		.and(authorization::authorized(db, Permission::ReportsPost.into()))
+		.then(move |report: ReportPost, user: Option<User>, connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {
-				let report = boards_connection.create_report(
+				let artifacts = report.artifacts.into_iter()
+					.map(|a| Artifact::parse(&a.location, a.timestamp))
+					.collect::<Result<_, _>>()
+					.map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?;
+				
+				let report = connection.create_report(
 					report.reason,
-					user.map(|u| u.id),
-					report.artifacts.into_iter()
-						.map(|a| Artifact::parse(&a.location, a.timestamp))
-						.collect::<Result<_, _>>()
-						.map_err(|_| StatusCode::UNPROCESSABLE_ENTITY.into_response())?,
-					&mut users_connection,
-				).await.map_err(Reply::into_response)?;
+					user.as_ref(),
+					artifacts,
+				).await?;
 
 				let reporter = report.view.reporter.as_ref().map(|r| {
-					// get user id
-					// TODO: this is an awful hack, make it nicer
-					r.uri.path().split_once('/').unwrap().1.to_owned()
+					r.view.specifier()
 				});
 
 				let packet = EventPacket::ReportCreated {
@@ -273,7 +259,7 @@ pub fn post(
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, warp::reply::Response>(report.created())
+				Ok::<_, StatusCode>(report.created())
 			}
 		})
 }
@@ -287,17 +273,15 @@ struct ReportPatch {
 
 pub fn patch(
 	events: Arc<RwLock<Connections>>,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::patch())
 		.and(warp::body::json())
-		.and(authorization::authorized(users_db, Permission::ReportsGet | Permission::ReportsPatch))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, report: ReportPatch, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| {
+		.and(authorization::authorized(db, Permission::ReportsGet | Permission::ReportsPatch))
+		.then(move |id: usize, report: ReportPatch, _, connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 
 			async move {
@@ -306,23 +290,20 @@ pub fn patch(
 						Some(artifacts.into_iter()
 							.map(|a| Artifact::parse(&a.location, a.timestamp))
 							.collect::<Result<_, _>>()
-							.map_err(|_| StatusCode::UNPROCESSABLE_ENTITY.into_response())?)
+							.map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?)
 					},
 					None => None,
 				};
 
-				let report = boards_connection.edit_report(
+				let report = connection.edit_report(
 					id,
 					report.status,
 					report.reason,
 					artifacts,
-					&mut users_connection,
-				).await.map_err(Reply::into_response)?;
+				).await?;
 
 				let reporter = report.view.reporter.as_ref().map(|r| {
-					// get user id
-					// TODO: this is an awful hack, make it nicer
-					r.uri.path().split_once('/').unwrap().1.to_owned()
+					r.view.specifier()
 				});
 
 				let packet = EventPacket::ReportUpdated {
@@ -332,26 +313,24 @@ pub fn patch(
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, warp::reply::Response>(warp::reply::json(&report))
+				Ok::<_, StatusCode>(warp::reply::json(&report))
 			}
 		})
 }
 
 pub fn delete(
 	events: Arc<RwLock<Connections>>,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path::param())
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorization::authorized(users_db, Permission::ReportsGet | Permission::ReportsDelete))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, _: Option<Bearer>, _: UsersConnection, boards_connection: BoardsConnection| {
+		.and(authorization::authorized(db, Permission::ReportsGet | Permission::ReportsDelete))
+		.then(move |id: usize, _, connection: BoardsConnection| {
 			let events = Arc::clone(&events);
 			async move {				
-				if let Some(user) = boards_connection.delete_report(id).await? {
+				if let Some(user) = connection.delete_report(id).await? {
 					let packet = EventPacket::ReportDeleted {
 						report: format!("/reports/{}", id)
 							.parse::<Uri>().unwrap(),
@@ -360,17 +339,16 @@ pub fn delete(
 					let events = events.write().await;
 					events.send(&packet).await;
 
-					Ok::<_, BoardsDatabaseError>(StatusCode::NO_CONTENT)
+					Ok::<_, StatusCode>(StatusCode::NO_CONTENT)
 				} else {
-					Ok::<_, BoardsDatabaseError>(StatusCode::NOT_FOUND)
+					Ok::<_, StatusCode>(StatusCode::NOT_FOUND)
 				}
 			}
 		})
 }
 
 pub fn history(
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("reports")
 		.and(warp::path::param())
@@ -379,22 +357,20 @@ pub fn history(
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorization::authorized(users_db, Permission::ReportsList.into()))
-		.and(database::connection(boards_db))
-		.then(move |id: usize, pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, _, mut users_connection: UsersConnection, boards_connection: BoardsConnection| async move {
+		.and(authorization::authorized(db, Permission::ReportsList.into()))
+		.then(move |id: usize, pagination: PaginationOptions<ReportPageToken>, filter: ReportFilter, _, connection: BoardsConnection| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
 				.clamp(1, CONFIG.max_page_item_limit);
 
-			let page = boards_connection.list_report_history(
+			let page = connection.list_report_history(
 				id,
 				page,
 				limit,
 				filter,
-				&mut users_connection,
-			).await.map_err(Reply::into_response)?;
+			).await?;
 			
-			Ok::<_, warp::reply::Response>(warp::reply::json(&page))
+			Ok::<_, StatusCode>(warp::reply::json(&page))
 		})
 }

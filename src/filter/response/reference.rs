@@ -31,3 +31,13 @@ impl<T: Serialize> Reference<T> {
 		warp::reply::json(&self.view).into_response()
 	}
 }
+
+pub trait Referencable: Serialize + Sized {
+	fn uri(&self) -> Uri;
+}
+
+impl<R: Referencable> From<R> for Reference<R> {
+	fn from(value: R) -> Self {
+		Reference::new(value.uri(), value)
+	}
+}

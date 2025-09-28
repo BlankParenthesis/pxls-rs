@@ -12,8 +12,8 @@ use warp::ws::Ws;
 use warp::{Reply, Rejection, Filter};
 
 use crate::config::CONFIG;
-use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase, Database};
-use crate::filter::header::authorization::{Bearer, authorized};
+use crate::database::{BoardsConnection, BoardsDatabase, User};
+use crate::filter::header::authorization::authorized;
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::resource::{board::{self, PassableBoard}, database};
 use crate::filter::response::reference::Reference;
@@ -70,14 +70,14 @@ struct BoardFilter {
 
 pub fn list(
 	boards: BoardDataMap,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
-		.and(authorized(users_db, Permission::BoardsList | Permission::BoardsGet))
+		.and(authorized(db, Permission::BoardsList | Permission::BoardsGet))
 		.then(move |pagination: PaginationOptions<BoardPageToken>, filter: BoardFilter, _, _| {
 			let boards = Arc::clone(&boards);
 			async move {
@@ -171,12 +171,12 @@ pub fn list(
 
 pub fn default(
 	boards: BoardDataMap,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path("default"))
 		.and(warp::path::end())
-		.and(authorized(users_db, Permission::BoardsGet.into()))
+		.and(authorized(db, Permission::BoardsGet.into()))
 		.then(move |_ , _| {
 			let boards = boards.clone();
 			async move {
@@ -194,25 +194,20 @@ pub fn default(
 
 pub fn get(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
 		.and(warp::path::end())
 		.and(warp::get())
-		.and(authorized(users_db, Permission::BoardsGet.into()))
-		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, user, _, connection: BoardsConnection| async move {
+		.and(authorized(db, Permission::BoardsGet.into()))
+		.then(|board: PassableBoard, user: Option<User>, _| async move {
 			let board = board.read().await;
 			let board = board.as_ref().expect("Board went missing when getting info");
 			let mut response = warp::reply::json(&board.info).into_response();
 
-			if let Some(Bearer { id, .. }) = user {
-				let cooldown_info = board.user_cooldown_info(
-					&id,
-					&connection,
-				).await;
+			if let Some(user) = user {
+				let cooldown_info = board.user_cooldown_info(&user.specifier()).await;
 
 				match cooldown_info {
 					Ok(cooldown_info) => {
@@ -245,8 +240,7 @@ struct SocketOptions {
 
 pub fn events(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -254,9 +248,9 @@ pub fn events(
 		.and(warp::path::end())
 		.and(warp::ws())
 		.and(serde_qs::warp::query(Default::default()))
-		.and(database::connection(boards_db))
+		.and(database::connection(db.clone()))
 		.and_then(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
-			let users_db = Arc::clone(&users_db);
+			let db = db.clone();
 			// TODO: deduplicate with regular socket?
 			async move {
 				let subscriptions = options.subscribe
@@ -270,11 +264,7 @@ pub fn events(
 				let anonymous = !options.authenticate.unwrap_or(false);
 
 				if anonymous {
-					let mut connection = users_db.connection().await
-						.map_err(SocketError::DatabaseConnectionError)
-						.map_err(Rejection::from)?;
-
-					let permissions = connection.user_permissions(None).await
+					let permissions = connection.anonymous_permissions().await
 						.map_err(SocketError::DatabaseError)
 						.map_err(Rejection::from)?;
 					let has_permissions = subscriptions.iter()
@@ -286,7 +276,6 @@ pub fn events(
 					}
 				}
 			
-				let users_db = Arc::clone(&users_db);
 				let init_board = Arc::downgrade(&*board);
 				let shutdown_board = Arc::downgrade(&*board);
 
@@ -294,7 +283,7 @@ pub fn events(
 					let connect_result = Socket::connect(
 						websocket,
 						subscriptions,
-						users_db,
+						db,
 						anonymous,
 					).await;
 
@@ -316,10 +305,7 @@ pub fn events(
 								},
 							};
 							
-							let insert_result = board.insert_socket(
-								&socket,
-								&connection,
-							).await;
+							let insert_result = board.insert_socket(&socket).await;
 
 							if let Err(err) = insert_result {
 								let reason = Some(CloseReason::ServerError);

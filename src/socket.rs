@@ -1,10 +1,8 @@
 mod packet;
 
 use core::hash::Hash;
-use std::{
-	sync::Arc,
-	time::Duration,
-};
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use enumset::{EnumSet, EnumSetType};
@@ -14,12 +12,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 use warp::ws;
 
-use crate::{
-	permissions::Permission,
-	openid::{ValidationError, self},
-	filter::header::authorization::Bearer,
-	database::{UsersDatabase, UsersConnection, Database},
-};
+use crate::database::{BoardsConnection, BoardsDatabase, Database, UserSpecifier};
+use crate::filter::header::authorization::{AuthenticatedUser, Bearer};
+use crate::openid::{self, ValidationError};
+use crate::permissions::Permission;
 
 use packet::ClientPacket;
 pub use packet::{ServerPacket, SerializedServerPacket};
@@ -126,33 +122,45 @@ impl Authenticated {
 }
 
 #[derive(Debug)]
-struct Authorized(Option<Authenticated>);
+struct Authorized(Option<AuthenticatedUser>);
 
 impl Authorized {
 	async fn authorize(
 		credentials: Option<Authenticated>,
 		permissions: &[Permission],
-		connection: &mut UsersConnection,
+		connection: &BoardsConnection,
 	) -> Result<Self, AuthFailure> {
-		let user = credentials.as_ref().map(|Authenticated(bearer)| bearer.id.clone());
-		let user_permissions = connection.user_permissions(user).await
-			.map_err(|_| AuthFailure::ServerError)?;
+		let user = match credentials {
+			Some(Authenticated(bearer)) => {
+				let user = bearer.user(connection).await
+					.map_err(|_| AuthFailure::ServerError)?;
+				Some(bearer.into_user(&user))
+			},
+			None => None,
+		};
+		
+		let user_permissions = if let Some(user) = user.as_ref() {
+			connection.user_permissions(user.specifier()).await
+				.map_err(|_| AuthFailure::ServerError)?
+		} else {
+			connection.anonymous_permissions().await
+				.map_err(|_| AuthFailure::ServerError)?
+		};
 
 		if permissions.iter().copied().all(|p| user_permissions.contains(p)) {
-			Ok(Self(credentials))
+			Ok(Self(user))
 		} else {
 			Err(AuthFailure::Unauthorized)
 		}
 	}
 
-	fn user_id(&self) -> Option<String> {
-		self.0.as_ref()
-			.map(|Authenticated(bearer)| String::from(&bearer.id))
+	fn user(&self) -> Option<UserSpecifier> {
+		self.0.as_ref().map(|user| *user.specifier())
 	}
 
 	fn is_valid(&self) -> bool {
 		self.0.as_ref()
-			.map(|Authenticated(bearer)| bearer.is_valid())
+			.map(|user| user.is_valid())
 			.unwrap_or(true)
 	}
 
@@ -203,7 +211,7 @@ pub struct Socket<S: EnumSetType> {
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 	pub subscriptions: EnumSet<S>,
 	credentials: RwLock<Authorized>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 }
 
 impl<S: EnumSetType> PartialEq for Socket<S> {
@@ -224,7 +232,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 	pub async fn connect(
 		websocket: ws::WebSocket,
 		subscriptions: EnumSet<S>,
-		users_db: Arc<UsersDatabase>,
+		db: Arc<BoardsDatabase>,
 		anonymous: bool,
 	) -> Result<SocketWrapperInit<S>, AuthFailure> {
 		let (ws_sender, mut ws_receiver) = websocket.split();
@@ -238,7 +246,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 			&mut ws_receiver,
 			sender,
 			subscriptions,
-			users_db,
+			db,
 			anonymous,
 		).await;
 
@@ -265,7 +273,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		receiver: &mut SplitStream<ws::WebSocket>,
 		sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 		subscriptions: EnumSet<S>,
-		users_db: Arc<UsersDatabase>,
+		db: Arc<BoardsDatabase>,
 		anonymous: bool,
 	) -> Result<Self, (AuthFailure, mpsc::UnboundedSender<Result<ws::Message, warp::Error>>)> {
 
@@ -282,7 +290,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 			.map(Permission::from)
 			.collect::<Vec<_>>();
 	
-		let mut connection = match users_db.connection().await {
+		let connection = match db.connection().await {
 			Ok(connection) => connection,
 			Err(err) => return Err((AuthFailure::ServerError, sender)),
 		};
@@ -290,7 +298,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		let authorize_attempt = Authorized::authorize(
 			credentials,
 			&permissions,
-			&mut connection
+			&connection
 		).await;
 
 		match authorize_attempt {
@@ -300,7 +308,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 					sender,
 					subscriptions,
 					credentials: RwLock::new(credentials),
-					users_db,
+					db,
 				})
 			},
 			Err(err) => Err((err, sender)),
@@ -347,8 +355,8 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		}
 	}
 
-	pub async fn user_id(&self) -> Option<String> {
-		self.credentials.read().await.user_id()
+	pub async fn user(&self) -> Option<UserSpecifier> {
+		self.credentials.read().await.user()
 	}
 
 	pub async fn send<P: SerializedServerPacket>(
@@ -398,7 +406,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 			.map(Permission::from)
 			.collect::<Vec<_>>();
 
-		let mut connection = match self.users_db.connection().await {
+		let connection = match self.db.connection().await {
 			Ok(connection) => connection,
 			Err(err) => return Err(AuthFailure::ServerError),
 		};
@@ -411,13 +419,13 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		let new_credentials = Authorized::authorize(
 			new_credentials,
 			&permissions,
-			&mut connection,
+			&connection,
 		).await?;
 
 		let mut credentials = self.credentials.write().await;
 
-		let old_id = credentials.user_id();
-		let new_id = new_credentials.user_id();
+		let old_id = credentials.user();
+		let new_id = new_credentials.user();
 		
 		if old_id == new_id {
 			*credentials = new_credentials;

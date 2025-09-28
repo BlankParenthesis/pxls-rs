@@ -14,10 +14,9 @@ use crate::BoardDataMap;
 use crate::board::Palette;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard, PendingDelete};
-use crate::filter::resource::database;
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{BoardsDatabase, BoardsConnection};
 use crate::routes::core::{EventPacket, Connections};
 
 #[derive(Deserialize, Debug)]
@@ -31,26 +30,24 @@ pub struct BoardInfoPost {
 pub fn post(
 	events_sockets: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
-		.and(authorized(users_db, Permission::BoardsPost.into()))
-		.and(database::connection(Arc::clone(&boards_db)))
-		.then(move |data: BoardInfoPost, _, _, connection: BoardsConnection| {
+		.and(authorized(db.clone(), Permission::BoardsPost.into()))
+		.then(move |data: BoardInfoPost, _, connection: BoardsConnection| {
 			let boards = Arc::clone(&boards);
 			let events_sockets = Arc::clone(&events_sockets);
-			let boards_db = Arc::clone(&boards_db);
+			let db = Arc::clone(&db);
 			async move {
 				let board = connection.create_board(
 					data.name,
 					data.shape,
 					data.palette,
 					data.max_pixels_available,
-					boards_db,
+					db,
 				).await?;
 
 				let id = board.id as usize;
@@ -83,8 +80,7 @@ pub struct BoardInfoPatch {
 
 pub fn patch(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -92,9 +88,8 @@ pub fn patch(
 		.and(warp::patch())
 		// TODO: require application/merge-patch+json type?
 		.and(warp::body::json())
-		.and(authorized(users_db, Permission::BoardsPatch.into()))
-		.and(database::connection(boards_db))
-		.then(|board: PassableBoard, patch: BoardInfoPatch, _, _, connection: BoardsConnection| async move {
+		.and(authorized(db, Permission::BoardsPatch.into()))
+		.then(|board: PassableBoard, patch: BoardInfoPatch, _, connection: BoardsConnection| async move {
 			let mut board = board.write().await;
 			let board = board.as_mut().expect("Board went missing when patching");
 
@@ -113,16 +108,14 @@ pub fn patch(
 pub fn delete(
 	events_sockets: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
+	db: Arc<BoardsDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::prepare_delete(&boards))
 		.and(warp::path::end())
 		.and(warp::delete())
-		.and(authorized(users_db, Permission::BoardsDelete.into()))
-		.and(database::connection(boards_db))
-		.then(move |mut deletion: PendingDelete, _, _, connection: BoardsConnection| {
+		.and(authorized(db, Permission::BoardsDelete.into()))
+		.then(move |mut deletion: PendingDelete, _, connection: BoardsConnection| {
 			let events_sockets = events_sockets.clone();
 			async move {
 				let board = deletion.perform();

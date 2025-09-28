@@ -11,17 +11,16 @@ use warp::{
 use crate::filter::header::accept_encoding;
 use crate::filter::header::authorization::authorized;
 use crate::filter::header::range::{self, Range};
-use crate::filter::resource::{board, database};
+use crate::filter::resource::board;
 use crate::board::SectorBuffer;
 use crate::BoardDataMap;
 use crate::filter::resource::board::PassableBoard;
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, BoardsConnection, UsersDatabase};
+use crate::database::{BoardsDatabase, BoardsConnection};
 
 pub fn get_timestamps(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(accept_encoding::gzip_opt())
@@ -36,9 +35,8 @@ pub fn get_timestamps(
 				.or(range::default())
 				.unify(),
 		)
-		.and(authorized(users_db, Permission::BoardsDataGet.into()))
-		.and(database::connection(boards_db))
-		.then(|gzip: bool, board: PassableBoard, range: Range, _, _, connection: BoardsConnection| async move {
+		.and(authorized(boards_db, Permission::BoardsDataGet.into()))
+		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: BoardsConnection| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let board = board.as_ref()

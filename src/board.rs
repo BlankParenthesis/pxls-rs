@@ -21,19 +21,17 @@ use tokio::time::{Duration, Instant};
 use warp::http::{StatusCode, Uri};
 use warp::{reject::Reject, reply::Response, Reply};
 
-use crate::routes::board_moderation::boards::pixels::Overrides;
+use crate::{database::UserSpecifier, routes::board_moderation::boards::pixels::Overrides};
 use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::routes::board_notices::boards::notices::BoardsNotice;
 use crate::routes::core::boards::pixels::PlacementFilter;
 use crate::config::CONFIG;
-use crate::database::{BoardsDatabase, Database, User, UsersConnection, DatabaseError};
+use crate::database::{BoardsDatabase, Database, User, DatabaseError, BoardsConnection, Order};
 use crate::filter::response::paginated_list::Page;
 use crate::filter::response::reference::Reference;
 use crate::filter::body::patch::BinaryPatch;
 use crate::filter::header::range::Range;
-use crate::database::BoardsDatabaseError;
 use crate::AsyncWrite;
-use crate::database::{BoardsConnection, Order};
 
 use socket::{Connections, Packet, Socket};
 use sector::{SectorAccessor, BufferedSectorCache, MaskValue, IoError, CompressedSector};
@@ -56,13 +54,13 @@ pub enum PlaceError {
 	NoOp,
 	Cooldown,
 	OutOfBounds,
-	DatabaseError(BoardsDatabaseError),
+	DatabaseError(DatabaseError),
 	SenderError(SendError<PendingPlacement>),
 	Banned,
 }
 
-impl From<BoardsDatabaseError> for PlaceError {
-	fn from(value: BoardsDatabaseError) -> Self {
+impl From<DatabaseError> for PlaceError {
+	fn from(value: DatabaseError) -> Self {
 		Self::DatabaseError(value)
 	}
 }
@@ -101,12 +99,12 @@ pub enum UndoError {
 	OutOfBounds,
 	WrongUser,
 	Expired,
-	DatabaseError(BoardsDatabaseError),
+	DatabaseError(DatabaseError),
 	Banned,
 }
 
-impl From<BoardsDatabaseError> for UndoError {
-	fn from(value: BoardsDatabaseError) -> Self {
+impl From<DatabaseError> for UndoError {
+	fn from(value: DatabaseError) -> Self {
 		Self::DatabaseError(value)
 	}
 }
@@ -211,7 +209,7 @@ pub struct PendingPlacement {
 	pub position: u64,
 	pub color: u8,
 	pub timestamp: u32,
-	pub uid: i32,
+	pub user: UserSpecifier,
 }
 
 pub struct Board {
@@ -219,7 +217,7 @@ pub struct Board {
 	pub info: BoardInfo,
 	connections: RwLock<Connections>,
 	sectors: BufferedSectorCache,
-	statistics_cache: StatisticsHashLock<i32>,
+	statistics_cache: StatisticsHashLock<UserSpecifier>,
 	activity_cache: Mutex<ActivityCache>,
 	cooldown_cache: RwLock<CooldownCache>,
 	placement_sender: mpsc::Sender<PendingPlacement>,
@@ -250,7 +248,7 @@ impl Board {
 		shape: Shape,
 		palette: Palette,
 		max_pixels_available: u32,
-		statistics_cache: StatisticsHashLock<i32>,
+		statistics_cache: StatisticsHashLock<UserSpecifier>,
 		activity_cache: Mutex<ActivityCache>,
 		cooldown_cache: RwLock<CooldownCache>,
 		pool: Arc<BoardsDatabase>,
@@ -416,7 +414,7 @@ impl Board {
 		palette: Option<Palette>,
 		max_pixels_available: Option<u32>,
 		connection: &BoardsConnection,
-	) -> Result<(), BoardsDatabaseError> {
+	) -> Result<(), DatabaseError> {
 		assert!(
 			name.is_some()
 			|| palette.is_some()
@@ -478,7 +476,7 @@ impl Board {
 		
 		let mut cooldowns = Vec::with_capacity(users.len());
 		for user in users {
-			let cooldown = self.user_cooldown_info(user, connection).await?;
+			let cooldown = self.user_cooldown_info(user).await?;
 			cooldowns.push((user, cooldown));
 		}
 
@@ -494,7 +492,7 @@ impl Board {
 	pub async fn delete(
 		self,
 		connection: &BoardsConnection,
-	) -> Result<(), BoardsDatabaseError> {
+	) -> Result<(), DatabaseError> {
 		let mut connections = self.connections.write().await;
 		connections.close();
 		connection.delete_board(self.id).await
@@ -502,10 +500,10 @@ impl Board {
 
 	pub async fn last_place_time(
 		&self,
-		user_id: &str,
+		user: &UserSpecifier,
 		connection: &BoardsConnection,
-	) -> Result<u32, BoardsDatabaseError> {
-		connection.last_place_time(self.id, user_id.to_owned()).await
+	) -> Result<u32, DatabaseError> {
+		connection.last_place_time(self.id, user).await
 	}
 
 	fn check_placement_palette(
@@ -528,47 +526,41 @@ impl Board {
 	
 	async fn insert_placement(
 		&self,
-		user_id: &str,
+		user: &User,
 		position: u64,
 		color: u8,
 		timestamp: u32,
 		sector_offset: usize,
 		sector: &mut Sector,
-		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
 	) -> Result<Placement, PlaceError> {
-		let uid = connection.get_uid(user_id).await?;
-		
 		let mut cooldown_cache = self.cooldown_cache.write().await;
 		let mut activity_cache = self.activity_cache.lock().await;
+		let user_specifier = user.specifier();
 		
 		let pending_placement = PendingPlacement {
-			uid,
+			user: user_specifier,
 			timestamp,
 			position,
 			color,
 		};
 		self.placement_sender.send(pending_placement).await?;
 		
-		let user = users_connection.get_user(user_id).await
-			.map_err(BoardsDatabaseError::UsersError)?;
-		
 		let new_placement = Placement {
 			position: position as u64,
 			color: color as u8,
 			modified: timestamp as u32,
-			user: Reference::new(User::uri(user_id), user.clone()),
+			user: Reference::from(user.clone()),
 		};
 		let mut lookup_cache = self.lookup_cache.write().await;
 		lookup_cache.insert(position, Some(new_placement.clone()));
 		drop(lookup_cache);
 		
-		activity_cache.insert(new_placement.modified, uid);
+		activity_cache.insert(new_placement.modified, user_specifier);
 		
 		let activity = activity_cache.count(new_placement.modified) as u32;
 		let density = sector.density.read_u32(sector_offset) + 1;
 		
-		cooldown_cache.insert(new_placement.modified, uid, activity, density);
+		cooldown_cache.insert(new_placement.modified, user_specifier, activity, density);
 		
 		sector.colors.write(sector_offset, color);
 		sector.timestamps.write_u32(sector_offset, timestamp);
@@ -589,18 +581,14 @@ impl Board {
 	// - the timestamp they were placed at
 	pub async fn mass_place(
 		&self,
-		user_id: &str,
+		user: &User,
 		placements: &[(u64, u8)],
 		overrides: Overrides,
 		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
 	) -> Result<(usize, u32), PlaceError> {
-		let uid = connection.get_uid(user_id).await?;
-		// make sure the user is cached before we lock things
-		let _ = users_connection.get_user(user_id).await
-			.map_err(BoardsDatabaseError::UsersError)?;
+		let user_specifier = user.specifier();
 		
-		if connection.is_user_banned(user_id).await? {
+		if connection.is_user_banned(&user_specifier).await? {
 			return Err(PlaceError::Banned);
 		}
 
@@ -657,13 +645,10 @@ impl Board {
 		}
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
-		let mut statistics_lock = self.statistics_cache.lock(uid).await;
+		let mut statistics_lock = self.statistics_cache.lock(user_specifier).await;
 
 		if !overrides.cooldown {
-			let cooldown_info = self.user_cooldown_info(
-				user_id,
-				connection,
-			).await?;
+			let cooldown_info = self.user_cooldown_info(&user_specifier).await?;
 
 			if (cooldown_info.pixels_available as usize) < changes {
 				return Err(PlaceError::Cooldown);
@@ -676,26 +661,21 @@ impl Board {
 			let sector = sectors.get_mut(&sector_index).unwrap();
 
 			self.insert_placement(
-				user_id,
+				user,
 				position,
 				color,
 				timestamp,
 				sector_offset,
 				sector,
-				connection,
-				users_connection,
 			).await?;
 			
 			statistics_lock.colors.entry(color).or_default().placed += 1;
 		}
 
-		let cooldown_info = self.user_cooldown_info(
-			user_id,
-			connection,
-		).await?; // TODO: maybe cooldown err instead
+		let cooldown_info = self.user_cooldown_info(&user_specifier).await?; // TODO: maybe cooldown err instead
 
 		let connections = self.connections.read().await;
-		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+		connections.set_user_cooldown(&user_specifier, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
 		connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
@@ -705,13 +685,12 @@ impl Board {
 
 	pub async fn try_undo(
 		&self,
-		user_id: &str,
+		user: &User,
 		position: u64,
 		connection: &BoardsConnection,
 	) -> Result<CooldownInfo, UndoError> {
-		let uid = connection.get_uid(user_id).await?;
-		
-		if connection.is_user_banned(user_id).await? {
+		let user_specifier = user.specifier();
+		if connection.is_user_banned(&user_specifier).await? {
 			return Err(UndoError::Banned);
 		}
 		
@@ -724,7 +703,7 @@ impl Board {
 			.expect("Missing sector");
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
-		let mut statistics_lock = self.statistics_cache.lock(uid).await;
+		let mut statistics_lock = self.statistics_cache.lock(user_specifier).await;
 
 		let transaction = connection.begin().await?;
 		
@@ -732,7 +711,7 @@ impl Board {
 			.get_two_placements(self.id, position).await?;
 
 		let placement_id = match undone_placement {
-			Some(placement) if placement.user_id == uid => {
+			Some(placement) if placement.user == user_specifier => {
 				let deadline = placement.modified + CONFIG.undo_deadline_seconds;
 				if deadline < self.current_timestamp() {
 					return Err(UndoError::Expired)
@@ -761,8 +740,8 @@ impl Board {
 
 		let mut cooldown_cache = self.cooldown_cache.write().await;
 		let mut activity_cache = self.activity_cache.lock().await;
-		activity_cache.remove(timestamp, uid);
-		cooldown_cache.remove(timestamp, uid);
+		activity_cache.remove(timestamp, user_specifier);
+		cooldown_cache.remove(timestamp, user_specifier);
 		drop(cooldown_cache);
 		drop(activity_cache);
 
@@ -782,14 +761,10 @@ impl Board {
 			.colors(vec![color])
 			.timestamps(vec![timestamp]);
 
-		let cooldown_info = self.user_cooldown_info(
-			user_id,
-			connection,
-		).await?;
-		
+		let cooldown_info = self.user_cooldown_info(&user_specifier).await?;
 		let connections = self.connections.read().await;
 		connections.queue_board_change(data).await;
-		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+		connections.set_user_cooldown(&user_specifier, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
 		connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
@@ -800,19 +775,14 @@ impl Board {
 	// TODO: re-evaluate anonymous placing, maybe try and implement it again
 	pub async fn try_place(
 		&self,
-		user_id: &str,
+		user: &User,
 		position: u64,
 		color: u8,
 		overrides: Overrides,
 		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
 	) -> Result<(CooldownInfo, Placement), PlaceError> {
-		let uid = connection.get_uid(user_id).await?;
-		// make sure the user is cached before we lock things
-		let _ = users_connection.get_user(user_id).await
-			.map_err(BoardsDatabaseError::UsersError)?;
-		
-		if connection.is_user_banned(user_id).await? {
+		let user_specifier = user.specifier();
+		if connection.is_user_banned(&user_specifier).await? {
 			return Err(PlaceError::Banned);
 		}
 
@@ -843,16 +813,13 @@ impl Board {
 		}
 
 		// This acts as a per-user lock to prevent exploits bypassing cooldown
-		let mut statistics_lock = self.statistics_cache.lock(uid).await;
+		let mut statistics_lock = self.statistics_cache.lock(user_specifier).await;
 
 		let timestamp = self.current_timestamp();
 		// TODO: ignore cooldown should probably also mark the pixel as not
 		// contributing to the pixels available
 		if !overrides.cooldown {
-			let cooldown_info = self.user_cooldown_info(
-				user_id,
-				connection,
-			).await?;
+			let cooldown_info = self.user_cooldown_info(&user_specifier).await?;
 
 			if cooldown_info.pixels_available == 0 {
 				return Err(PlaceError::Cooldown);
@@ -860,23 +827,21 @@ impl Board {
 		}
 
 		let new_placement = self.insert_placement(
-			user_id,
+			user,
 			position,
 			color,
 			timestamp,
 			sector_offset,
 			&mut sector,
-			connection,
-			users_connection,
 		).await?;
 		drop(sector);
 
 		statistics_lock.colors.entry(color).or_default().placed += 1;
 
 		// TODO: maybe cooldown err instead
-		let cooldown_info = self.user_cooldown_info(user_id, connection).await?;
+		let cooldown_info = self.user_cooldown_info(&user_specifier).await?;
 		let connections = self.connections.read().await;
-		connections.set_user_cooldown(user_id, cooldown_info.clone()).await;
+		connections.set_user_cooldown(&user_specifier, cooldown_info.clone()).await;
 
 		let stats = statistics_lock.clone();
 		connections.send(socket::Packet::BoardStatsUpdated { stats }).await;
@@ -891,15 +856,13 @@ impl Board {
 		order: Order,
 		filter: PlacementFilter,
 		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
-	) -> Result<Page<Placement>, BoardsDatabaseError> {
+	) -> Result<Page<Placement>, DatabaseError> {
 		connection.list_placements(
 			self.id,
 			token,
 			limit,
 			order,
 			filter,
-			users_connection,
 		).await
 	}
 
@@ -907,8 +870,7 @@ impl Board {
 		&self,
 		position: u64,
 		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
-	) -> Result<Option<Placement>, BoardsDatabaseError> {
+	) -> Result<Option<Placement>, DatabaseError> {
 		let cache = self.lookup_cache.read().await;
 		if cache.contains_key(&position) {
 			Ok(cache.get(&position).unwrap().clone())
@@ -916,7 +878,7 @@ impl Board {
 			// Avoid keeping this locked while we do the lookup since it can block placing
 			drop(cache);
 			
-			let placement = connection.get_placement(self.id, position, users_connection).await?;
+			let placement = connection.get_placement(self.id, position).await?;
 			let mut cache = self.lookup_cache.write().await;
 			
 			// Because we dropped the lock, there's a chance this function was
@@ -956,12 +918,10 @@ impl Board {
 
 	pub async fn user_cooldown_info(
 		&self,
-		user_id: &str,
-		connection: &BoardsConnection,
-	) -> Result<CooldownInfo, BoardsDatabaseError> {
-		let uid = connection.get_uid(user_id).await?;
+		user: &UserSpecifier,
+	) -> Result<CooldownInfo, DatabaseError> {
 		let cache = self.cooldown_cache.read().await;
-		Ok(cache.get(uid, self.current_timestamp()))
+		Ok(cache.get(*user, self.current_timestamp()))
 	}
 
 	pub async fn user_count(&self) -> usize {
@@ -977,12 +937,11 @@ impl Board {
 	pub async fn insert_socket(
 		&self,
 		socket: &Arc<Socket>,
-		connection: &BoardsConnection,
-	) -> Result<(), BoardsDatabaseError> {
-		let id = socket.user_id().await;
+	) -> Result<(), DatabaseError> {
+		let user = socket.user().await;
 		// TODO: is this needed?
-		let cooldown_info = if let Some(user_id) = id {
-			Some(self.user_cooldown_info(&user_id, connection).await?)
+		let cooldown_info = if let Some(user) = user {
+			Some(self.user_cooldown_info(&user).await?)
 		} else {
 			None
 		};
@@ -1006,15 +965,15 @@ impl Board {
 		title: String,
 		content: String,
 		expiry: Option<u64>,
+		user: Option<&User>,
 		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
 	) -> Result<Reference<BoardsNotice>, DatabaseError> {
 		let notice = connection.create_board_notice(
 			self.id,
 			title,
 			content,
 			expiry,
-			users_connection,
+			user,
 		).await?;
 
 		let packet = Packet::BoardNoticeCreated {
@@ -1034,7 +993,6 @@ impl Board {
 		content: Option<String>,
 		expiry: Option<Option<u64>>,
 		connection: &BoardsConnection,
-		users_connection: &mut UsersConnection,
 	) -> Result<Reference<BoardsNotice>, DatabaseError> {
 		let notice = connection.edit_board_notice(
 			self.id,
@@ -1042,7 +1000,6 @@ impl Board {
 			title,
 			content,
 			expiry,
-			users_connection,
 		).await?;
 
 		let packet = Packet::BoardNoticeUpdated {
@@ -1059,7 +1016,7 @@ impl Board {
 		&self,
 		id: usize,
 		connection: &BoardsConnection,
-	) -> Result<bool, BoardsDatabaseError> {
+	) -> Result<bool, DatabaseError> {
 		let notice = connection.delete_board_notice(self.id, id).await?;
 
 		let packet = Packet::BoardNoticeDeleted {
@@ -1074,10 +1031,8 @@ impl Board {
 
 	pub async fn user_stats(
 		&self,
-		user: &str,
-		connection: &BoardsConnection,
+		user: &User,
 	) -> Result<PlacementColorStatistics, DatabaseError> {
-		let uid = connection.get_uid(user).await?;
-		Ok((*self.statistics_cache.lock(uid).await).clone())
+		Ok((*self.statistics_cache.lock(user.specifier()).await).clone())
 	}
 }

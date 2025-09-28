@@ -76,7 +76,7 @@ impl MigrationTrait for Migration {
 			.to_owned();
 		
 		let alter_placement_not_null = Table::alter()
-			.table(Placement::Table)			.table(Placement::Table)
+			.table(Placement::Table)
 			.modify_column(col!(Placement::UserId).integer())
 			.to_owned();
 

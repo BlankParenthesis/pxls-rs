@@ -6,7 +6,7 @@ use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 mod cache;
 mod access;
 
-use crate::{config::CONFIG, database::{BoardsConnectionGeneric, BoardsDatabaseError}};
+use crate::{config::CONFIG, database::{BoardsConnectionGeneric, DatabaseError}};
 
 pub use cache::{BufferedSectorCache, SectorCache, CompressedSector};
 pub use access::{SectorAccessor, IoError};
@@ -133,7 +133,7 @@ impl Sector {
 		index: i32,
 		size: usize,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<Self, BoardsDatabaseError> {
+	) -> Result<Self, DatabaseError> {
 		// NOTE: default mask is NoPlace so that new boards require activation
 		// before use.
 		let mask = vec![MaskValue::NoPlace as u8; size];
@@ -146,7 +146,7 @@ impl Sector {
 		board_id: i32,
 		sector_index: i32,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<Option<Self>, BoardsDatabaseError> {
+	) -> Result<Option<Self>, DatabaseError> {
 		connection.get_sector(board_id, sector_index).await
 	}
 
@@ -154,7 +154,7 @@ impl Sector {
 		&self,
 		buffer: SectorBuffer,
 		connection: &BoardsConnectionGeneric<C>,
-	) -> Result<(), BoardsDatabaseError> {
+	) -> Result<(), DatabaseError> {
 		match buffer {
 			SectorBuffer::Colors => unimplemented!(),
 			SectorBuffer::Timestamps => unimplemented!(),

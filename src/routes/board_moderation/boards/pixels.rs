@@ -7,13 +7,12 @@ use warp::Filter;
 use serde::Deserialize;
 
 use crate::config::CONFIG;
-use crate::filter::header::authorization::{Bearer, self, PermissionsError};
-use crate::filter::resource::database;
+use crate::filter::header::authorization::{self, PermissionsError};
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::permissions::Permission;
 use crate::BoardDataMap;
 
-use crate::database::{BoardsConnection, BoardsDatabase, UsersConnection, UsersDatabase};
+use crate::database::{BoardsConnection, BoardsDatabase, User};
 
 #[derive(Debug, Default, Deserialize, Clone, Copy)]
 pub struct Overrides {
@@ -65,7 +64,6 @@ struct MassPlacementRequest {
 pub fn patch(
 	boards: BoardDataMap,
 	boards_db: Arc<BoardsDatabase>,
-	users_db: Arc<UsersDatabase>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -73,24 +71,23 @@ pub fn patch(
 		.and(warp::path::end())
 		.and(warp::patch())
 		.and(warp::body::json())
-		.and(authorization::permissions(users_db))
-		.and_then(|board, placement: MassPlacementRequest, permissions: EnumSet<Permission>, user, users_connection| async move {
+		.and(authorization::permissions(boards_db))
+		.and_then(|board, placement: MassPlacementRequest, permissions: EnumSet<Permission>, user, connection| async move {
 			let authorized = authorization::has_permissions(
 				permissions,
 				EnumSet::from(placement.overrides) | Permission::BoardsPixelsPatch
 			);
 
 			if authorized {
-				Ok((board, placement, user, users_connection))
+				Ok((board, placement, user, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.and(database::connection(Arc::clone(&boards_db)))
-		.then(|board: PassableBoard, placement: MassPlacementRequest, user: Option<Bearer>, mut users_connection: UsersConnection, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, placement: MassPlacementRequest, user: Option<User>, connection: BoardsConnection| async move {
 			let user = user.expect("Default user shouldn't have place permisisons");
-
+			
 			let changes = placement.changes.into_iter()
 				.flat_map(|edit| {
 					match edit {
@@ -113,11 +110,10 @@ pub fn patch(
 			let board = board.as_ref().expect("Board went missing when creating a pixel");
 
 			let place_attempt = board.mass_place(
-				&user.id,
+				&user,
 				&changes,
 				placement.overrides,
 				&connection,
-				&mut users_connection,
 			).await;
 
 			match place_attempt {
@@ -135,10 +131,7 @@ pub fn patch(
 						).into_response();
 					}
 
-					let cooldown_info = board.user_cooldown_info(
-						&user.id,
-						&connection,
-					).await;
+					let cooldown_info = board.user_cooldown_info(&user.specifier()).await;
 
 					#[allow(clippy::single_match)]
 					match cooldown_info {

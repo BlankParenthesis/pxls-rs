@@ -3,36 +3,44 @@
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq)]
-#[sea_orm(table_name = "ban")]
+#[sea_orm(table_name = "role_member")]
 pub struct Model {
-	#[sea_orm(primary_key)]
-	pub id: i32,
-	pub user_id: i32,
-	pub created_at: i64,
-	pub expires_at: Option<i64>,
-	pub issuer: Option<i32>,
-	#[sea_orm(column_type = "Text", nullable)]
-	pub reason: Option<String>,
+	#[sea_orm(primary_key, auto_increment = false)]
+	pub role: i32,
+	#[sea_orm(primary_key, auto_increment = false)]
+	pub member: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
 	#[sea_orm(
-		belongs_to = "super::user::Entity",
-		from = "Column::Issuer",
-		to = "super::user::Column::Id",
+		belongs_to = "super::role::Entity",
+		from = "Column::Role",
+		to = "super::role::Column::Id",
 		on_update = "NoAction",
 		on_delete = "NoAction"
 	)]
-	Issuer,
+	Role,
 	#[sea_orm(
 		belongs_to = "super::user::Entity",
-		from = "Column::UserId",
+		from = "Column::Member",
 		to = "super::user::Column::Id",
 		on_update = "NoAction",
 		on_delete = "NoAction"
 	)]
 	User,
+}
+
+impl Related<super::role::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::Role.def()
+	}
+}
+
+impl Related<super::user::Entity> for Entity {
+	fn to() -> RelationDef {
+		Relation::User.def()
+	}
 }
 
 impl ActiveModelBehavior for ActiveModel {}

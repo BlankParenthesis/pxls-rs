@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Serialize, Deserialize};
 use serde::de::{self, Deserializer, Visitor};
 
-use crate::database::User;
+use crate::database::{User, UserSpecifier};
 use crate::filter::response::paginated_list::PageToken;
 use crate::filter::response::reference::Reference;
 
@@ -11,7 +11,7 @@ use crate::filter::response::reference::Reference;
 pub struct CachedPlacement {
 	pub position: u64,
 	pub modified: u32,
-	pub user_id: i32,
+	pub user: UserSpecifier,
 }
 
 impl Default for CachedPlacement {
@@ -23,7 +23,7 @@ impl CachedPlacement {
 		Self {
 			position: 0,
 			modified: 0,
-			user_id: 0
+			user: UserSpecifier::null(),
 		}
 	}
 }
@@ -33,7 +33,7 @@ pub struct LastPlacement {
 	pub id: i64,
 	pub modified: u32,
 	pub color: u8,
-	pub user_id: i32,
+	pub user: UserSpecifier,
 }
 
 #[derive(Debug, Serialize, Clone)]
