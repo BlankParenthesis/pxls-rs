@@ -15,9 +15,9 @@ mod socket;
 mod permissions;
 
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use database::{BoardsDatabase, Database};
 use filter::header::authorization::{BearerError, PermissionsError};
 use futures_util::future;
 use routes::core::Connections;
@@ -28,7 +28,7 @@ use warp::http::{Method, StatusCode};
 
 use crate::board::Board;
 use crate::config::CONFIG;
-use crate::database::DatabaseError;
+use crate::database::{Database, DatabaseError, SpecfierParseError, BoardSpecifier};
 
 // It seems like it would be nice if this were just RwLock<Board>.
 // This cannot be done because we pass the board into the delete function to
@@ -37,29 +37,40 @@ use crate::database::DatabaseError;
 // have a write lock) unless we own the RwLock. We don't own the RwLock since
 // it's shared behind Arc. With Option we can take the board and replace it
 // with None if we have a &mut through the RwLock.
+// TODO: I know I've written this before, but this time I really mean it when I
+// say: I *think* this doesn't need Arc anymore because we never share the
+// reference. That means it can be just RwLock which *can* be taken out of the
+// HashMap when removed and then converted into the inner value, removing the
+// option. So try doing that.
 type BoardRef = Arc<RwLock<Option<Board>>>;
-pub type BoardDataMap = Arc<RwLock<HashMap<usize, BoardRef>>>;
+pub type BoardDataMap = Arc<RwLock<HashMap<BoardSpecifier, BoardRef>>>;
 
 #[tokio::main]
 async fn main() {
 	crate::config::check();
 
-	let db = BoardsDatabase::connect().await
+	let db = Database::connect().await
 		.expect("Failed to connect to database");
 	let db = Arc::new(db);
 
 	let connection = db.connection().await
 		.expect("Failed to get database connection when loading boards");
-	let boards = connection
-		.list_boards(Arc::clone(&db)).await
-		.expect("Failed to load boards (at list)")
-		.into_iter()
-		.map(|board| (board.id as usize, Arc::new(RwLock::new(Some(board)))))
-		.collect::<HashMap<_, _>>();
+	
+	let infos = connection.list_boards().await
+		.expect("Failed to list boards");
+	let mut boards = HashMap::<BoardSpecifier, BoardRef>::new();
+	
+	for info in infos {
+		let id = info.id;
+		let board = connection.board_from_model(info, db.clone()).await
+			.expect("failed to load board");
+		
+		boards.insert(id, Arc::new(RwLock::new(Some(board))));
+	}
 
 	let boards: BoardDataMap = Arc::new(RwLock::new(boards));
 	let sockets = Arc::new(RwLock::new(Connections::default()));
-
+	
 	let routes_core =
 		routes::core::info::get(Arc::clone(&db))
 		.or(routes::core::events(Arc::clone(&sockets), Arc::clone(&db)))
@@ -220,6 +231,8 @@ async fn main() {
 			} else if let Some(err) = rejection.find::<BodyDeserializeError>() {
 				future::ok(StatusCode::BAD_REQUEST.into_response())
 			} else if let Some(err) = rejection.find::<DatabaseError>() {
+				future::ok(StatusCode::from(err).into_response())
+			} else if let Some(err) = rejection.find::<SpecfierParseError>() {
 				future::ok(StatusCode::from(err).into_response())
 			} else {
 				future::err(rejection)

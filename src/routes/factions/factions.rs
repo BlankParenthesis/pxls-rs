@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use sea_orm::TryInsertResult;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use warp::http::StatusCode;
@@ -12,7 +11,7 @@ use crate::filter::response::paginated_list::PaginationOptions;
 use crate::filter::header::authorization;
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{BoardsConnection, BoardsDatabase, FactionSpecifier, User};
+use crate::database::{Database, DbConn, FactionListSpecifier, FactionSpecifier, Specifier, User};
 use crate::routes::core::{Connections, EventPacket};
 
 pub mod members;
@@ -27,15 +26,13 @@ pub struct FactionFilter {
 }
 
 pub fn list(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("factions")
-		.and(warp::path::end())
-		.and(warp::get())
+	FactionListSpecifier::path()
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorization::authorized(db, Permission::FactionsList.into()))
-		.then(move |pagination: PaginationOptions<_>, filter: FactionFilter, _, connection: BoardsConnection| async move {
+		.then(move |_, pagination: PaginationOptions<_>, filter: FactionFilter, _, connection: DbConn| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
@@ -47,14 +44,11 @@ pub fn list(
 }
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("factions")
-		.and(warp::path::param())
-		.and(warp::path::end())
-		.and(warp::get())
+	FactionSpecifier::path()
 		.and(authorization::authorized(db, Permission::FactionsGet.into()))
-		.then(move |faction: FactionSpecifier, _, connection: BoardsConnection| async move {
+		.then(move |faction: FactionSpecifier, _, connection: DbConn| async move {
 			connection.get_faction(&faction).await
 				.map(|faction| warp::reply::json(&faction))
 		})
@@ -68,38 +62,32 @@ struct FactionPost {
 
 pub fn post(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("factions")
-		.and(warp::path::end())
+	FactionListSpecifier::path()
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::FactionsGet | Permission::FactionsPost))
-		.then(move |faction: FactionPost, user: Option<User>, connection: BoardsConnection| {
+		.then(move |_, faction: FactionPost, user: Option<User>, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
 				// FIXME: validate name
 
 				let faction = connection.create_faction(faction.name, faction.icon).await?;
 
+				let member_list = faction.specifier().members();
 				let mut members = vec![];
+				let faction = Reference::from(faction);
 				
 				let member_packet = if let Some(owner) = user {
-					let faction_specifier = faction.view.specifier();
-					let owner_specifier = owner.specifier();
-					let member = connection.create_faction_member(
-						&faction_specifier,
-						&owner.specifier(),
+					let owner_specifier = *owner.specifier();
+					let owner = connection.create_faction_member(
+						&member_list,
+						&owner_specifier,
 						true,
 						true,
 						true,
 					).await?;
-					
-					let owner = match member {
-						TryInsertResult::Inserted(member) => member,
-						TryInsertResult::Conflicted => return Err(StatusCode::CONFLICT),
-						TryInsertResult::Empty => return Err(StatusCode::NOT_FOUND),
-					};
 					
 					members.push(owner_specifier);
 					Some(EventPacket::FactionMemberUpdated {
@@ -125,7 +113,7 @@ pub fn post(
 					events.send(&packet).await;
 				}
 
-				Ok(faction.created())
+				Ok::<_, StatusCode>(faction.created())
 			}
 		})
 }
@@ -139,24 +127,21 @@ struct FactionPatch {
 
 pub fn patch(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("factions")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	FactionSpecifier::path()
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::FactionsGet | Permission::FactionsPatch))
-		.then(move |faction: FactionSpecifier, patch: FactionPatch, user: Option<User>, connection: BoardsConnection| {
+		.then(move |faction: FactionSpecifier, patch: FactionPatch, user: Option<User>, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
 				// FIXME: validate name
 				// FIXME: check if user is owner, possibly add new related permissions
-				let specifier = faction;
-				let faction = connection.update_faction(&specifier, patch.name, patch.icon).await?
+				let update = connection.update_faction(&faction, patch.name, patch.icon).await?
 					.ok_or(StatusCode::NOT_FOUND)?;
-				let members = connection.all_faction_members(&specifier).await?;
-				let faction = Reference::from(faction);
+				let members = connection.all_faction_members(&faction.members()).await?;
+				let faction = Reference::from(update);
 
 				let packet = EventPacket::FactionUpdated {
 					members,
@@ -172,22 +157,20 @@ pub fn patch(
 
 pub fn delete(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("factions")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	FactionSpecifier::path()
 		.and(warp::delete())
 		.and(authorization::authorized(db, Permission::FactionsDelete.into()))
-		.then(move |faction: FactionSpecifier, _, connection: BoardsConnection| {
+		.then(move |faction: FactionSpecifier, _, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
-				let members = connection.all_faction_members(&faction).await?;
+				let members = connection.all_faction_members(&faction.members()).await?;
 				connection.delete_faction(&faction).await?;
 
 				let packet = EventPacket::FactionDeleted {
 					members,
-					faction: faction.into(),
+					faction,
 				};
 				let events = events.read().await;
 				events.send(&packet).await;

@@ -10,7 +10,7 @@ use warp::{
 
 use crate::config::CONFIG;
 use crate::routes::users::users::UserFilter;
-use crate::database::{DatabaseError, UserSpecifier};
+use crate::database::{DatabaseError, Specifier, UserStatsSpecifier};
 use crate::filter::response::paginated_list::{
 	Page,
 	PaginationOptions,
@@ -18,7 +18,7 @@ use crate::filter::response::paginated_list::{
 use crate::filter::header::authorization::{self, PermissionsError};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{User, BoardsDatabase, BoardsConnection};
+use crate::database::{User, Database, DbConn};
 
 #[derive(Serialize)]
 pub struct UserStats {
@@ -42,6 +42,8 @@ pub struct PlacementColorStatistics {
 	pub colors: HashMap<u8, PlacementStatistics>,
 }
 
+// TODO: this function seems very off, it should probably go somewhere else or
+// at least use a more sensible locking scheme to prevent double read locks
 pub async fn calculate_stats(
 	user: &User,
 	boards: &crate::BoardDataMap,
@@ -64,8 +66,7 @@ pub async fn calculate_stats(
 			totals.placed += count.placed;
 		}
 
-		let board_uri = format!("/boards/{}", id).parse().unwrap();
-		let board = Reference::new(board_uri, ());
+		let board = Reference::new_empty(id.to_uri());
 		boards.push(BoardStats { board, stats });
 	}
 	
@@ -77,7 +78,7 @@ pub async fn calculate_stats(
 
 pub fn list(
 	boards: crate::BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path("stats"))
@@ -86,7 +87,7 @@ pub fn list(
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorization::authorized(db, Permission::UsersStatsList.into()))
-		.then(move |pagination: PaginationOptions<_>, filter: UserFilter, _, connection: BoardsConnection| {
+		.then(move |pagination: PaginationOptions<_>, filter: UserFilter, _, connection: DbConn| {
 			let boards = boards.clone();
 			async move {
 				let page = pagination.page;
@@ -118,19 +119,16 @@ pub fn list(
 
 pub fn get(
 	boards: crate::BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersStatsGet.into();
 
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::path("stats"))
-		.and(warp::path::end())
+	UserStatsSpecifier::path()
 		.and(warp::get())
 		.and(authorization::permissions(db))
-		.and_then(move |user: UserSpecifier, user_permissions, requester: Option<User>, connection| async move {
+		.and_then(move |stats: UserStatsSpecifier, user_permissions, requester: Option<User>, connection| async move {
 			let is_current_user = requester.as_ref()
-				.map(|u| u.specifier() == user)
+				.map(|u| *u.specifier() == stats.user())
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -140,16 +138,16 @@ pub fn get(
 			};
 
 			if check(user_permissions, permissions) {
-				Ok((user, connection))
+				Ok((stats, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |user: UserSpecifier, connection: BoardsConnection| {
+		.then(move |stats: UserStatsSpecifier, connection: DbConn| {
 			let boards = boards.clone();
 			async move {
-				let user = connection.get_user(&user).await?
+				let user = connection.get_user(&stats.user()).await?
 					.ok_or(StatusCode::NOT_FOUND)?;
 				calculate_stats(&user, &boards).await
 					.map(|stats| warp::reply::json(&stats))

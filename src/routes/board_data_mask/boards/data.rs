@@ -8,22 +8,20 @@ use warp::{
 	Filter,
 };
 
-
 use crate::filter::header::accept_encoding;
 use crate::filter::header::authorization::authorized;
 use crate::filter::header::range::{self, Range};
 use crate::filter::body::patch;
 use crate::filter::resource::board;
-use crate::board::SectorBuffer;
 use crate::BoardDataMap;
 use crate::filter::resource::board::PassableBoard;
 use crate::filter::body::patch::BinaryPatch;
 use crate::permissions::Permission;
-use crate::database::{BoardsConnection, BoardsDatabase};
+use crate::database::{Database, DbConn, SectorBuffer};
 
 pub fn get_mask(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(accept_encoding::gzip_opt())
@@ -39,7 +37,7 @@ pub fn get_mask(
 				.unify(),
 		)
 		.and(authorized(db, Permission::BoardsDataGet.into()))
-		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: BoardsConnection| async move {
+		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: DbConn| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let board = board.as_ref()
@@ -80,7 +78,7 @@ pub fn get_mask(
 
 pub fn patch_mask(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -89,7 +87,7 @@ pub fn patch_mask(
 		.and(warp::path::end())
 		.and(patch::bytes())
 		.and(authorized(db, Permission::BoardsDataPatch.into()))
-		.then(|board: PassableBoard, patch: BinaryPatch, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, patch: BinaryPatch, _, connection: DbConn| async move {
 			// TODO: content disposition
 			let board = board.write().await;
 			board.as_ref()

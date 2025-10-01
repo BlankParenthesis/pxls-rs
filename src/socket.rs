@@ -12,7 +12,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 use warp::ws;
 
-use crate::database::{BoardsConnection, BoardsDatabase, Database, UserSpecifier};
+use crate::database::{DbConn, Database, UserSpecifier};
 use crate::filter::header::authorization::{AuthenticatedUser, Bearer};
 use crate::openid::{self, ValidationError};
 use crate::permissions::Permission;
@@ -128,7 +128,7 @@ impl Authorized {
 	async fn authorize(
 		credentials: Option<Authenticated>,
 		permissions: &[Permission],
-		connection: &BoardsConnection,
+		connection: &DbConn,
 	) -> Result<Self, AuthFailure> {
 		let user = match credentials {
 			Some(Authenticated(bearer)) => {
@@ -211,7 +211,7 @@ pub struct Socket<S: EnumSetType> {
 	sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 	pub subscriptions: EnumSet<S>,
 	credentials: RwLock<Authorized>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 }
 
 impl<S: EnumSetType> PartialEq for Socket<S> {
@@ -232,7 +232,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 	pub async fn connect(
 		websocket: ws::WebSocket,
 		subscriptions: EnumSet<S>,
-		db: Arc<BoardsDatabase>,
+		db: Arc<Database>,
 		anonymous: bool,
 	) -> Result<SocketWrapperInit<S>, AuthFailure> {
 		let (ws_sender, mut ws_receiver) = websocket.split();
@@ -273,7 +273,7 @@ impl<S: EnumSetType> Socket<S> where Permission: From<S> {
 		receiver: &mut SplitStream<ws::WebSocket>,
 		sender: mpsc::UnboundedSender<Result<ws::Message, warp::Error>>,
 		subscriptions: EnumSet<S>,
-		db: Arc<BoardsDatabase>,
+		db: Arc<Database>,
 		anonymous: bool,
 	) -> Result<Self, (AuthFailure, mpsc::UnboundedSender<Result<ws::Message, warp::Error>>)> {
 

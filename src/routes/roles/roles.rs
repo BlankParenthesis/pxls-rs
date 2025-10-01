@@ -15,7 +15,7 @@ use crate::filter::response::paginated_list::PaginationOptions;
 use crate::routes::core::Connections;
 use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
-use crate::database::{BoardsConnection, BoardsDatabase, RoleSpecifier};
+use crate::database::{Database, DbConn, RoleSpecifier, Specifier};
 use crate::routes::core::EventPacket;
 
 #[derive(Deserialize, Debug, Default)]
@@ -27,7 +27,7 @@ pub struct RoleFilter {
 }
 
 pub fn list(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("roles")
 		.and(warp::path::end())
@@ -35,7 +35,7 @@ pub fn list(
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorized(db, Permission::RolesList.into()))
-		.then(move |pagination: PaginationOptions<_>, filter: RoleFilter, _, connection: BoardsConnection| async move {
+		.then(move |pagination: PaginationOptions<_>, filter: RoleFilter, _, connection: DbConn| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
@@ -48,14 +48,12 @@ pub fn list(
 
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("roles")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	RoleSpecifier::path()
 		.and(warp::get())
 		.and(authorized(db, Permission::RolesGet.into()))
-		.then(move |role: RoleSpecifier, _, connection: BoardsConnection| async move {
+		.then(move |role: RoleSpecifier, _, connection: DbConn| async move {
 			connection.get_role(&role).await
 				.map(|role| warp::reply::json(&role))
 		})
@@ -71,14 +69,14 @@ struct NewRole {
 
 pub fn post(
 	events_sockets: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("roles")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorized(db, Permission::RolesPost.into()))
-		.then(move |role: NewRole, _, connection: BoardsConnection| {
+		.then(move |role: NewRole, _, connection: DbConn| {
 			let events_sockets = events_sockets.clone();
 			async move {
 				let role = connection.create_role(
@@ -108,22 +106,20 @@ struct RoleUpdate {
 // TODO: for this and all other reasonable patches: require if-not-modified precondition
 pub fn patch(
 	events_sockets: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("roles")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	RoleSpecifier::path()
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorized(db, Permission::RolesPatch.into()))
-		.then(move |role: RoleSpecifier, new_role: RoleUpdate, _, connection: BoardsConnection| {
+		.then(move |role: RoleSpecifier, patch: RoleUpdate, _, connection: DbConn| {
 			let events_sockets = events_sockets.clone();
 			async move {
 				let role = connection.update_role(
 					&role,
-					new_role.name,
-					new_role.icon,
-					new_role.permissions.map(|p| p.into_iter().collect()),
+					patch.name,
+					patch.icon,
+					patch.permissions.map(|p| p.into_iter().collect()),
 				).await?
 				.ok_or(StatusCode::NOT_FOUND)?;
 				
@@ -139,22 +135,18 @@ pub fn patch(
 
 pub fn delete(
 	events_sockets: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("roles")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	RoleSpecifier::path()
 		.and(warp::delete())
 		.and(authorized(db, Permission::RolesDelete.into()))
-		.then(move |role: RoleSpecifier, _, connection: BoardsConnection| {
+		.then(move |role: RoleSpecifier, _, connection: DbConn| {
 			let events_sockets = events_sockets.clone();
 			async move {
 				let response = connection.delete_role(&role).await
 					.map(|_| StatusCode::NO_CONTENT);
 			
-				let packet = EventPacket::RoleDeleted {
-					role: format!("/roles/{}", role).parse().unwrap(),
-				};
+				let packet = EventPacket::RoleDeleted { role };
 				events_sockets.read().await.send(&packet).await;
 
 				response

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use enumset::EnumSet;
 use reqwest::StatusCode;
@@ -8,7 +7,6 @@ use warp::{Reply, Rejection};
 use warp::Filter;
 use serde::Deserialize;
 
-use crate::board::PlacementPageToken;
 use crate::config::CONFIG;
 use crate::filter::header::authorization::{authorized, has_permissions, permissions, PermissionsError};
 use crate::filter::resource::board::{self, PassableBoard};
@@ -18,7 +16,7 @@ use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::calculate_stats;
 use crate::BoardDataMap;
 
-use crate::database::{BoardsConnection, BoardsDatabase, Order, User};
+use crate::database::{Database, DbConn, Order, PlacementPageToken, PlacementSpecifier, Specifier, User};
 use crate::routes::board_moderation::boards::pixels::Overrides;
 use crate::routes::core::{Connections, EventPacket};
 
@@ -37,7 +35,7 @@ pub struct PlacementFilter {
 
 pub fn list(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -47,7 +45,7 @@ pub fn list(
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorized(db, Permission::BoardsPixelsList.into()))
-		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, connection: BoardsConnection| async move {
+		.then(|board: PassableBoard, options: PaginationOptions<PlacementPageToken>, filter: PlacementFilter, _, connection: DbConn| async move {
 			let page = options.page;
 			let limit = options
 				.limit
@@ -69,43 +67,46 @@ pub fn list(
 
 pub fn get(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(board::path::read(&boards))
-		.and(warp::path("pixels"))
-		.and(warp::path::param())
+	PlacementSpecifier::path()
 		.and(warp::path::end())
 		.and(warp::get())
 		.and(permissions(db))
-		.and_then(move |board, position, user_permissions: EnumSet<_>, _, connection| async move {
+		.and_then(move |placement, user_permissions: EnumSet<_>, _, connection| async move {
 			if !has_permissions(user_permissions, Permission::BoardsPixelsGet.into()) {
 				let error = PermissionsError::MissingPermission;
 				return Err(Rejection::from(error));
 			}
-			Ok((board, position, user_permissions, connection))
+			Ok((placement, user_permissions, connection))
 		})
 		.untuple_one()
-		.then(|board: PassableBoard, position, user_permissions: EnumSet<_>, connection: BoardsConnection| async move {
-			let board = board.read().await;
-			let board = board.as_ref().expect("Board went missing when getting a pixel");
-			board.lookup(position, &connection).await?
-				.map(|placement| {
-					if user_permissions.contains(Permission::UsersGet) {
-						warp::reply::json(&placement)
-					} else {
-						warp::reply::json(&serde_json::json!({
-							"position": placement.position,
-							"color": placement.color,
-							"modified": placement.modified,
-							"user": {
-								"uri": placement.user.uri.to_string(),
-								"view": None::<User>
-							}
-						}))
-					}
-				})
-				.ok_or(StatusCode::NOT_FOUND)
+		.then(move |placement: PlacementSpecifier, user_permissions: EnumSet<_>, connection: DbConn| {
+			let boards = boards.clone();
+			async move {
+				let boards = boards.read().await;
+				let board = boards.get(&placement.board())
+					.ok_or(StatusCode::NOT_FOUND)?;
+				let board = board.read().await;
+				let board = board.as_ref().expect("Board went missing when getting a pixel");
+				board.lookup(&placement, &connection).await?
+					.map(|placement| {
+						if user_permissions.contains(Permission::UsersGet) {
+							warp::reply::json(&placement)
+						} else {
+							warp::reply::json(&serde_json::json!({
+								"position": placement.position,
+								"color": placement.color,
+								"modified": placement.modified,
+								"user": {
+									"uri": placement.user.uri.to_string(),
+									"view": None::<User>
+								}
+							}))
+						}
+					})
+					.ok_or(StatusCode::NOT_FOUND)
+			}
 		})
 }
 
@@ -119,97 +120,81 @@ struct PlacementRequest {
 pub fn post(
 	events: Arc<RwLock<Connections>>,
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(board::path::read(&boards))
-		.and(warp::path("pixels"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	PlacementSpecifier::path()
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(permissions(db))
-		.and_then(|board, position, placement: PlacementRequest, permissions: EnumSet<Permission>, user, connection| async move {
+		.and_then(|placement: PlacementSpecifier, post: PlacementRequest, permissions: EnumSet<Permission>, user, connection| async move {
 			let authorized = has_permissions(
 				permissions,
-				EnumSet::from(placement.overrides) | Permission::BoardsPixelsPost,
+				EnumSet::from(post.overrides) | Permission::BoardsPixelsPost,
 			);
 
 			if authorized {
-				Ok((board, position, placement, user, connection))
+				Ok((placement, post, user, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |board: PassableBoard, position, placement: PlacementRequest, user: Option<User>, boards_connection| {
+		.then(move |placement: PlacementSpecifier, post: PlacementRequest, user: Option<User>, connection| {
 			let events = events.clone();
 			let boards = boards.clone();
 			async move {
 				let user = user.expect("Default user shouldn't have place permisisons");
 				
-				let (board_id, place_attempt) = {
+				let (cooldown, place) = {
+					let boards = boards.read().await;
+					let board = boards.get(&placement.board())
+						.ok_or(StatusCode::NOT_FOUND)?;
 					let board = board.read().await;
 					let board = board.as_ref().expect("Board went missing when creating a pixel");
-					let timeout = Duration::from_millis(CONFIG.place_timeout_millis);
-					let place = board.try_place(
+					let (cooldown, placement) = board.try_place(
 						// TODO: maybe accept option but make sure not to allow
 						// undos etc for anon users
 						&user,
-						position,
-						placement.color,
-						placement.overrides,
-						&boards_connection,
-					);
-					match tokio::time::timeout(timeout, place).await {
-						Ok(attempt) => (board.id, attempt),
-						Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE.into_response()),
-					}
+						&placement,
+						post.color,
+						post.overrides,
+						&connection,
+					).await?;
+					(cooldown, placement)
 				};
 
-				// This is required because read locking a rwlock twice in the
-				// same thread can cause a deadlock and we're about to lock
-				// boards in calculate_stats.
-				drop(board);
+				let stats = calculate_stats(&user, &boards).await?;
+				let user = Some(*user.specifier());
+				let packet = EventPacket::StatsUpdated { user, stats };
 
-				match place_attempt {
-					Ok((cooldown, placement)) => {
-						let stats = calculate_stats(&user, &boards).await
-							.map_err(|e| e.into_response())?;
-						let user = Some(user.specifier());
-						let packet = EventPacket::StatsUpdated { user, stats };
+				let events = events.read().await;
+				events.send(&packet).await;
 
-						let events = events.read().await;
-						events.send(&packet).await;
+				let mut response = warp::reply::with_status(
+					warp::reply::json(&place).into_response(),
+					StatusCode::CREATED,
+				).into_response();
 
-						let mut response = warp::reply::with_status(
-							warp::reply::json(&placement).into_response(),
-							StatusCode::CREATED,
-						).into_response();
-
-						if CONFIG.undo_deadline_seconds != 0 {
-							response = warp::reply::with_header(
-								response,
-								"Pxls-Undo-Deadline",
-								placement.modified + CONFIG.undo_deadline_seconds,
-							).into_response();
-						}
-						
-						response = warp::reply::with_header(
-							response,
-							"Location",
-							format!("/boards/{}/pixels/{}", board_id, position),
-						).into_response();
-
-						for (key, value) in cooldown.into_headers() {
-							response = warp::reply::with_header(response, key, value)
-								.into_response();
-						}
-
-						Ok(response)
-					},
-					Err(err) => Err(err.into_response()),
+				if CONFIG.undo_deadline_seconds != 0 {
+					response = warp::reply::with_header(
+						response,
+						"Pxls-Undo-Deadline",
+						place.modified + CONFIG.undo_deadline_seconds,
+					).into_response();
 				}
+
+				response = warp::reply::with_header(
+					response,
+					"Location",
+					placement.to_uri().to_string(),
+				).into_response();
+
+				for (key, value) in cooldown.into_headers() {
+					response = warp::reply::with_header(response, key, value)
+						.into_response();
+				}
+
+				Ok::<_, StatusCode>(response)
 			}
 		})
 }

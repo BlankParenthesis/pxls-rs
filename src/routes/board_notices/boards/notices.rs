@@ -2,8 +2,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde::de::Visitor;
-use serde::{Deserialize, Serialize, de, Deserializer};
-use warp::http::{StatusCode, Uri};
+use serde::{Deserialize, de, Deserializer};
+use warp::http::StatusCode;
 use warp::{Filter, Reply, Rejection};
 
 use crate::config::CONFIG;
@@ -14,27 +14,9 @@ use crate::filter::response::paginated_list::{
 	PageToken,
 };
 use crate::filter::header::authorization;
-use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, BoardsConnection, User};
+use crate::database::{BoardNoticeListSpecifier, BoardNoticeSpecifier, Database, DbConn, Specifier, User};
 
-#[serde_with::skip_serializing_none]
-#[derive(Serialize, Debug, Clone)]
-pub struct BoardsNotice {
-	pub title: String,
-	pub content: String,
-	pub created_at: u64,
-	pub expires_at: Option<u64>,
-	pub author: Option<Reference<User>>,
-}
-
-impl BoardsNotice {
-	pub fn uri(board_id: i32, notice_id: i32) -> Uri {
-		format!("/board/{}/notices/{}", board_id, notice_id)
-			.parse::<Uri>()
-			.unwrap()
-	}
-}
 #[derive(Default)]
 pub struct BoardsNoticePageToken {
 	pub id: usize,
@@ -105,21 +87,18 @@ pub struct BoardNoticeFilter {
 
 pub fn list(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(warp::path::param())
-		.and(warp::path("notices"))
-		.and(warp::path::end())
+	BoardNoticeListSpecifier::path()
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorization::authorized(db, Permission::NoticesList.into()))
-		.then(move |board: usize, pagination: PaginationOptions<BoardsNoticePageToken>, filter: BoardNoticeFilter, _, boards_connection: BoardsConnection| {
+		.then(move |list: BoardNoticeListSpecifier, pagination: PaginationOptions<BoardsNoticePageToken>, filter: BoardNoticeFilter, _, connection: DbConn| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
-				if !boards.contains_key(&board) {
+				if !boards.contains_key(&list.board()) {
 					return Err(StatusCode::NOT_FOUND);
 				}
 
@@ -128,8 +107,8 @@ pub fn list(
 					.unwrap_or(CONFIG.default_page_item_limit)
 					.clamp(1, CONFIG.max_page_item_limit);
 
-				let page = boards_connection.list_board_notices(
-					board as i32,
+				let page = connection.list_board_notices(
+					&list,
 					page,
 					limit,
 					filter,
@@ -141,17 +120,13 @@ pub fn list(
 }
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(warp::path::param())
-		.and(warp::path("notices"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	BoardNoticeSpecifier::path()
 		.and(warp::get())
 		.and(authorization::authorized(db, Permission::NoticesGet.into()))
-		.then(move |board: usize, id: usize, _, boards_connection: BoardsConnection| async move {
-			boards_connection.get_board_notice(board as i32, id).await?
+		.then(move |notice, _, connection: DbConn| async move {
+			connection.get_board_notice(&notice).await?
 				.ok_or(StatusCode::NOT_FOUND)
 				.map(|notice| warp::reply::json(&notice))
 		})
@@ -167,30 +142,27 @@ struct NoticePost {
 
 pub fn post(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(warp::path::param())
-		.and(warp::path("notices"))
-		.and(warp::path::end())
+	BoardNoticeListSpecifier::path()
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesPost))
-		.then(move |board: usize, notice: NoticePost, user: Option<User>, boards_connection: BoardsConnection| {
+		.then(move |list: BoardNoticeListSpecifier, post: NoticePost, user: Option<User>, connection: DbConn| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
-				let board = boards.get(&board)
+				let board = boards.get(&list.board())
 					.ok_or(StatusCode::NOT_FOUND)?;
 				let board = board.read().await;
 				let board = board.as_ref().expect("board went missing");
 
 				let notice = board.create_notice(
-					notice.title,
-					notice.content,
-					notice.expires_at,
+					post.title,
+					post.content,
+					post.expires_at,
 					user.as_ref(),
-					&boards_connection,
+					&connection,
 				).await?;
 				
 				Ok::<_, StatusCode>(notice.created())
@@ -208,31 +180,27 @@ struct NoticePatch {
 
 pub fn patch(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(warp::path::param())
-		.and(warp::path("notices"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	BoardNoticeSpecifier::path()
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesPatch))
-		.then(move |board: usize, id: usize, notice: NoticePatch, _, boards_connection: BoardsConnection| {
+		.then(move |notice: BoardNoticeSpecifier, patch: NoticePatch, _, connection: DbConn| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
-				let board = boards.get(&board)
+				let board = boards.get(&notice.board())
 					.ok_or(StatusCode::NOT_FOUND)?;
 				let board = board.read().await;
 				let board = board.as_ref().expect("board went missing");
 				
 				let notice = board.edit_notice(
-					id,
-					notice.title,
-					notice.content,
-					notice.expires_at,
-					&boards_connection,
+					&notice,
+					patch.title,
+					patch.content,
+					patch.expires_at,
+					&connection,
 				).await?;
 				
 				Ok::<_, StatusCode>(notice.created()) // TODO: is created correct?
@@ -242,25 +210,21 @@ pub fn patch(
 
 pub fn delete(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("boards")
-		.and(warp::path::param())
-		.and(warp::path("notices"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	BoardNoticeSpecifier::path()
 		.and(warp::delete())
 		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesDelete))
-		.then(move |board: usize, id: usize, _, boards_connection: BoardsConnection| {
+		.then(move |notice: BoardNoticeSpecifier, _, connection: DbConn| {
 			let boards = Arc::clone(&boards);
 			async move {
 				let boards = boards.read().await;
-				let board = boards.get(&board)
+				let board = boards.get(&notice.board())
 					.ok_or(StatusCode::NOT_FOUND)?;
 				let board = board.read().await;
 				let board = board.as_ref().expect("board went missing");
 
-				let was_deleted = board.delete_notice(id, &boards_connection).await?;
+				let was_deleted = board.delete_notice(notice, &connection).await?;
 
 				if was_deleted {
 					Ok::<_, StatusCode>(StatusCode::NO_CONTENT)

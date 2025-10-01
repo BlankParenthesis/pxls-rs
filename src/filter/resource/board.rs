@@ -4,6 +4,7 @@ use ouroboros::self_referencing;
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use warp::{Filter, Rejection};
+use crate::database::{BoardSpecifier, Specifier};
 use crate::{BoardDataMap, BoardRef};
 
 #[self_referencing]
@@ -11,7 +12,7 @@ pub struct PassableBoard {
 	boards: BoardDataMap,
 	#[covariant]
 	#[borrows(boards)]
-	lock: RwLockReadGuard<'this, HashMap<usize, BoardRef>>,
+	lock: RwLockReadGuard<'this, HashMap<BoardSpecifier, BoardRef>>,
 	#[borrows(lock)]
 	board: &'this BoardRef,
 }
@@ -26,11 +27,11 @@ impl Deref for PassableBoard {
 
 #[self_referencing]
 pub struct PendingDelete {
-	board_id: usize,
+	board: BoardSpecifier,
 	boards: BoardDataMap,
 	#[covariant]
 	#[borrows(boards)]
-	lock: RwLockWriteGuard<'this, HashMap<usize, BoardRef>>,
+	lock: RwLockWriteGuard<'this, HashMap<BoardSpecifier, BoardRef>>,
 }
 
 impl PendingDelete {
@@ -38,7 +39,7 @@ impl PendingDelete {
 		self.with_mut(|fields| {
 			fields
 				.lock
-				.remove(fields.board_id)
+				.remove(fields.board)
 				.expect("board went missing")
 		})
 	}
@@ -51,14 +52,15 @@ pub mod path {
 		boards: &BoardDataMap
 	) -> impl Filter<Extract = (PassableBoard,), Error = Rejection> + Clone {
 		let boards = Arc::clone(boards);
-		warp::path::param().and_then(move |id: usize| {
+		warp::path::param().and_then(move |board: i32| {
+			let specifier = BoardSpecifier(board);
 			let boards = Arc::clone(&boards);
 
 			async move {
 				PassableBoardAsyncSendTryBuilder {
 					boards,
 					lock_builder: |boards| Box::pin(async move { Ok(boards.read().await) }),
-					board_builder: |lock| Box::pin(async move { lock.get(&id).ok_or(()) }),
+					board_builder: |lock| Box::pin(async move { lock.get(&specifier).ok_or(()) }),
 				}.try_build().await
 				.map_err(|_| warp::reject::not_found())
 			}
@@ -69,17 +71,17 @@ pub mod path {
 		boards: &BoardDataMap
 	) -> impl Filter<Extract = (PendingDelete,), Error = Rejection> + Clone {
 		let boards = Arc::clone(boards);
-		warp::path::param().and_then(move |board_id: usize| {
+		BoardSpecifier::path().and_then(move |board: BoardSpecifier| {
 			let boards = Arc::clone(&boards);
 
 			async move {
 				let writable = Box::pin(PendingDeleteAsyncSendBuilder {
-					board_id,
+					board,
 					boards,
 					lock_builder: |boards| Box::pin(async move { boards.write().await }),
 				}.build()).await;
 
-				if writable.borrow_lock().contains_key(&board_id) {
+				if writable.borrow_lock().contains_key(&board) {
 					Ok(writable)
 				} else {
 					Err(warp::reject::not_found())

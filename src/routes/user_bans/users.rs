@@ -1,21 +1,18 @@
 use std::sync::Arc;
 
 use reqwest::StatusCode;
-use sea_orm::TryInsertResult;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use warp::{Filter, Reply, Rejection};
-use warp::http::Uri;
 
 use crate::config::CONFIG;
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::response::reference::Reference;
 use crate::routes::core::{Connections, EventPacket};
-use crate::database::{BanSpecifier, UserSpecifier};
 use crate::filter::response::paginated_list::PaginationOptions;
 use crate::filter::header::authorization::{self, PermissionsError};
 use crate::permissions::Permission;
-use crate::database::{User, BoardsDatabase, BoardsConnection};
+use crate::database::{Specifier, Database, DbConn, User, BanSpecifier, BanListSpecifier};
 
 #[derive(Debug, Deserialize)]
 pub struct BanFilter {
@@ -27,21 +24,18 @@ pub struct BanFilter {
 }
 
 pub fn list(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersBansList.into();
 
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::path("bans"))
-		.and(warp::path::end())
+	BanListSpecifier::path()
 		.and(warp::get())
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorization::permissions(db))
-		.and_then(move |user: UserSpecifier, pagination, filter, user_permissions, requester: Option<User>, connection| async move {
+		.and_then(move |user: BanListSpecifier, pagination, filter, user_permissions, requester: Option<User>, connection| async move {
 			let is_current_user = requester.as_ref()
-				.map(|u| u.specifier() == user)
+				.map(|u| *u.specifier() == user.user())
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -57,36 +51,28 @@ pub fn list(
 			}
 		})
 		.untuple_one()
-		.then(move |user: UserSpecifier, pagination: PaginationOptions<_>, filter, connection: BoardsConnection| async move {
+		.then(move |user: BanListSpecifier, pagination: PaginationOptions<_>, filter, connection: DbConn| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
 				.clamp(1, CONFIG.max_page_item_limit);
 
-			connection.list_user_bans(
-				&user,
-				page,
-				limit,
-				filter,
-			).await.map(|page| warp::reply::json(&page))
+			connection.list_bans(&user, page, limit, filter).await
+				.map(|page| warp::reply::json(&page))
 		})
 }
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersBansGet.into();
-
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::path("bans"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	
+	BanSpecifier::path()
 		.and(warp::get())
 		.and(authorization::permissions(db))
-		.and_then(move |user: UserSpecifier, ban_id, user_permissions, requester: Option<User>, connection| async move {
+		.and_then(move |ban: BanSpecifier, user_permissions, requester: Option<User>, connection| async move {
 			let is_current_user = requester.as_ref()
-				.map(|u| u.specifier() == user)
+				.map(|u| *u.specifier() == ban.user())
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -96,14 +82,14 @@ pub fn get(
 			};
 
 			if check(user_permissions, permissions) {
-				Ok((user, ban_id, connection))
+				Ok((ban, connection))
 			} else {
 				Err(warp::reject::custom(PermissionsError::MissingPermission))
 			}
 		})
 		.untuple_one()
-		.then(move |user: UserSpecifier, ban: BanSpecifier, connection: BoardsConnection| async move {
-			connection.get_ban(&ban, &user).await
+		.then(move |ban: BanSpecifier, connection: DbConn| async move {
+			connection.get_ban(&ban).await
 				.map(|page| {
 					if let Some(page) = page {
 						warp::reply::json(&page).into_response()
@@ -122,33 +108,26 @@ struct BanPost {
 
 pub fn post(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::path("bans"))
-		.and(warp::path::end())
+	BanListSpecifier::path()
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::UsersBansGet | Permission::UsersBansPost))
-		.then(move |user: UserSpecifier, ban: BanPost, issuer: Option<User>, connection: BoardsConnection| {
+		.then(move |list: BanListSpecifier, post: BanPost, issuer: Option<User>, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
 				let ban = connection.create_ban(
-					&user,
-					issuer.map(|i| i.specifier()).as_ref(),
-					ban.reason,
-					ban.expires_at,
+					&list,
+					issuer.map(|i| *i.specifier()).as_ref(),
+					post.reason,
+					post.expires_at,
 				).await?;
 				
-				let ban = match ban {
-					TryInsertResult::Inserted(ban) => Reference::from(ban),
-					TryInsertResult::Conflicted => return Err(StatusCode::CONFLICT),
-					TryInsertResult::Empty => return Err(StatusCode::NOT_FOUND),
-				};
+				let ban = Reference::from(ban);
 
 				let packet = EventPacket::UserBanCreated {
-					user,
+					user: list.user(),
 					ban: ban.clone(),
 				};
 				let events = events.write().await;
@@ -169,60 +148,50 @@ struct BanPatch {
 
 pub fn patch(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::path("bans"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	BanSpecifier::path()
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::UsersBansGet | Permission::UsersBansPatch))
-		.then(move |user: UserSpecifier, ban: BanSpecifier, patch: BanPatch, _, connection: BoardsConnection| {
+		.then(move |ban: BanSpecifier, patch: BanPatch, _, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
-				let ban = connection.edit_ban(
+				let edit = connection.edit_ban(
 					&ban,
-					&user,
 					patch.reason,
 					patch.expires_at,
 				).await?
 				.ok_or(StatusCode::NOT_FOUND)?;
 
 				let packet = EventPacket::UserBanUpdated {
-					user,
-					ban: Reference::from(ban.clone()),
+					user: ban.user(),
+					ban: Reference::from(edit.clone()),
 				};
 				let events = events.write().await;
 				events.send(&packet).await;
 				
-				Ok::<_, StatusCode>(warp::reply::json(&ban))
+				Ok::<_, StatusCode>(warp::reply::json(&edit))
 			}
 		})
 }
 
 pub fn delete(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::path("bans"))
-		.and(warp::path::param())
-		.and(warp::path::end())
+	BanSpecifier::path()
 		.and(warp::delete())
 		.and(authorization::authorized(db, Permission::UsersBansGet | Permission::UsersBansDelete))
-		.then(move |user: UserSpecifier, ban: BanSpecifier, _, connection: BoardsConnection| {
+		.then(move |ban: BanSpecifier, _, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
-				let was_deleted = connection.delete_ban(&ban, &user).await?;
+				let was_deleted = connection.delete_ban(&ban).await?;
 
 				if was_deleted {
 					let packet = EventPacket::UserBanDeleted {
-						ban: format!("/users/{user}/bans/{ban}")
-							.parse::<Uri>().unwrap(),
-						user,
+						ban,
+						user: ban.user(),
 					};
 					let events = events.write().await;
 					events.send(&packet).await;

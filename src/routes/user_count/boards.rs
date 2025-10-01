@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warp::{Reply, Rejection};
 use warp::Filter;
 
-use crate::database::BoardsDatabase;
+use crate::database::Database;
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::permissions::Permission;
@@ -19,7 +19,7 @@ pub struct UserCount {
 
 pub fn users(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))

@@ -10,12 +10,11 @@ use crate::filter::header::authorization::authorized;
 use crate::filter::header::range::{self, Range};
 use crate::filter::resource::board::{self, PassableBoard};
 use crate::permissions::Permission;
-use crate::board::SectorBuffer;
-use crate::database::{BoardsDatabase, BoardsConnection};
+use crate::database::{Database, DbConn, SectorBuffer};
 
 pub fn get_colors(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(accept_encoding::gzip_opt())
@@ -31,7 +30,7 @@ pub fn get_colors(
 				.unify(),
 		)
 		.and(authorized(db, Permission::BoardsDataGet.into()))
-		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: BoardsConnection| async move {
+		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: DbConn| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let board = board.as_ref()

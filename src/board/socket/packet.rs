@@ -5,12 +5,11 @@ use serde_with::skip_serializing_none;
 
 use itertools::Itertools;
 use enumset::{EnumSet, EnumSetType};
-use warp::http::Uri;
 
 use crate::board::Palette;
 use crate::board::Shape;
+use crate::database::{BoardsNotice, BoardNoticeSpecifier};
 use crate::filter::response::reference::Reference;
-use crate::routes::board_notices::boards::notices::BoardsNotice;
 use crate::routes::placement_statistics::users::PlacementColorStatistics;
 use crate::socket::ServerPacket;
 
@@ -329,8 +328,7 @@ pub enum Packet {
 		notice: Reference<BoardsNotice>,
 	},
 	BoardNoticeDeleted {
-		#[serde(with = "http_serde::uri")]
-		notice: Uri,
+		notice: BoardNoticeSpecifier,
 	},
 	BoardStatsUpdated {
 		stats: PlacementColorStatistics,

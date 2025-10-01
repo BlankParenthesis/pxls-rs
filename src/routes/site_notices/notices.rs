@@ -2,39 +2,17 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde::de::Visitor;
-use serde::{Deserialize, Serialize, de, Deserializer};
+use serde::{Deserialize, de, Deserializer};
 use tokio::sync::RwLock;
-use warp::http::{StatusCode, Uri};
+use warp::http::StatusCode;
 use warp::{Filter, Reply, Rejection};
 
 use crate::config::CONFIG;
-use crate::filter::resource::filter::FilterRange;
-use crate::filter::response::paginated_list::{
-	PaginationOptions,
-	PageToken,
-};
+use crate::filter::response::paginated_list::{PaginationOptions, PageToken};
 use crate::filter::header::authorization;
-use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, BoardsConnection, User};
+use crate::database::{Database, DbConn, NoticeFilter, NoticeSpecifier, Specifier, User};
 use crate::routes::core::{EventPacket, Connections};
-
-
-#[serde_with::skip_serializing_none]
-#[derive(Serialize, Debug, Clone)]
-pub struct Notice {
-	pub title: String,
-	pub content: String,
-	pub created_at: u64,
-	pub expires_at: Option<u64>,
-	pub author: Option<Reference<User>>,
-}
-
-impl Notice {
-	pub fn uri(id: i32) -> Uri {
-		format!("/notices/{}", id).parse::<Uri>().unwrap()
-	}
-}
 
 #[derive(Default)]
 pub struct NoticePageToken {
@@ -93,19 +71,8 @@ impl<'de> Deserialize<'de> for NoticePageToken {
 	}
 }
 
-#[derive(Deserialize, Debug)]
-pub struct NoticeFilter {
-	pub title: Option<String>,
-	pub content: Option<String>,
-	#[serde(default)]
-	pub created_at: FilterRange<u64>,
-	#[serde(default)]
-	pub expires_at: FilterRange<u64>, // TODO: explicit null?
-	pub author: Option<String>, // TODO: uri inference
-}
-
 pub fn list(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::end())
@@ -113,7 +80,7 @@ pub fn list(
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorization::authorized(db, Permission::NoticesList.into()))
-		.then(move |pagination: PaginationOptions<NoticePageToken>, filter: NoticeFilter, _, connection: BoardsConnection| async move {
+		.then(move |pagination: PaginationOptions<NoticePageToken>, filter: NoticeFilter, _, connection: DbConn| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
@@ -126,15 +93,13 @@ pub fn list(
 }
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("notices")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	NoticeSpecifier::path()
 		.and(warp::get())
 		.and(authorization::authorized(db, Permission::NoticesGet.into()))
-		.then(move |id: usize, _, connectioon: BoardsConnection| async move {
-			let notice = connectioon.get_notice(id).await?
+		.then(move |notice: NoticeSpecifier, _, connection: DbConn| async move {
+			let notice = connection.get_notice(&notice).await?
 				.ok_or(StatusCode::NOT_FOUND)?;
 			
 			Ok::<_, StatusCode>(warp::reply::json(&notice))
@@ -151,19 +116,19 @@ struct NoticePost {
 
 pub fn post(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("notices")
 		.and(warp::path::end())
 		.and(warp::post())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesPost))
-		.then(move |notice: NoticePost, user: Option<User>, boards_connection: BoardsConnection| {
+		.then(move |notice: NoticePost, user: Option<User>, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
 				// TODO: author (requires spec decision)
 				
-				let notice = boards_connection.create_notice(
+				let notice = connection.create_notice(
 					notice.title,
 					notice.content,
 					notice.expires_at,
@@ -190,24 +155,22 @@ struct NoticePatch {
 
 pub fn patch(
 	events: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("notices")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	NoticeSpecifier::path()
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::authorized(db, Permission::NoticesGet | Permission::NoticesPatch))
-		.then(move |id: usize, notice: NoticePatch, user: Option<User>, connection: BoardsConnection| {
+		.then(move |notice: NoticeSpecifier, patch: NoticePatch, user: Option<User>, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
 				// TODO: author
 
 				let notice = connection.edit_notice(
-					id,
-					notice.title,
-					notice.content,
-					notice.expires_at,
+					&notice,
+					patch.title,
+					patch.content,
+					patch.expires_at,
 				).await?;
 
 				let packet = EventPacket::SiteNoticeUpdated {
@@ -223,23 +186,18 @@ pub fn patch(
 
 pub fn delete(
 	events: Arc<RwLock<Connections>>,
-	boards_db: Arc<BoardsDatabase>,
+	boards_db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-	warp::path("notices")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	NoticeSpecifier::path()
 		.and(warp::delete())
 		.and(authorization::authorized(boards_db, Permission::NoticesGet | Permission::NoticesDelete))
-		.then(move |id: usize, _, connection: BoardsConnection| {
+		.then(move |notice: NoticeSpecifier, _, connection: DbConn| {
 			let events = Arc::clone(&events);
 			async move {
-				let was_deleted = connection.delete_notice(id).await?;
+				let was_deleted = connection.delete_notice(&notice).await?;
 
 				if was_deleted {
-					let packet = EventPacket::SiteNoticeDeleted {
-						notice: format!("/notices/{}", id)
-							.parse::<Uri>().unwrap()
-					};
+					let packet = EventPacket::SiteNoticeDeleted { notice };
 					let events = events.write().await;
 					events.send(&packet).await;
 

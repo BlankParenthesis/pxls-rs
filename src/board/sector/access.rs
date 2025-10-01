@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use reqwest::StatusCode;
 use warp::reply::Reply;
 
-use crate::database::{BoardsConnection, DatabaseError};
+use crate::database::{DbConn, DatabaseError, SectorBuffer};
 use crate::{AsyncRead, AsyncWrite, Len};
-use super::{SectorBuffer, SectorCache};
+use super::SectorCache;
 
 #[derive(Debug)]
 pub enum IoError {
@@ -37,14 +37,14 @@ pub struct SectorAccessor<'l> {
 	cursor: usize,
 	buffer: SectorBuffer,
 	sectors: &'l SectorCache,
-	connection: &'l BoardsConnection,
+	connection: &'l DbConn,
 }
 
 impl<'l> SectorAccessor<'l> {
 	pub fn new(
 		sectors: &'l SectorCache,
 		buffer: SectorBuffer,
-		connection: &'l BoardsConnection,
+		connection: &'l DbConn,
 	) -> Self {
 		SectorAccessor {
 			cursor: 0,

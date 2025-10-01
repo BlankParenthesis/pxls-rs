@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_with::skip_serializing_none;
 use warp::{Filter, Reply, Rejection};
 
-use crate::database::BoardsDatabase;
+use crate::database::Database;
 use crate::filter::header::authorization::authorized;
 use crate::permissions::Permission;
 
@@ -54,7 +54,7 @@ lazy_static! {
 }
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("info")
 		.and(warp::path::end())

@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use warp::{Filter, reject, Rejection};
 
-use crate::database::Database;
+use crate::database::{DbConn, Database};
 
 #[derive(Debug)]
 struct DbConnectionFailed;
 impl reject::Reject for DbConnectionFailed {}
 
-pub fn connection<T: Database>(
-	db: Arc<T>,
-) -> impl Filter<Extract = (T::Connection,), Error = Rejection> + Clone {
+pub fn connection(
+	db: Arc<Database>,
+) -> impl Filter<Extract = (DbConn,), Error = Rejection> + Clone {
 	warp::any().and_then(move || {
 		let db = db.clone();
 		async move {

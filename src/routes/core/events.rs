@@ -12,15 +12,11 @@ use warp::reject::Reject;
 use warp::ws::Ws;
 use warp::{Reply, Rejection};
 use warp::Filter;
-use warp::http::Uri;
 
-use crate::board::Board;
-use crate::database::{Ban, BoardsDatabase, Database, DatabaseError, Faction, FactionMember, Role, User, UserSpecifier};
+use crate::database::{Ban, BanSpecifier, BoardInfo, BoardSpecifier, Database, DatabaseError, Faction, FactionMember, FactionSpecifier, Notice, NoticeSpecifier, Report, ReportSpecifier, Role, RoleSpecifier, User, UserSpecifier};
 use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::routes::placement_statistics::users::UserStats;
-use crate::routes::reports::reports::Report;
-use crate::routes::site_notices::notices::Notice;
 use crate::socket::ServerPacket;
 
 type Socket = crate::socket::Socket<Subscription>;
@@ -57,7 +53,7 @@ impl Connections {
 		}
 	}
 
-	pub async fn send<'l>(&self, packet: &EventPacket<'l>) {
+	pub async fn send(&self, packet: &EventPacket) {
 		let empty_set = HashSet::default();
 
 		match packet {
@@ -88,13 +84,13 @@ impl Connections {
 					socket.send(&serialized).await
 				}
 			},
-			EventPacket::UserRolesUpdated { specifier, .. } => {
+			EventPacket::UserRolesUpdated { user } => {
 				let serialized = packet.serialize_packet();
 				for socket in self.by_subscription[Subscription::UsersRoles].iter() {
 					socket.send(&serialized).await
 				}
 
-				let sockets = self.by_uid.get(specifier)
+				let sockets = self.by_uid.get(&Some(*user))
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrentRoles) {
@@ -108,7 +104,7 @@ impl Connections {
 					socket.send(&serialized).await
 				}
 
-				let sockets = self.by_uid.get(&Some(user.view.specifier()))
+				let sockets = self.by_uid.get(&Some(*user.view.specifier()))
 					.unwrap_or(&empty_set);
 				for socket in sockets {
 					if socket.subscriptions.contains(Subscription::UsersCurrent) {
@@ -215,18 +211,17 @@ impl Connections {
 #[derive(Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "kebab-case")]
-pub enum EventPacket<'l> {
+pub enum EventPacket {
 	AccessUpdate {
 		#[serde(skip_serializing)]
 		user: Option<UserSpecifier>,
 		permissions: EnumSet<Permission>,
 	},
 	BoardCreated {
-		board: Reference<&'l Board>,
+		board: Reference<BoardInfo>,
 	},
 	BoardDeleted {
-		#[serde(with = "http_serde::uri")]
-		board: Uri,
+		board: BoardSpecifier,
 	},
 	RoleCreated {
 		role: Reference<Role>,
@@ -235,14 +230,10 @@ pub enum EventPacket<'l> {
 		role: Reference<Role>,
 	},
 	RoleDeleted {
-		#[serde(with = "http_serde::uri")]
-		role: Uri,
+		role: RoleSpecifier,
 	},
 	UserRolesUpdated {
-		#[serde(skip_serializing)]
-		specifier: Option<UserSpecifier>,
-		#[serde(with = "http_serde::uri")]
-		user: Uri,
+		user: UserSpecifier,
 	},
 	UserUpdated {
 		user: Reference<User>,
@@ -254,8 +245,7 @@ pub enum EventPacket<'l> {
 		notice: Reference<Notice>,
 	},
 	SiteNoticeDeleted {
-		#[serde(with = "http_serde::uri")]
-		notice: Uri,
+		notice: NoticeSpecifier,
 	},
 	ReportCreated {
 		#[serde(skip_serializing)]
@@ -270,8 +260,7 @@ pub enum EventPacket<'l> {
 	ReportDeleted {
 		#[serde(skip_serializing)]
 		reporter: Option<UserSpecifier>,
-		#[serde(with = "http_serde::uri")]
-		report: Uri,
+		report: ReportSpecifier,
 	},
 	StatsUpdated {
 		#[serde(skip_serializing)]
@@ -291,8 +280,7 @@ pub enum EventPacket<'l> {
 	UserBanDeleted {
 		#[serde(skip_serializing)]
 		user: UserSpecifier,
-		#[serde(with = "http_serde::uri")]
-		ban: Uri,
+		ban: BanSpecifier,
 	},
 	FactionCreated {
 		#[serde(skip_serializing)]
@@ -307,8 +295,7 @@ pub enum EventPacket<'l> {
 	FactionDeleted {
 		#[serde(skip_serializing)]
 		members: Vec<UserSpecifier>,
-		#[serde(with = "http_serde::uri")]
-		faction: Uri,
+		faction: FactionSpecifier,
 	},
 	FactionMemberUpdated {
 		#[serde(skip_serializing)]
@@ -320,7 +307,7 @@ pub enum EventPacket<'l> {
 	},
 }
 
-impl<'l> ServerPacket for EventPacket<'l> {}
+impl ServerPacket for EventPacket {}
 
 #[derive(Debug, EnumSetType, Enum)]
 #[enumset(serialize_repr = "list")]
@@ -446,7 +433,7 @@ pub enum SocketError {
 	MissingSubscriptions,
 	ConflictingPermissions,
 	MissingPermissions,
-	DatabaseConnectionError(sea_orm::DbErr),
+	DatabaseConnectionError(DatabaseError),
 	DatabaseError(DatabaseError),
 }
 
@@ -472,7 +459,7 @@ impl Reply for SocketError {
 
 pub fn events(
 	connections: Arc<RwLock<Connections>>,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("events")
 		.and(warp::path::end())

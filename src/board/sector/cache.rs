@@ -9,8 +9,7 @@ use reqwest::StatusCode;
 use sea_orm::{ConnectionTrait, TransactionTrait, StreamTrait};
 use tokio::sync::*;
 
-use crate::board::sector::{BufferRead, Change, Sector, SectorBuffer};
-use crate::database::{BoardsConnection, BoardsConnectionGeneric, BoardsDatabase, DatabaseError, Database};
+use crate::database::{BoardSpecifier, BufferRead, Change, Connection, Database, DatabaseError, DbConn, Sector, SectorBuffer};
 
 use super::SectorAccessor;
 
@@ -78,12 +77,12 @@ impl BufferedSector {
 
 impl BufferedSectorCache {
 	pub fn new(
-		board_id: i32,
+		board: BoardSpecifier,
 		sector_count: usize,
 		sector_size: usize,
-		pool: Arc<BoardsDatabase>,
+		pool: Arc<Database>,
 	) -> Self {
-		let cache = Arc::new(SectorCache::new(board_id, sector_count, sector_size));
+		let cache = Arc::new(SectorCache::new(board, sector_count, sector_size));
 		
 		let (readback_sender, readback_reciever) = mpsc::channel(1000);
 		tokio::spawn(Self::readback_thread(cache.clone(), pool, readback_reciever));
@@ -104,7 +103,7 @@ impl BufferedSectorCache {
 	
 	async fn readback_thread(
 		cache: Arc<SectorCache>,
-		pool: Arc<BoardsDatabase>,
+		pool: Arc<Database>,
 		mut request_receiver: mpsc::Receiver<SectorRequest>,
 	) {
 		let mut readback_buffers = vec![];
@@ -196,14 +195,14 @@ impl BufferedSectorCache {
 
 pub struct SectorCache {
 	// TODO: evict based on size
-	board_id: i32,
+	board: BoardSpecifier,
 	sector_size: usize,
 	sectors: Vec<RwLock<Option<Sector>>>,
 }
 
 impl SectorCache {
 	fn new(
-		board_id: i32,
+		board: BoardSpecifier,
 		sector_count: usize,
 		sector_size: usize,
 	) -> Self {
@@ -211,7 +210,7 @@ impl SectorCache {
 		sectors.resize_with(sector_count, Default::default);
 
 		Self {
-			board_id,
+			board,
 			sector_size,
 			sectors,
 		}
@@ -232,7 +231,7 @@ impl SectorCache {
 	async fn cache_sector<'l, C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		&'l self,
 		sector_index: usize,
-		connection: &BoardsConnectionGeneric<C>,
+		connection: &Connection<C>,
 	) -> Result<RwLockWriteGuard<'l, Option<Sector>>, DatabaseError> {
 		let mut option = self
 			.sectors
@@ -240,7 +239,7 @@ impl SectorCache {
 			.write().await;
 
 		let load = Sector::load(
-			self.board_id,
+			&self.board,
 			sector_index as i32,
 			connection,
 		).await?;
@@ -249,7 +248,7 @@ impl SectorCache {
 			Some(sector) => sector,
 			None => {
 				Sector::new(
-					self.board_id,
+					&self.board,
 					sector_index as i32,
 					self.sector_size,
 					connection,
@@ -277,7 +276,7 @@ impl SectorCache {
 	pub async fn get_sector<'l>(
 		&'l self,
 		sector_index: usize,
-		connection: &BoardsConnection,
+		connection: &DbConn,
 	) -> Result<Option<RwLockReadGuard<'l, Sector>>, DatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.read().await;
@@ -301,7 +300,7 @@ impl SectorCache {
 	pub async fn get_sector_mut<'l, C: ConnectionTrait + TransactionTrait + StreamTrait>(
 		&'l self,
 		sector_index: usize,
-		connection: &BoardsConnectionGeneric<C>,
+		connection: &Connection<C>,
 	) -> Result<Option<RwLockMappedWriteGuard<'l, Sector>>, DatabaseError> {
 		if let Some(lock) = self.sectors.get(sector_index) {
 			let option = lock.write().await;
@@ -323,7 +322,7 @@ impl SectorCache {
 	pub fn access<'l>(
 		&'l self,
 		buffer: SectorBuffer,
-		connection: &'l BoardsConnection,
+		connection: &'l DbConn,
 	) -> SectorAccessor<'l> {
 		SectorAccessor::new(self, buffer, connection)
 	}

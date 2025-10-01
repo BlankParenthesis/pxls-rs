@@ -25,7 +25,7 @@ fn default_cooldown() -> u32 {
 	30
 }
 
-fn default_board() -> usize {
+fn default_board() -> i32 {
 	1
 }
 
@@ -35,10 +35,6 @@ fn default_default_page_item_limit() -> usize {
 
 fn default_max_page_item_limit() -> usize {
 	250
-}
-
-fn default_place_timeout() -> u64 {
-	5000
 }
 
 fn default_buffered_readback_limit() -> usize {
@@ -78,7 +74,7 @@ pub struct Config {
 	pub cooldown: u32,
 	// Default board ID
 	#[serde(default = "default_board")]
-	pub default_board: usize,
+	pub default_board: i32,
 	// The maximum number of times per second to send place packets.
 	// Setting a lower value improves network efficiency at the cost of
 	// increased client visual latency.
@@ -95,9 +91,6 @@ pub struct Config {
 	// Upper limit of the number of items returned by a query.
 	#[serde(default = "default_max_page_item_limit")]
 	pub max_page_item_limit: usize,
-	// Maximum time in milliseconds a place request can idle before being cancelled
-	#[serde(default = "default_place_timeout")]
-	pub place_timeout_millis: u64,
 	// Maximum number of placements that can be recorded before a read occurs.
 	// If this number of placements is reached before a data request is made,
 	// the data will be copied directly instead of computed from a buffer.

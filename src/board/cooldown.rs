@@ -82,7 +82,7 @@ impl CooldownCache {
 		};
 		
 		match self.cache.entry(user) {
-		    Entry::Occupied(mut occupied) => {
+			Entry::Occupied(mut occupied) => {
 				let cache = occupied.get_mut();
 				let min_timestamp = timestamp.saturating_sub(CONFIG.undo_deadline_seconds);
 				
@@ -98,7 +98,7 @@ impl CooldownCache {
 				cache.push_back(entry);
 				
 			},
-		    Entry::Vacant(vacant) => {
+			Entry::Vacant(vacant) => {
 				vacant.insert(VecDeque::from(vec![entry]));
 			}
 		}

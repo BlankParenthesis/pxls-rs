@@ -12,11 +12,10 @@ use warp::ws::Ws;
 use warp::{Reply, Rejection, Filter};
 
 use crate::config::CONFIG;
-use crate::database::{BoardsConnection, BoardsDatabase, User};
+use crate::database::{BoardSpecifier, Database, DbConn, User};
 use crate::filter::header::authorization::authorized;
 use crate::filter::resource::filter::FilterRange;
 use crate::filter::resource::{board::{self, PassableBoard}, database};
-use crate::filter::response::reference::Reference;
 use crate::permissions::Permission;
 use crate::socket::{Socket, CloseReason};
 use crate::filter::response::paginated_list::*;
@@ -70,7 +69,7 @@ struct BoardFilter {
 
 pub fn list(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path::end())
@@ -155,7 +154,7 @@ pub fn list(
 					items.push(board);
 				}
 				let items = items.iter()
-					.map(|b| Reference::new(Uri::from(b.deref()), b.deref()))
+					.map(|b| b.reference())
 					.collect();
 
 				let next = page.checked_add(1).and_then(|page| {
@@ -171,7 +170,7 @@ pub fn list(
 
 pub fn default(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(warp::path("default"))
@@ -183,10 +182,10 @@ pub fn default(
 				let id = CONFIG.default_board;
 
 				let boards = boards.read().await;
-				let board = boards.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+				let board = boards.get(&BoardSpecifier(id)).ok_or(StatusCode::NOT_FOUND)?;
 				let board = board.read().await;
 				let board = board.as_ref().expect("Board went missing");
-				let reference = Reference::new(Uri::from(board), board);
+				let reference = board.reference();
 				Ok::<_, StatusCode>(warp::reply::json(&reference))
 			}
 		})
@@ -194,7 +193,7 @@ pub fn default(
 
 pub fn get(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -207,7 +206,7 @@ pub fn get(
 			let mut response = warp::reply::json(&board.info).into_response();
 
 			if let Some(user) = user {
-				let cooldown_info = board.user_cooldown_info(&user.specifier()).await;
+				let cooldown_info = board.user_cooldown_info(user.specifier()).await;
 
 				match cooldown_info {
 					Ok(cooldown_info) => {
@@ -240,7 +239,7 @@ struct SocketOptions {
 
 pub fn events(
 	boards: BoardDataMap,
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(board::path::read(&boards))
@@ -249,7 +248,7 @@ pub fn events(
 		.and(warp::ws())
 		.and(serde_qs::warp::query(Default::default()))
 		.and(database::connection(db.clone()))
-		.and_then(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: BoardsConnection| {
+		.and_then(move |board: PassableBoard, ws: Ws, options: SocketOptions, connection: DbConn| {
 			let db = db.clone();
 			// TODO: deduplicate with regular socket?
 			async move {

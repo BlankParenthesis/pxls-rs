@@ -11,7 +11,7 @@ use warp::{
 
 use crate::config::CONFIG;
 use crate::routes::core::{EventPacket, Connections};
-use crate::database::{BoardsConnection, BoardsDatabase, User, UserSpecifier};
+use crate::database::{Database, DbConn, Specifier, User, UserSpecifier};
 use crate::filter::response::paginated_list::PaginationOptions;
 use crate::filter::header::authorization::{self, PermissionsError};
 use crate::filter::resource::filter::FilterRange;
@@ -26,7 +26,7 @@ pub struct UserFilter {
 }
 
 pub fn list(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path::end())
@@ -34,7 +34,7 @@ pub fn list(
 		.and(warp::query())
 		.and(warp::query())
 		.and(authorization::authorized(db, Permission::UsersList.into()))
-		.then(move |pagination: PaginationOptions<_>, filter: UserFilter, _, connection: BoardsConnection| async move {
+		.then(move |pagination: PaginationOptions<_>, filter: UserFilter, _, connection: DbConn| async move {
 			let page = pagination.page;
 			let limit = pagination.limit
 				.unwrap_or(CONFIG.default_page_item_limit)
@@ -46,18 +46,16 @@ pub fn list(
 }
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet.into();
 
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	UserSpecifier::path()
 		.and(warp::get())
 		.and(authorization::permissions(db))
 		.and_then(move |user: UserSpecifier, user_permissions, requester: Option<User>, connection| async move {
 			let is_current_user = requester.as_ref()
-				.map(|u| u.specifier() == user)
+				.map(|u| *u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -73,14 +71,14 @@ pub fn get(
 			}
 		})
 		.untuple_one()
-		.then(move |user: UserSpecifier, connection: BoardsConnection| async move {
+		.then(move |user: UserSpecifier, connection: DbConn| async move {
 			connection.get_user(&user).await
 				.map(|user| warp::reply::json(&user))
 		})
 }
 
 pub fn current(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("users")
 		.and(warp::path("current"))
@@ -102,20 +100,18 @@ struct UserUpdate {
 }
 
 pub fn patch(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 	events: Arc<RwLock<Connections>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersPatch;
 
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	UserSpecifier::path()
 		.and(warp::patch())
 		.and(warp::body::json())
 		.and(authorization::permissions(db))
 		.and_then(move |user: UserSpecifier, update, user_permissions, requester: Option<User>, connection| async move {
 			let is_current_user = requester.as_ref()
-				.map(|u| u.specifier() == user)
+				.map(|u| *u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -131,7 +127,7 @@ pub fn patch(
 			}
 		})
 		.untuple_one()
-		.then(move |user: UserSpecifier, update: UserUpdate, connection: BoardsConnection| {
+		.then(move |user: UserSpecifier, update: UserUpdate, connection: DbConn| {
 			let events = events.clone();
 			async move {
 				// FIXME: validate username
@@ -150,18 +146,16 @@ pub fn patch(
 }
 
 pub fn delete(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	let permissions = Permission::UsersGet | Permission::UsersDelete;
 
-	warp::path("users")
-		.and(warp::path::param())
-		.and(warp::path::end())
+	UserSpecifier::path()
 		.and(warp::delete())
 		.and(authorization::permissions(db))
 		.and_then(move |user: UserSpecifier, user_permissions, requester: Option<User>, connection| async move {
 			let is_current_user = requester.as_ref()
-				.map(|u| u.specifier() == user)
+				.map(|u| *u.specifier() == user)
 				.unwrap_or(false);
 
 			let check = if is_current_user {
@@ -177,7 +171,7 @@ pub fn delete(
 			}
 		})
 		.untuple_one()
-		.then(move |user: UserSpecifier, connection: BoardsConnection| async move {
+		.then(move |user: UserSpecifier, connection: DbConn| async move {
 			connection.delete_user(&user).await
 				.map(|_| StatusCode::NO_CONTENT)
 		})

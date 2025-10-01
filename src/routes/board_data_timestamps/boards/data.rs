@@ -8,19 +8,19 @@ use warp::{
 	Filter,
 };
 
+use crate::database::SectorBuffer;
 use crate::filter::header::accept_encoding;
 use crate::filter::header::authorization::authorized;
 use crate::filter::header::range::{self, Range};
 use crate::filter::resource::board;
-use crate::board::SectorBuffer;
 use crate::BoardDataMap;
 use crate::filter::resource::board::PassableBoard;
 use crate::permissions::Permission;
-use crate::database::{BoardsDatabase, BoardsConnection};
+use crate::database::{Database, DbConn};
 
 pub fn get_timestamps(
 	boards: BoardDataMap,
-	boards_db: Arc<BoardsDatabase>,
+	boards_db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("boards")
 		.and(accept_encoding::gzip_opt())
@@ -36,7 +36,7 @@ pub fn get_timestamps(
 				.unify(),
 		)
 		.and(authorized(boards_db, Permission::BoardsDataGet.into()))
-		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: BoardsConnection| async move {
+		.then(|gzip: bool, board: PassableBoard, range: Range, _, connection: DbConn| async move {
 			// TODO: content disposition
 			let board = board.read().await;
 			let board = board.as_ref()

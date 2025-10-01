@@ -4,12 +4,12 @@ use enumset::EnumSet;
 use warp::reject::Rejection;
 use warp::{Reply, Filter};
 
-use crate::database::BoardsDatabase;
+use crate::database::Database;
 use crate::filter::header::authorization;
 use crate::permissions::Permission;
 
 pub fn get(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
 	warp::path("access")
 		.and(warp::path::end())

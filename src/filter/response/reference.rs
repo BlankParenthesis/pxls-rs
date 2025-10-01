@@ -10,10 +10,18 @@ pub struct Reference<T: Serialize> {
 }
 
 impl<T: Serialize> Reference<T> {
-	pub fn new(uri: Uri, view: T) -> Self {
-		Self { uri, view }
+	pub fn empty(&self) -> Reference<()> {
+		Reference { uri: self.uri.clone(), view: () }
 	}
+}
 
+impl Reference<()> {
+	pub fn new_empty(uri: Uri) -> Self {
+		Self { uri, view: () }
+	}
+}
+
+impl<T: Serialize> Reference<T> {
 	pub fn created(&self) -> warp::reply::Response {
 		let data = warp::reply::json(&self.view);
 		warp::reply::with_header(
@@ -38,6 +46,6 @@ pub trait Referencable: Serialize + Sized {
 
 impl<R: Referencable> From<R> for Reference<R> {
 	fn from(value: R) -> Self {
-		Reference::new(value.uri(), value)
+		Reference { uri: value.uri(), view: value }
 	}
 }

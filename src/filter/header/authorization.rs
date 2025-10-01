@@ -10,7 +10,7 @@ use warp::{reject::Reject, Filter, Rejection, Reply};
 use crate::openid::Identity;
 use crate::openid::{self, ValidationError};
 use crate::permissions::Permission;
-use crate::database::{BoardsConnection, BoardsDatabase, DatabaseError, User, UserSpecifier};
+use crate::database::{DbConn, Database, DatabaseError, User, UserSpecifier};
 use crate::filter::resource::database;
 
 #[derive(Debug)]
@@ -93,7 +93,7 @@ pub struct Bearer {
 impl Bearer {
 	pub async fn user(
 		&self,
-		connection: &BoardsConnection,
+		connection: &DbConn,
 	) -> Result<User, DatabaseError> {
 		connection.create_user(
 			self.subject.clone(),
@@ -117,7 +117,7 @@ impl Bearer {
 	pub fn into_user(self, user: &User) -> AuthenticatedUser {
 		debug_assert!(user.subject == self.subject);
 		AuthenticatedUser {
-			user: user.specifier(),
+			user: *user.specifier(),
 			valid_until: self.valid_until,
 		}
 	}
@@ -140,20 +140,18 @@ impl AuthenticatedUser {
 }
 
 
-pub fn permissions(
-	db: Arc<BoardsDatabase>,
-) -> impl Filter<
-	Extract = (EnumSet<Permission>, Option<User>, BoardsConnection),
+pub fn permissions(db: Arc<Database>) -> impl Filter<
+	Extract = (EnumSet<Permission>, Option<User>, DbConn),
 	Error = Rejection,
 > + Clone {
 	warp::any()
 		.and(bearer())
 		.and(database::connection(db))
-		.and_then(|bearer: Option<Bearer>, connection: BoardsConnection| async {
+		.and_then(|bearer: Option<Bearer>, connection: DbConn| async {
 			match bearer {
 				Some(bearer) => {
 					let user = bearer.user(&connection).await?;
-					let permissions = connection.user_permissions(&user.specifier()).await?;
+					let permissions = connection.user_permissions(user.specifier()).await?;
 					Ok((permissions, Some(user), connection))
 				},
 				None => {
@@ -188,10 +186,10 @@ pub fn has_permissions_current(
 }
 
 pub fn authorized(
-	db: Arc<BoardsDatabase>,
+	db: Arc<Database>,
 	permissions: EnumSet<Permission>,
 ) -> impl Filter<
-	Extract = (Option<User>, BoardsConnection),
+	Extract = (Option<User>, DbConn),
 	Error = Rejection,
 > + Clone {
 	warp::any()
